@@ -42,3 +42,11 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# stray Windows artifact + one-off scratch patch scripts (throwaway dev
+# helpers whose effects are already applied to the real source files;
+# not meant to be committed to a portfolio-facing repo)
+NUL
+/fix-*.js
+/patch-*.js
+/update-ui.js
