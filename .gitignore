@@ -50,3 +50,6 @@ NUL
 /fix-*.js
 /patch-*.js
 /update-ui.js
+
+# daily-commit-and-push.sh's own log, never committed
+.auto-commit.log
