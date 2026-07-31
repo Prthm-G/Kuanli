@@ -96,7 +96,7 @@ interface Invitation {
 // promotions go through the (deferred) Transfer Ownership flow.
 const EDITABLE_ROLES: { value: AccountRole; label: string; hint: string }[] = [
   { value: 'admin', label: 'Admin', hint: 'Manage members + everything' },
-  { value: 'agent', label: 'Agent', hint: 'Use features; no settings' },
+  { value: 'agent', label: 'Counsellor', hint: 'Use features; no settings' },
   { value: 'viewer', label: 'Viewer', hint: 'Read-only across the app' },
 ];
 
@@ -584,9 +584,7 @@ export function MembersTab() {
               <span className="font-medium text-muted-foreground">
                 {removingMember?.full_name || 'this teammate'}
               </span>{' '}
-              from the account? They&apos;ll be signed out of this account
-              and given a fresh personal account on their next sign-in. Their
-              login isn&apos;t deleted.
+              from the account? They&apos;ll be signed out immediately and permanently banned from signing back in — this can only be undone by sending them a brand new invite.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter className="bg-popover border-border">

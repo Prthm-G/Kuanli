@@ -67,20 +67,16 @@ function LoginPageInner() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background px-4">
-      <Card className="w-full max-w-md border-border bg-card">
+    <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-slate-900 via-slate-800 to-black px-4">
+      <Card className="w-full max-w-md border-slate-700/50 bg-slate-900/80 backdrop-blur-xl shadow-2xl text-slate-100">
         <CardHeader className="items-center text-center">
-          <div className="mb-2 flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10">
-            {inviteToken ? (
-              <UsersRound className="h-6 w-6 text-primary" />
-            ) : (
-              <MessageSquare className="h-6 w-6 text-primary" />
-            )}
+          <div className="mb-6 flex justify-center">
+            <img src="/logo.png" alt="Kuanli CRM" className="h-16 object-contain drop-shadow-2xl" onError={(e) => { e.currentTarget.style.display='none' }} />
           </div>
-          <CardTitle className="text-xl text-foreground">
+          <CardTitle className="text-xl text-white">
             {inviteToken ? "Sign in to accept" : "Welcome back"}
           </CardTitle>
-          <CardDescription className="text-muted-foreground">
+          <CardDescription className="text-slate-400">
             {inviteToken
               ? "Sign in and we'll take you to the invitation."
               : "Sign in to your account"}
@@ -95,7 +91,7 @@ function LoginPageInner() {
             )}
 
             <div className="flex flex-col gap-2">
-              <Label htmlFor="email" className="text-muted-foreground">
+              <Label htmlFor="email" className="text-slate-400">
                 Email
               </Label>
               <Input
@@ -105,13 +101,13 @@ function LoginPageInner() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
-                className="border-border bg-muted text-foreground placeholder:text-muted-foreground focus-visible:border-primary focus-visible:ring-primary/20"
+                className="border-border bg-slate-800 border-slate-700 text-white placeholder:text-slate-500 text-white placeholder:text-slate-400 focus-visible:border-primary focus-visible:ring-primary/20"
               />
             </div>
 
             <div className="flex flex-col gap-2">
               <div className="flex items-center justify-between">
-                <Label htmlFor="password" className="text-muted-foreground">
+                <Label htmlFor="password" className="text-slate-400">
                   Password
                 </Label>
                 <Link
@@ -128,7 +124,7 @@ function LoginPageInner() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
-                className="border-border bg-muted text-foreground placeholder:text-muted-foreground focus-visible:border-primary focus-visible:ring-primary/20"
+                className="border-border bg-slate-800 border-slate-700 text-white placeholder:text-slate-500 text-white placeholder:text-slate-400 focus-visible:border-primary focus-visible:ring-primary/20"
               />
             </div>
 
@@ -141,19 +137,7 @@ function LoginPageInner() {
             </Button>
           </form>
 
-          <p className="mt-6 text-center text-sm text-muted-foreground">
-            Don&apos;t have an account?{" "}
-            <Link
-              href={
-                inviteToken
-                  ? `/signup?invite=${encodeURIComponent(inviteToken)}`
-                  : "/signup"
-              }
-              className="text-primary hover:text-primary/80"
-            >
-              Create account
-            </Link>
-          </p>
+          
         </CardContent>
       </Card>
     </div>

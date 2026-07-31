@@ -71,6 +71,7 @@ export default function ContactsPage() {
   const [contacts, setContacts] = useState<ContactWithTags[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const [activeTab, setActiveTab] = useState('all');
   const [page, setPage] = useState(0);
   const [totalCount, setTotalCount] = useState(0);
   // Tag filter — contacts shown must have ANY of these tags (OR).
@@ -380,6 +381,13 @@ export default function ContactsPage() {
         </div>
       </div>
 
+      {/* Contacts Tab Navigation */}
+      <div className="flex gap-6 border-b border-border/50 mb-6">
+        <button onClick={() => setActiveTab('all')} className={`pb-2 text-sm font-medium transition-colors hover:text-foreground ${activeTab === 'all' ? 'border-b-2 border-primary text-foreground' : 'text-muted-foreground'}`}>All Contacts</button>
+        <button onClick={() => setActiveTab('leads')} className={`pb-2 text-sm font-medium transition-colors hover:text-foreground ${activeTab === 'leads' ? 'border-b-2 border-primary text-foreground' : 'text-muted-foreground'}`}>Leads (Temp ID)</button>
+        <button onClick={() => setActiveTab('enrolled')} className={`pb-2 text-sm font-medium transition-colors hover:text-foreground ${activeTab === 'enrolled' ? 'border-b-2 border-primary text-foreground' : 'text-muted-foreground'}`}>Enrolled</button>
+      </div>
+
       {/* Search + tag filter */}
       <div className="space-y-2">
         <div className="flex flex-col sm:flex-row gap-2">
@@ -543,6 +551,7 @@ export default function ContactsPage() {
               <TableHead className="text-muted-foreground">Name</TableHead>
               <TableHead className="text-muted-foreground">Phone</TableHead>
               <TableHead className="text-muted-foreground hidden md:table-cell">Email</TableHead>
+              <TableHead className="text-foreground font-bold">DCId</TableHead>
               <TableHead className="text-muted-foreground hidden lg:table-cell">Company</TableHead>
               <TableHead className="text-muted-foreground hidden md:table-cell">Tags</TableHead>
               <TableHead className="text-muted-foreground hidden lg:table-cell">Created</TableHead>
@@ -584,7 +593,7 @@ export default function ContactsPage() {
                 </TableCell>
               </TableRow>
             ) : (
-              contacts.map((contact) => (
+              contacts.filter(c => activeTab === 'all' ? true : activeTab === 'leads' ? (c as any).roll_number?.startsWith('LD-') : !!(c as any).university).map((contact) => (
                 <TableRow
                   key={contact.id}
                   className="border-border hover:bg-muted/50 cursor-pointer"
@@ -594,7 +603,7 @@ export default function ContactsPage() {
                     <Checkbox
                       checked={selected.has(contact.id)}
                       onCheckedChange={() => toggleSelect(contact.id)}
-                      aria-label={`Select ${contact.name || contact.phone}`}
+                      aria-label={`Select ${(contact.name || contact.phone)}`}
                     />
                   </TableCell>
                   <TableCell className="text-foreground font-medium">
@@ -605,6 +614,9 @@ export default function ContactsPage() {
                   </TableCell>
                   <TableCell className="text-muted-foreground hidden md:table-cell text-sm">
                     {contact.email || <span className="text-muted-foreground">-</span>}
+                  </TableCell>
+                  <TableCell className="font-semibold text-primary tracking-wider">
+                    {(contact as any).roll_number || <span className="text-muted-foreground">-</span>}
                   </TableCell>
                   <TableCell className="text-muted-foreground hidden lg:table-cell text-sm">
                     {contact.company || <span className="text-muted-foreground">-</span>}

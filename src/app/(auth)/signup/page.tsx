@@ -2,8 +2,7 @@
 
 import { Suspense, useState } from "react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
-import { createClient } from "@/lib/supabase/client";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -14,8 +13,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { MessageSquare, CheckCircle, UsersRound } from "lucide-react";
-
 // `useSearchParams` opts the component out of static prerendering
 // unless wrapped in Suspense — same pattern as /login.
 export default function SignupPage() {
@@ -28,12 +25,25 @@ export default function SignupPage() {
 
 function SignupPageInner() {
   const searchParams = useSearchParams();
-  // When the user lands here from `/join/<token>` we carry the
-  // invite token in the query so it survives the signup → email
-  // verification → redirect round-trip. `emailRedirectTo` below
-  // points back at /join/<token> so the user lands on the redeem
-  // step after verifying instead of being dropped on /dashboard.
+  const router = useRouter();
   const inviteToken = searchParams.get("invite");
+
+  // --- SECURITY LOCK ---
+  // This is a UX convenience only, not the real enforcement — it
+  // just avoids showing the form to someone who followed a bare
+  // /signup link. The actual invite-only enforcement happens
+  // server-side in POST /api/auth/invited-signup, which validates
+  // the token before creating any account; public self-serve
+  // signup is disabled at the GoTrue level (GOTRUE_DISABLE_SIGNUP=
+  // true in docker-compose.yml).
+  if (!inviteToken) {
+    if (typeof window !== "undefined") {
+      window.location.href = "/login?error=" + encodeURIComponent("Signups are strictly invite-only. Please contact your administrator.");
+    }
+    return null;
+  }
+  // ---------------------
+
 
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
@@ -42,7 +52,6 @@ function SignupPageInner() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
-  const supabase = createClient();
 
   const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -60,27 +69,17 @@ function SignupPageInner() {
 
     setLoading(true);
 
-    // If we have an invite token, point Supabase's verification
-    // email back at the join page so the user can accept after
-    // verifying. Without a token, Supabase uses its default
-    // redirect (the app root).
-    const emailRedirectTo = inviteToken
-      ? `${window.location.origin}/join/${encodeURIComponent(inviteToken)}`
-      : undefined;
-
-    const { error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        data: {
-          full_name: fullName,
-        },
-        ...(emailRedirectTo ? { emailRedirectTo } : {}),
-      },
+    const res = await fetch("/api/auth/invited-signup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: inviteToken, email, password, fullName }),
     });
+    const data = (await res.json().catch(() => null)) as
+      | { ok?: boolean; error?: string }
+      | null;
 
-    if (error) {
-      setError(error.message);
+    if (!res.ok || !data?.ok) {
+      setError(data?.error || "Failed to create account");
       setLoading(false);
       return;
     }
@@ -91,32 +90,26 @@ function SignupPageInner() {
 
   if (success) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-background px-4">
-        <Card className="w-full max-w-md border-border bg-card">
+      <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-slate-900 via-slate-800 to-black px-4">
+        <Card className="w-full max-w-md border-slate-700/50 bg-slate-900/80 backdrop-blur-xl shadow-2xl text-slate-100">
           <CardHeader className="items-center text-center">
-            <div className="mb-2 flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10">
-              <CheckCircle className="h-6 w-6 text-primary" />
+            <div className="mb-6 flex justify-center">
+              <img src="/logo.png" alt="Kuanli CRM" className="h-16 object-contain drop-shadow-2xl" onError={(e) => { e.currentTarget.style.display='none' }} />
             </div>
-            <CardTitle className="text-xl text-foreground">
+            <CardTitle className="text-xl text-white">
               Check your email
             </CardTitle>
-            <CardDescription className="text-muted-foreground">
+            <CardDescription className="text-slate-400">
               We&apos;ve sent a confirmation link to{" "}
-              <span className="text-foreground">{email}</span>. Please check your
-              inbox and click the link to verify your account.
+              <span className="text-white">{email}</span>. Click it to verify
+              your account, then you&apos;ll land on the invitation to accept.
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <Link
-              href={
-                inviteToken
-                  ? `/login?invite=${encodeURIComponent(inviteToken)}`
-                  : "/login"
-              }
-            >
+            <Link href={`/login?invite=${encodeURIComponent(inviteToken)}`}>
               <Button
                 variant="outline"
-                className="w-full border-border text-muted-foreground hover:bg-muted hover:text-foreground"
+                className="w-full border-border text-slate-400 hover:bg-slate-800 border-slate-700 text-white placeholder:text-slate-500 hover:text-white"
               >
                 Back to sign in
               </Button>
@@ -128,23 +121,19 @@ function SignupPageInner() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background px-4">
-      <Card className="w-full max-w-md border-border bg-card">
+    <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-slate-900 via-slate-800 to-black px-4">
+      <Card className="w-full max-w-md border-slate-700/50 bg-slate-900/80 backdrop-blur-xl shadow-2xl text-slate-100">
         <CardHeader className="items-center text-center">
-          <div className="mb-2 flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10">
-            {inviteToken ? (
-              <UsersRound className="h-6 w-6 text-primary" />
-            ) : (
-              <MessageSquare className="h-6 w-6 text-primary" />
-            )}
+          <div className="mb-6 flex justify-center">
+            <img src="/logo.png" alt="Kuanli CRM" className="h-16 object-contain drop-shadow-2xl" onError={(e) => { e.currentTarget.style.display='none' }} />
           </div>
-          <CardTitle className="text-xl text-foreground">
+          <CardTitle className="text-xl text-white">
             {inviteToken ? "Create account & join" : "Create account"}
           </CardTitle>
-          <CardDescription className="text-muted-foreground">
+          <CardDescription className="text-slate-400">
             {inviteToken
-              ? "Verify your email, then accept the invitation to join your team."
-              : "Get started with CRM Template for WhatsApp"}
+              ? "Create your account to join your team."
+              : "Get started with Kuanli"}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -156,7 +145,7 @@ function SignupPageInner() {
             )}
 
             <div className="flex flex-col gap-2">
-              <Label htmlFor="fullName" className="text-muted-foreground">
+              <Label htmlFor="fullName" className="text-slate-400">
                 Full name
               </Label>
               <Input
@@ -166,12 +155,12 @@ function SignupPageInner() {
                 value={fullName}
                 onChange={(e) => setFullName(e.target.value)}
                 required
-                className="border-border bg-muted text-foreground placeholder:text-muted-foreground focus-visible:border-primary focus-visible:ring-primary/20"
+                className="border-border bg-slate-800 border-slate-700 text-white placeholder:text-slate-500 text-white placeholder:text-slate-400 focus-visible:border-primary focus-visible:ring-primary/20"
               />
             </div>
 
             <div className="flex flex-col gap-2">
-              <Label htmlFor="email" className="text-muted-foreground">
+              <Label htmlFor="email" className="text-slate-400">
                 Email
               </Label>
               <Input
@@ -181,12 +170,12 @@ function SignupPageInner() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
-                className="border-border bg-muted text-foreground placeholder:text-muted-foreground focus-visible:border-primary focus-visible:ring-primary/20"
+                className="border-border bg-slate-800 border-slate-700 text-white placeholder:text-slate-500 text-white placeholder:text-slate-400 focus-visible:border-primary focus-visible:ring-primary/20"
               />
             </div>
 
             <div className="flex flex-col gap-2">
-              <Label htmlFor="password" className="text-muted-foreground">
+              <Label htmlFor="password" className="text-slate-400">
                 Password
               </Label>
               <Input
@@ -196,12 +185,12 @@ function SignupPageInner() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
-                className="border-border bg-muted text-foreground placeholder:text-muted-foreground focus-visible:border-primary focus-visible:ring-primary/20"
+                className="border-border bg-slate-800 border-slate-700 text-white placeholder:text-slate-500 text-white placeholder:text-slate-400 focus-visible:border-primary focus-visible:ring-primary/20"
               />
             </div>
 
             <div className="flex flex-col gap-2">
-              <Label htmlFor="confirmPassword" className="text-muted-foreground">
+              <Label htmlFor="confirmPassword" className="text-slate-400">
                 Confirm password
               </Label>
               <Input
@@ -211,7 +200,7 @@ function SignupPageInner() {
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 required
-                className="border-border bg-muted text-foreground placeholder:text-muted-foreground focus-visible:border-primary focus-visible:ring-primary/20"
+                className="border-border bg-slate-800 border-slate-700 text-white placeholder:text-slate-500 text-white placeholder:text-slate-400 focus-visible:border-primary focus-visible:ring-primary/20"
               />
             </div>
 
@@ -224,7 +213,7 @@ function SignupPageInner() {
             </Button>
           </form>
 
-          <p className="mt-6 text-center text-sm text-muted-foreground">
+          <p className="mt-6 text-center text-sm text-slate-400">
             Already have an account?{" "}
             <Link
               href={

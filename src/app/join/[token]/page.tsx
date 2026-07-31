@@ -67,7 +67,7 @@ type PeekResult = PeekOk | PeekFail;
 
 const ROLE_LABEL: Record<PeekOk['role'], string> = {
   admin: 'Admin',
-  agent: 'Agent',
+  agent: 'Counsellor',
   viewer: 'Viewer',
 };
 
@@ -116,7 +116,15 @@ export default function JoinPage() {
     setPeek(null);
     setAuthedUserId(undefined);
     try {
-      const [peekRes, authRes] = await Promise.all([
+      
+        // --- PKCE CODE EXCHANGE FIX ---
+        const urlCode = new URLSearchParams(window.location.search).get('code');
+        if (urlCode) {
+          await createClient().auth.exchangeCodeForSession(urlCode);
+          window.history.replaceState({}, document.title, window.location.pathname);
+        }
+        // ------------------------------
+        const [peekRes, authRes] = await Promise.all([
         fetch(`/api/invitations/${encodeURIComponent(token)}/peek`, {
           cache: 'no-store',
         }),
@@ -158,8 +166,15 @@ export default function JoinPage() {
         setAuthedUserId(null);
       }
     })();
+        const supabaseClient = createClient();
+    const { data: authListener } = supabaseClient.auth.onAuthStateChange((event, session) => {
+      if (session?.user && !cancelled) {
+        setAuthedUserId(session.user.id);
+      }
+    });
     return () => {
       cancelled = true;
+      authListener?.subscription?.unsubscribe();
     };
   }, [token]);
 
@@ -217,13 +232,22 @@ export default function JoinPage() {
     }
   }, []);
 
+  
+  // --- AUTO-ACCEPT & TELEPORT ---
+  useEffect(() => {
+    if (authedUserId && peek?.ok && !accepting && !conflictMessage) {
+      handleAccept();
+    }
+  }, [authedUserId, peek, accepting, conflictMessage, handleAccept]);
+  // ------------------------------
+
   // ----- Loading state (peek pending OR auth not yet resolved) -----
   if (peek === null || authedUserId === undefined) {
     return (
-      <Card className="w-full max-w-md border-border bg-card">
+      <Card className="w-full max-w-md border-slate-700/50 bg-slate-900/80 backdrop-blur-xl shadow-2xl text-slate-100">
         <CardContent className="flex flex-col items-center gap-3 py-12">
           <Loader2 className="size-6 animate-spin text-primary" />
-          <p className="text-sm text-muted-foreground">Verifying invitation…</p>
+          <p className="text-sm text-slate-400">Verifying invitation…</p>
         </CardContent>
       </Card>
     );
@@ -233,13 +257,13 @@ export default function JoinPage() {
   if (!peek.ok) {
     const copy = FAIL_COPY[peek.reason];
     return (
-      <Card className="w-full max-w-md border-border bg-card">
+      <Card className="w-full max-w-md border-slate-700/50 bg-slate-900/80 backdrop-blur-xl shadow-2xl text-slate-100">
         <CardHeader className="items-center text-center">
           <div className="mb-2 flex h-12 w-12 items-center justify-center rounded-xl bg-red-500/10">
             <MailX className="h-6 w-6 text-red-400" />
           </div>
-          <CardTitle className="text-xl text-foreground">{copy.title}</CardTitle>
-          <CardDescription className="text-muted-foreground">
+          <CardTitle className="text-xl text-white">{copy.title}</CardTitle>
+          <CardDescription className="text-slate-400">
             {copy.body}
           </CardDescription>
         </CardHeader>
@@ -262,7 +286,7 @@ export default function JoinPage() {
               <Link href="/signup">
                 <Button
                   variant="outline"
-                  className="w-full border-border text-muted-foreground hover:bg-muted hover:text-foreground"
+                  className="w-full border-border text-slate-400 hover:bg-slate-800 border-slate-700 text-white hover:text-white"
                 >
                   Create a new account instead
                 </Button>
@@ -278,7 +302,7 @@ export default function JoinPage() {
               <Link href="/login">
                 <Button
                   variant="outline"
-                  className="w-full border-border text-muted-foreground hover:bg-muted hover:text-foreground"
+                  className="w-full border-border text-slate-400 hover:bg-slate-800 border-slate-700 text-white hover:text-white"
                 >
                   Sign in
                 </Button>
@@ -296,13 +320,13 @@ export default function JoinPage() {
       <div className="mb-2 flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10">
         <UsersRound className="h-6 w-6 text-primary" />
       </div>
-      <CardTitle className="text-xl text-foreground">
+      <CardTitle className="text-xl text-white">
         You&apos;re invited to{' '}
         <span className="text-primary">{peek.account_name}</span>
       </CardTitle>
-      <CardDescription className="text-muted-foreground">
+      <CardDescription className="text-slate-400">
         You&apos;ll join as{' '}
-        <span className="inline-flex items-center gap-1 text-foreground">
+        <span className="inline-flex items-center gap-1 text-white">
           <ShieldCheck className="size-3.5 text-primary" />
           {ROLE_LABEL[peek.role]}
         </span>
@@ -321,7 +345,7 @@ export default function JoinPage() {
   if (authedUserId) {
     return (
       <>
-        <Card className="w-full max-w-md border-border bg-card">
+        <Card className="w-full max-w-md border-slate-700/50 bg-slate-900/80 backdrop-blur-xl shadow-2xl text-slate-100">
           {inviteHeader}
           <CardContent className="flex flex-col gap-3">
             <Button
@@ -341,9 +365,9 @@ export default function JoinPage() {
                 </>
               )}
             </Button>
-            <p className="text-center text-xs text-muted-foreground">
+            <p className="text-center text-xs text-slate-400">
               Accepting moves your login into{' '}
-              <span className="text-muted-foreground">{peek.account_name}</span>. Your
+              <span className="text-slate-400">{peek.account_name}</span>. Your
               empty personal account from signup will be cleaned up.
             </p>
           </CardContent>
@@ -365,11 +389,11 @@ export default function JoinPage() {
                 <AlertTriangle className="size-4 text-amber-400" />
                 Can&apos;t join {peek.account_name} with this account
               </DialogTitle>
-              <DialogDescription className="text-muted-foreground">
+              <DialogDescription className="text-slate-400">
                 {conflictMessage}
               </DialogDescription>
             </DialogHeader>
-            <div className="space-y-2 py-2 text-xs text-muted-foreground">
+            <div className="space-y-2 py-2 text-xs text-slate-400">
               <p>
                 To join{' '}
                 <span className="text-popover-foreground">{peek.account_name}</span>,
@@ -382,7 +406,7 @@ export default function JoinPage() {
               <Button
                 variant="outline"
                 onClick={() => setConflictMessage(null)}
-                className="border-border text-popover-foreground hover:bg-muted"
+                className="border-border text-popover-foreground hover:bg-slate-800 border-slate-700 text-white"
               >
                 Stay signed in
               </Button>
@@ -409,7 +433,7 @@ export default function JoinPage() {
 
   // ----- Not authed: prompt to sign up or sign in -----
   return (
-    <Card className="w-full max-w-md border-border bg-card">
+    <Card className="w-full max-w-md border-slate-700/50 bg-slate-900/80 backdrop-blur-xl shadow-2xl text-slate-100">
       {inviteHeader}
       <CardContent className="flex flex-col gap-2">
         <Link href={`/signup?invite=${encodeURIComponent(token!)}`}>
@@ -420,7 +444,7 @@ export default function JoinPage() {
         <Link href={`/login?invite=${encodeURIComponent(token!)}`}>
           <Button
             variant="outline"
-            className="w-full border-border text-muted-foreground hover:bg-muted hover:text-foreground"
+            className="w-full border-border text-slate-400 hover:bg-slate-800 border-slate-700 text-white hover:text-white"
           >
             I already have an account
           </Button>

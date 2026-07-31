@@ -174,7 +174,25 @@ function MessageContent({ message }: { message: Message }) {
 
     case "document":
       if (!message.media_url) {
-        return <MediaUnavailable label={message.content_text || "Document"} />;
+        return (
+          <a
+            href={message.media_url || '#'}
+            target="_blank"
+            rel="noreferrer"
+            className="flex items-center gap-2 p-3 rounded-lg bg-primary/10 hover:bg-primary/20 transition-colors cursor-pointer"
+            onClick={(e) => {
+              if (!message.media_url) {
+                e.preventDefault();
+                alert("Document is still downloading to server. Please refresh in a moment.");
+              }
+            }}
+          >
+            <svg className="w-5 h-5 text-primary shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+            <span className="text-sm font-medium text-primary underline truncate max-w-[200px]">
+              {message.content_text || "Download Document"}
+            </span>
+          </a>
+        );
       }
       return (
         <a

@@ -13,8 +13,8 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { sortConversationsByActivity } from "@/lib/inbox/conversation-order";
 
 interface ConversationListProps {
   activeConversationId: string | null;
@@ -54,7 +54,9 @@ export function ConversationList({
   resyncToken = 0,
 }: ConversationListProps) {
   const [search, setSearch] = useState("");
-  const [filter, setFilter] = useState<InboxFilter>("all");
+  // Closed conversations are archived. They remain available through
+  // the Closed/All filters, but should disappear from the working inbox.
+  const [filter, setFilter] = useState<InboxFilter>("open");
   const [loading, setLoading] = useState(true);
 
   // Keep the latest callback in a ref so the fetch effect below can
@@ -82,7 +84,7 @@ export function ConversationList({
       const { data, error } = await supabase
         .from("conversations")
         .select("*, contact:contacts(*)")
-        .order("last_message_at", { ascending: false });
+        .order("last_message_at", { ascending: false, nullsFirst: false });
 
       if (cancelled) return;
 
@@ -98,7 +100,9 @@ export function ConversationList({
         return;
       }
 
-      onConversationsLoadedRef.current(data ?? []);
+      onConversationsLoadedRef.current(
+        sortConversationsByActivity((data as Conversation[]) ?? []),
+      );
       setLoading(false);
     })();
 
@@ -129,7 +133,7 @@ export function ConversationList({
       });
     }
 
-    return result;
+    return sortConversationsByActivity(result);
   }, [conversations, filter, search]);
 
   const handleSearchChange = useCallback(

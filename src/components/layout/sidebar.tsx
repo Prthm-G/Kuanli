@@ -49,7 +49,7 @@ const ROLE_CHIP: Record<
   },
   agent: {
     icon: UserCog,
-    label: "Agent",
+    label: "Counsellor",
     // Neutral slate: the operational default.
     className:
       "border-border bg-muted text-foreground",
@@ -178,12 +178,21 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
         {/* Logo row. On mobile we put a close button here; on desktop the
             close button is hidden since the sidebar is always-visible. */}
         <div className="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-border px-4">
-          <Link href="/dashboard" className="flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-              <MessageSquare className="h-4 w-4" />
-            </div>
-            <span className="text-sm font-semibold text-foreground">
-              CRM Template for WhatsApp
+          <Link 
+            href="/dashboard" 
+            className="flex items-center gap-3 mx-2 my-1 px-3 py-2 rounded-xl shadow-md transition-all hover:opacity-90"
+            style={{ backgroundColor: '#184D47' }}
+          >
+            <img 
+              src="/kuanli_logo.png" 
+              alt="Kuanli Logo" 
+              className="size-8 object-contain rounded-md shrink-0" 
+            />
+            <span 
+              className="text-lg font-bold tracking-wide truncate" 
+              style={{ color: '#F8F5EF' }}
+            >
+              Kuanli
             </span>
           </Link>
           <button

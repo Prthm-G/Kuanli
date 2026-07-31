@@ -8,13 +8,13 @@ import { useRealtime } from "@/hooks/use-realtime";
 import { ConversationList } from "@/components/inbox/conversation-list";
 import { MessageThread } from "@/components/inbox/message-thread";
 import { ContactSidebar } from "@/components/inbox/contact-sidebar";
-import { toast } from "sonner";
 import { WifiOff } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { sortConversationsByActivity } from "@/lib/inbox/conversation-order";
 
 // Remembers the agent's show/hide choice for the desktop contact panel
 // across reloads and sessions (device-scoped, like the theme prefs).
-const CONTACT_PANEL_STORAGE_KEY = "wacrm:inbox:contact-panel-open";
+const CONTACT_PANEL_STORAGE_KEY = "Kuanli:inbox:contact-panel-open";
 
 export default function InboxPage() {
   const router = useRouter();
@@ -142,18 +142,38 @@ export default function InboxPage() {
           // last_message_text / unread_count to fresher values than
           // the row we just read). Only backfill `contact`, which the
           // realtime payloads never carry.
-          return prev.map((c) =>
-            c.id === fetched.id
-              ? { ...c, contact: c.contact ?? fetched.contact }
-              : c,
+          return sortConversationsByActivity(
+            prev.map((c) =>
+              c.id === fetched.id
+                ? { ...c, contact: c.contact ?? fetched.contact }
+                : c,
+            ),
           );
         }
-        return [fetched, ...prev];
+        return sortConversationsByActivity([fetched, ...prev]);
       });
     } finally {
       hydratingConvIdsRef.current.delete(convId);
     }
   }, []);
+
+  const handleConversationDeleted = useCallback(
+    (conversationId: string) => {
+      setConversations((prev) =>
+        prev.filter((conversation) => conversation.id !== conversationId),
+      );
+      knownConvIdsRef.current.delete(conversationId);
+
+      if (activeConversation?.id === conversationId) {
+        setActiveConversation(null);
+        setActiveContact(null);
+        setMessages([]);
+        autoSelectedForDeepLinkRef.current = null;
+        router.replace("/inbox", { scroll: false });
+      }
+    },
+    [activeConversation?.id, router],
+  );
 
   // Check WhatsApp connection status on mount
   useEffect(() => {
@@ -224,18 +244,20 @@ export default function InboxPage() {
         // always read false here.
         if (knownConvIdsRef.current.has(newMsg.conversation_id)) {
           setConversations((prev) =>
-            prev.map((c) =>
-              c.id === newMsg.conversation_id
-                ? {
-                    ...c,
-                    last_message_text: newMsg.content_text ?? "",
-                    last_message_at: newMsg.created_at,
-                    unread_count:
-                      activeConversation?.id === newMsg.conversation_id
-                        ? 0
-                        : c.unread_count + 1,
-                  }
-                : c,
+            sortConversationsByActivity(
+              prev.map((c) =>
+                c.id === newMsg.conversation_id
+                  ? {
+                      ...c,
+                      last_message_text: newMsg.content_text ?? "",
+                      last_message_at: newMsg.created_at,
+                      unread_count:
+                        activeConversation?.id === newMsg.conversation_id
+                          ? 0
+                          : c.unread_count + 1,
+                    }
+                  : c,
+              ),
             ),
           );
         } else {
@@ -265,6 +287,12 @@ export default function InboxPage() {
       new: Conversation;
       old: Partial<Conversation>;
     }) => {
+      if (event.eventType === "DELETE") {
+        const deletedId = event.old.id;
+        if (deletedId) handleConversationDeleted(deletedId);
+        return;
+      }
+
       const conv = event.new;
 
       if (event.eventType === "INSERT") {
@@ -276,7 +304,7 @@ export default function InboxPage() {
         if (!knownConvIdsRef.current.has(conv.id)) {
           setConversations((prev) => {
             if (prev.some((c) => c.id === conv.id)) return prev;
-            return [conv, ...prev];
+            return sortConversationsByActivity([conv, ...prev]);
           });
           hydrateConversation(conv.id);
         }
@@ -291,14 +319,16 @@ export default function InboxPage() {
           // UPDATE to round-trip. Non-active convs take the value as-is.
           const isActive = activeConversation?.id === conv.id;
           setConversations((prev) =>
-            prev.map((c) =>
-              c.id === conv.id
-                ? {
-                    ...c,
-                    ...conv,
-                    unread_count: isActive ? 0 : conv.unread_count,
-                  }
-                : c,
+            sortConversationsByActivity(
+              prev.map((c) =>
+                c.id === conv.id
+                  ? {
+                      ...c,
+                      ...conv,
+                      unread_count: isActive ? 0 : conv.unread_count,
+                    }
+                  : c,
+              ),
             ),
           );
         } else {
@@ -317,7 +347,7 @@ export default function InboxPage() {
         }
       }
     },
-    [activeConversation, hydrateConversation]
+    [activeConversation, handleConversationDeleted, hydrateConversation]
   );
 
   // Subscribe to realtime. The `isConnected` flag below feeds the
@@ -385,7 +415,7 @@ export default function InboxPage() {
 
   const handleConversationsLoaded = useCallback(
     (loaded: Conversation[]) => {
-      setConversations(loaded);
+      setConversations(sortConversationsByActivity(loaded));
       // Resolve a pending deep-link here rather than in an effect — this
       // is an event handler, so the setState calls below are allowed by
       // react-hooks/set-state-in-effect. Runs once per ?c=<id> URL value
@@ -601,6 +631,7 @@ export default function InboxPage() {
             onUpdateMessage={handleUpdateMessage}
             onStatusChange={handleStatusChange}
             onAssignChange={handleAssignChange}
+            onDeleted={handleConversationDeleted}
             onBack={handleCloseConversation}
             resyncToken={resyncToken}
             onRefresh={handleManualRefresh}

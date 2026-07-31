@@ -4,9 +4,11 @@
 //   PATCH  — change a member's role.   Admin+.
 //   DELETE — remove a member.          Admin+.
 //
-// Both delegate to SECURITY DEFINER RPCs from migration 018:
-//   - set_member_role(p_user_id, p_new_role)
-//   - remove_account_member(p_user_id)
+// PATCH delegates to the SECURITY DEFINER set_member_role RPC
+// (migration 018). DELETE delegates to remove_account_member
+// (migration 027, replacing 018's version) to remove membership,
+// then bans the user's login directly via the admin API so they
+// can't sign back in without a fresh invite.
 //
 // The RPCs do the *real* authorisation work — caller must be
 // admin+, target must be in caller's account, target can't be the
@@ -15,10 +17,11 @@
 // ============================================================
 
 import { NextResponse } from "next/server";
-import type { PostgrestError } from "@supabase/supabase-js";
+import { type PostgrestError } from "@supabase/supabase-js";
 
 import { requireRole, toErrorResponse } from "@/lib/auth/account";
 import { isAccountRole } from "@/lib/auth/roles";
+import { supabaseAdmin } from "@/lib/automations/admin-client";
 import {
   checkRateLimit,
   rateLimitResponse,
@@ -88,6 +91,8 @@ export async function PATCH(
 
     if (error) return rpcErrorToResponse(error);
 
+    
+
     return NextResponse.json({ ok: true });
   } catch (err) {
     return toErrorResponse(err);
@@ -109,13 +114,28 @@ export async function DELETE(
 
     const { userId } = await params;
 
-    const { data, error } = await ctx.supabase.rpc("remove_account_member", {
+    const { error } = await ctx.supabase.rpc("remove_account_member", {
       p_user_id: userId,
     });
 
     if (error) return rpcErrorToResponse(error);
 
-    return NextResponse.json({ ok: true, newPersonalAccountId: data });
+    // remove_account_member (migration 027) has already removed their
+    // membership. Ban their login too so they can't sign back in without
+    // a brand new invite. Deliberately a ban, not a delete: contacts/
+    // conversations/deals still cascade-delete on auth.users removal
+    // (leftover from before shared accounts existed), so deleting the
+    // user outright would wipe every contact/conversation attributed
+    // to them. Banning leaves all of that untouched.
+    const { error: banError } = await supabaseAdmin().auth.admin.updateUserById(
+      userId,
+      { ban_duration: "876000h" }, // ~100 years - GoTrue has no literal "forever"
+    );
+    if (banError) {
+      console.error("[members route] failed to ban removed member:", userId, banError);
+    }
+
+    return NextResponse.json({ ok: true });
   } catch (err) {
     return toErrorResponse(err);
   }

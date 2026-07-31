@@ -79,9 +79,14 @@ export function DealCard({ deal, stage, onEdit, isOverlay }: DealCardProps) {
       </div>
 
       <div className="mt-2 flex items-center justify-between">
-        <span className="text-sm font-bold text-primary">
-          {formatCurrency(deal.value, deal.currency)}
-        </span>
+        <div className="flex flex-col gap-0.5">
+          <span className="text-sm font-bold text-primary">
+            {(deal.contact as any)?.roll_number || "No DCId"}
+          </span>
+          <span className="text-xs text-muted-foreground font-medium">
+            {((deal.contact as any)?.university) ? `${(deal.contact as any).university} • 20${(deal.contact as any).intake_year}${(deal.contact as any).intake_session}` : "Course Pending"}
+          </span>
+        </div>
         {deal.expected_close_date && (
           <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
             <Calendar className="h-3 w-3" />

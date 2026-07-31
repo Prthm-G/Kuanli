@@ -26,9 +26,21 @@ import {
   RefreshCw,
   PanelRightOpen,
   PanelRightClose,
+  Trash2,
+  Loader2,
 } from "lucide-react";
 import { format, isToday, isYesterday, differenceInHours } from "date-fns";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { RequireRole } from "@/components/auth/require-role";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -36,7 +48,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { MessageBubble } from "./message-bubble";
 import { MessageActions } from "./message-actions";
 import {
@@ -74,6 +85,8 @@ interface MessageThreadProps {
     conversationId: string,
     assignedAgentId: string | null,
   ) => void;
+  /** Remove the deleted row from the parent list and clear its deep link. */
+  onDeleted?: (conversationId: string) => void;
   /**
    * On mobile, the thread is shown full-screen with the conversation list
    * hidden. This callback lets the page deselect the active conversation
@@ -159,6 +172,7 @@ export function MessageThread({
   onUpdateMessage,
   onStatusChange,
   onAssignChange,
+  onDeleted,
   onBack,
   resyncToken = 0,
   onRefresh,
@@ -172,6 +186,8 @@ export function MessageThread({
   const [templateModalOpen, setTemplateModalOpen] = useState(false);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [reactions, setReactions] = useState<MessageReaction[]>([]);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   // Purely visual spin state for the manual-refresh button. The actual
   // refetch is fire-and-forget through `onRefresh` (which bumps the
   // parent's resyncToken); the 700ms spin is just feedback so the click
@@ -778,6 +794,34 @@ export function MessageThread({
     [conversation, onAssignChange],
   );
 
+  const handleDeleteConversation = useCallback(async () => {
+    if (!conversation || isDeleting) return;
+
+    setIsDeleting(true);
+    try {
+      const response = await fetch(
+        `/api/conversations/${encodeURIComponent(conversation.id)}`,
+        { method: "DELETE" },
+      );
+      const payload = (await response.json().catch(() => ({}))) as {
+        error?: string;
+      };
+
+      if (!response.ok) {
+        throw new Error(payload.error || `HTTP ${response.status}`);
+      }
+
+      setDeleteDialogOpen(false);
+      onDeleted?.(conversation.id);
+      toast.success("Conversation deleted");
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "Unknown error";
+      toast.error(`Could not delete conversation: ${reason}`);
+    } finally {
+      setIsDeleting(false);
+    }
+  }, [conversation, isDeleting, onDeleted]);
+
   // Empty state — same WhatsApp-style doodle background as the active
   // thread below, so swapping between empty/selected doesn't change the
   // pattern under the user's eye.
@@ -904,6 +948,18 @@ export function MessageThread({
               />
             </button>
           )}
+
+          <RequireRole min="agent">
+            <button
+              type="button"
+              onClick={() => setDeleteDialogOpen(true)}
+              aria-label="Delete conversation"
+              title="Delete conversation"
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+          </RequireRole>
 
           {/* Status dropdown */}
           <DropdownMenu>
@@ -1086,6 +1142,42 @@ export function MessageThread({
         onOpenChange={setTemplateModalOpen}
         onSelect={handleSendTemplate}
       />
+
+      <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <DialogContent showCloseButton={!isDeleting}>
+          <DialogHeader>
+            <DialogTitle>Delete this conversation?</DialogTitle>
+            <DialogDescription>
+              This permanently removes its message history. The contact and
+              any linked deal are kept, and a future inbound message can start
+              a new conversation.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={isDeleting}
+              onClick={() => setDeleteDialogOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={isDeleting}
+              onClick={() => void handleDeleteConversation()}
+            >
+              {isDeleting ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Trash2 className="h-4 w-4" />
+              )}
+              Delete conversation
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

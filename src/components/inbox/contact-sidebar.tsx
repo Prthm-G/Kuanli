@@ -144,7 +144,7 @@ export function ContactSidebar({ contact }: ContactSidebarProps) {
               )}
             </div>
             <h3 className="mt-3 text-sm font-semibold text-foreground">
-              {displayName}
+              {displayName} {(contact as any).roll_number ? ` — ${(contact as any).roll_number}` : ""}
             </h3>
             {contact.company && (
               <p className="text-xs text-muted-foreground">{contact.company}</p>
@@ -206,6 +206,53 @@ export function ContactSidebar({ contact }: ContactSidebarProps) {
           {/* Divider */}
           <div className="my-4 border-t border-border" />
 
+          {/* Enrollment Setup */}
+          <div>
+            <div className="flex items-center gap-2 px-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+              
+              University Enrollment
+            </div>
+            {!(contact as any).university ? (
+              <div className="mt-2 space-y-2 rounded-lg bg-muted p-3">
+                <select id="uni-select" className="w-full text-sm bg-background p-1.5 rounded border border-border">
+                  <option value="LPU">Lovely Professional University (LPU)</option>
+                  <option value="CU">Chandigarh University (CU)</option>
+                  <option value="AMI">Amity University (AMI)</option>
+                </select>
+                <div className="flex gap-2">
+                  <select id="year-select" className="w-1/2 text-sm bg-background p-1.5 rounded border border-border">
+                    <option value="26">2026</option>
+                    <option value="27">2027</option>
+                  </select>
+                  <select id="intake-select" className="w-1/2 text-sm bg-background p-1.5 rounded border border-border">
+                    <option value="J">July Intake (J)</option>
+                    <option value="A">August Intake (A)</option>
+                  </select>
+                </div>
+                <button onClick={async () => {
+                  const u = (document.getElementById('uni-select') as any).value;
+                  const y = (document.getElementById('year-select') as any).value;
+                  const i = (document.getElementById('intake-select') as any).value;
+                  
+                  const supabase = createClient();
+                  const { error } = await supabase.rpc('update_contact_enrollment', { p_contact_id: contact.id, p_university: u, p_intake_year: y, p_intake_session: i });
+                  if (error) { alert("Database Error: " + error.message); return; }
+                  window.location.reload();
+                }} className="mt-2 w-full bg-primary text-primary-foreground py-1.5 rounded text-sm font-medium hover:bg-primary/90 transition-colors">
+                  Generate DCId
+                </button>
+              </div>
+            ) : (
+              <div className="mt-2 rounded-lg bg-primary/10 p-3 text-sm border border-primary/20">
+                <p className="font-bold text-primary tracking-wide text-lg">{(contact as any).roll_number}</p>
+                <p className="text-xs text-muted-foreground mt-1">{(contact as any).university} • 20{(contact as any).intake_year} • Intake {(contact as any).intake_session}</p>
+              </div>
+            )}
+          </div>
+
+          {/* Divider */}
+          <div className="my-4 border-t border-border" />
+
           {/* Active Deals */}
           <div>
             <div className="flex items-center gap-2 px-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
@@ -225,10 +272,7 @@ export function ContactSidebar({ contact }: ContactSidebarProps) {
                       {deal.title}
                     </p>
                     <div className="mt-1 flex items-center justify-between text-xs text-muted-foreground">
-                      <span>
-                        {deal.currency ?? "$"}
-                        {deal.value.toLocaleString()}
-                      </span>
+                      
                       {deal.stage && (
                         <span
                           className="rounded-full px-1.5 py-0.5 text-[10px]"

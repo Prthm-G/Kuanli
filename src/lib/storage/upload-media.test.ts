@@ -38,9 +38,9 @@ describe("MEDIA_MAX_BYTES_BY_KIND", () => {
     expect(MEDIA_MAX_BYTES_BY_KIND.image).toBe(5 * 1024 * 1024);
   });
 
-  it("caps video/audio/document at the 16 MB bucket limit", () => {
+  it("uses conservative media caps and allows 100 MB documents", () => {
     expect(MEDIA_MAX_BYTES_BY_KIND.video).toBe(16 * 1024 * 1024);
     expect(MEDIA_MAX_BYTES_BY_KIND.audio).toBe(16 * 1024 * 1024);
-    expect(MEDIA_MAX_BYTES_BY_KIND.document).toBe(16 * 1024 * 1024);
+    expect(MEDIA_MAX_BYTES_BY_KIND.document).toBe(100 * 1024 * 1024);
   });
 });

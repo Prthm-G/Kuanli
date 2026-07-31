@@ -160,13 +160,15 @@ const LegendItem = ({
 }
 
 interface ScrollButtonProps {
-  icon: React.ElementType
+  // React 19's narrowed ElementType default otherwise resolves SVG props to
+  // `never` when this vendored component receives a Lucide icon.
+  icon: React.ElementType<any>
   onClick?: () => void
   disabled?: boolean
 }
 
 const ScrollButton = ({ icon, onClick, disabled }: ScrollButtonProps) => {
-  const Icon = icon
+  const Icon = icon as React.ComponentType<React.SVGProps<SVGSVGElement>>
   const [isPressed, setIsPressed] = React.useState(false)
   const intervalRef = React.useRef<NodeJS.Timeout | null>(null)
 

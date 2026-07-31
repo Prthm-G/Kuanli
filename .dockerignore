@@ -1,0 +1,10 @@
+.git
+.next
+node_modules
+npm-debug.log*
+NUL
+
+# Local one-off repair scripts are not application runtime inputs.
+fix-*.js
+patch-*.js
+update-ui.js

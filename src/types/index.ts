@@ -1,4 +1,4 @@
-import type { AccountRole } from "@/lib/auth/roles";
+import type { AccountRole } from '@/lib/auth/roles';
 
 export interface Profile {
   id: string;
@@ -77,7 +77,7 @@ export interface AccountInvitation {
   id: string;
   account_id: string;
   /** Roles offered via invite — owner is never offered. */
-  role: Exclude<AccountRole, "owner">;
+  role: Exclude<AccountRole, 'owner'>;
   created_by_user_id: string | null;
   label: string | null;
   created_at: string;
@@ -169,7 +169,12 @@ export type ContentType =
   | 'template'
   /** Customer tapped a reply button or list row on a message we sent. */
   | 'interactive';
-export type MessageStatus = 'sending' | 'sent' | 'delivered' | 'read' | 'failed';
+export type MessageStatus =
+  | 'sending'
+  | 'sent'
+  | 'delivered'
+  | 'read'
+  | 'failed';
 
 export interface Message {
   id: string;
@@ -224,6 +229,12 @@ export interface WhatsAppConfig {
   subscribed_apps_at?: string;
   /** Last error from /register; cleared on success. */
   last_registration_error?: string;
+  /** Meta business selected during Embedded Signup. */
+  meta_business_id?: string;
+  /** How the number was connected through Embedded Signup. */
+  onboarding_method?: 'migration' | 'cloud';
+  /** Present when Meta issued a time-limited customer token. */
+  token_expires_at?: string;
 }
 
 // Raw Meta status enum. We persist this verbatim from Meta (sync + webhook)
@@ -317,8 +328,19 @@ export interface Deal {
   assignee?: Profile;
 }
 
-export type BroadcastStatus = 'draft' | 'scheduled' | 'sending' | 'sent' | 'failed';
-export type RecipientStatus = 'pending' | 'sent' | 'delivered' | 'read' | 'replied' | 'failed';
+export type BroadcastStatus =
+  | 'draft'
+  | 'scheduled'
+  | 'sending'
+  | 'sent'
+  | 'failed';
+export type RecipientStatus =
+  | 'pending'
+  | 'sent'
+  | 'delivered'
+  | 'read'
+  | 'replied'
+  | 'failed';
 
 export interface Broadcast {
   id: string;
