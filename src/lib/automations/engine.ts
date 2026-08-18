@@ -562,6 +562,13 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
  * fall back to the contact's conversation for resumed/wait paths and
  * manual engine POSTs. Throws if none exists — send steps have
  * no meaningful target without a conversation.
+ *
+ * Since migration 037 a contact can hold one thread per business number, so
+ * this fallback is no longer a single-row lookup. `.maybeSingle()` raised
+ * "multiple rows returned" the moment a lead had written to two numbers, which
+ * would have failed the step outright. Take the most recently active thread
+ * instead: for a resumed wait or a manual POST that is the number the lead is
+ * actually talking on, and it matches how deal-form resolves the same thing.
  */
 async function resolveConversationId(args: ExecuteArgs): Promise<string> {
   const fromCtx = args.context.conversation_id
@@ -572,10 +579,12 @@ async function resolveConversationId(args: ExecuteArgs): Promise<string> {
     .select('id')
     .eq('account_id', args.automation.account_id)
     .eq('contact_id', args.contactId)
-    .maybeSingle()
+    .order('last_message_at', { ascending: false, nullsFirst: false })
+    .limit(1)
   if (error) throw new Error(`conversation lookup failed: ${error.message}`)
-  if (!data?.id) throw new Error('no conversation for contact')
-  return data.id as string
+  const id = data?.[0]?.id
+  if (!id) throw new Error('no conversation for contact')
+  return id as string
 }
 
 function triggerMatches(automation: Automation, ctx: AutomationContext | undefined): boolean {

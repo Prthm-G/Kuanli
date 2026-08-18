@@ -1,14 +1,16 @@
 "use client";
 
 import type { Deal, PipelineStage } from "@/types";
+import type { QueueLead } from "@/lib/queue/types";
 import { Calendar, Check, X } from "lucide-react";
-import { formatCurrency } from "@/lib/currency";
 
 interface DealCardProps {
   deal: Deal;
   stage: PipelineStage | null;
   onEdit: (deal: Deal) => void;
   isOverlay?: boolean;
+  /** Queue insight for this contact (score / awaiting / interest), optional. */
+  insight?: QueueLead;
 }
 
 function formatDate(dateStr: string) {
@@ -19,13 +21,24 @@ function formatDate(dateStr: string) {
   });
 }
 
+function waitLabel(lastCustomerAt: string | null): string {
+  if (!lastCustomerAt) return "";
+  const hours = Math.max(
+    0,
+    (Date.now() - new Date(lastCustomerAt).getTime()) / 3_600_000,
+  );
+  if (hours < 1) return "now";
+  if (hours < 24) return `${Math.floor(hours)}h`;
+  return `${Math.floor(hours / 24)}d`;
+}
+
 function initials(name?: string, fallback?: string) {
   const source = (name || fallback || "?").trim();
   if (!source) return "?";
   return source.charAt(0).toUpperCase();
 }
 
-export function DealCard({ deal, stage, onEdit, isOverlay }: DealCardProps) {
+export function DealCard({ deal, stage, onEdit, isOverlay, insight }: DealCardProps) {
   const contactLabel = deal.contact?.name || deal.contact?.phone || "No contact";
   const assigneeLabel = deal.assignee?.full_name || null;
 
@@ -81,10 +94,10 @@ export function DealCard({ deal, stage, onEdit, isOverlay }: DealCardProps) {
       <div className="mt-2 flex items-center justify-between">
         <div className="flex flex-col gap-0.5">
           <span className="text-sm font-bold text-primary">
-            {(deal.contact as any)?.roll_number || "No DCId"}
+            {deal.contact?.roll_number || "No DCId"}
           </span>
           <span className="text-xs text-muted-foreground font-medium">
-            {((deal.contact as any)?.university) ? `${(deal.contact as any).university} • 20${(deal.contact as any).intake_year}${(deal.contact as any).intake_session}` : "Course Pending"}
+            {deal.contact?.university ? `${deal.contact.university} • 20${deal.contact.intake_year}${deal.contact.intake_session}` : "Course Pending"}
           </span>
         </div>
         {deal.expected_close_date && (
@@ -94,6 +107,29 @@ export function DealCard({ deal, stage, onEdit, isOverlay }: DealCardProps) {
           </span>
         )}
       </div>
+
+      {insight && (
+        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+          <span
+            className="rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold text-primary"
+            title={`Queue score ${insight.score.total}`}
+          >
+            {insight.score.total}
+          </span>
+          {insight.score.isAwaitingReply && (
+            <span className="rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-500">
+              awaiting {waitLabel(insight.lastCustomerAt)}
+            </span>
+          )}
+          {(insight.course || insight.specialization) && (
+            <span className="truncate text-[10px] text-muted-foreground">
+              {[insight.course, insight.specialization]
+                .filter(Boolean)
+                .join(" · ")}
+            </span>
+          )}
+        </div>
+      )}
 
       {assigneeLabel && (
         <div className="mt-2 flex items-center justify-end">

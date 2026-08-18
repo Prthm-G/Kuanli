@@ -7,6 +7,10 @@ import { PipelineBoard } from "@/components/pipelines/pipeline-board";
 import { PipelineSettings } from "@/components/pipelines/pipeline-settings";
 import { DealForm } from "@/components/pipelines/deal-form";
 import { PipelineAnalytics } from "@/components/pipelines/pipeline-analytics";
+import { PipelineFunnel } from "@/components/pipelines/pipeline-funnel";
+import { PipelineActivity } from "@/components/pipelines/pipeline-activity";
+import { loadLeadQueue } from "@/lib/queue/queries";
+import type { QueueLead } from "@/lib/queue/types";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -70,6 +74,51 @@ export default function PipelinesPage() {
 
   // Guard against double-seeding (React StrictMode double-effect in dev).
   const seedAttempted = useRef(false);
+
+  // Tabbed views (KB-PIPETABS-R4-28): the Kanban, this pipeline's funnel,
+  // and the cross-board activity feed.
+  const [view, setView] = useState<"board" | "funnel" | "activity">("board");
+
+  // Board filters + per-card insight (score / awaiting-reply / interest),
+  // keyed by contact_id from the lead_queue RPC. Enrolled/Lost contacts are
+  // outside the queue's scope and simply have no insight row.
+  const [insights, setInsights] = useState<Map<string, QueueLead>>(new Map());
+  const [search, setSearch] = useState("");
+  const [awaitingOnly, setAwaitingOnly] = useState(false);
+  const [sourceFilter, setSourceFilter] = useState<"all" | "ad" | "organic">("all");
+
+  useEffect(() => {
+    if (!accountId) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const leads = await loadLeadQueue(supabase, accountId);
+        if (!cancelled) {
+          setInsights(new Map(leads.map((l) => [l.contactId, l])));
+        }
+      } catch {
+        // The board works without insights; filters just see fewer matches.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [accountId, supabase]);
+
+  const filteredDeals = deals.filter((deal) => {
+    const insight = deal.contact_id ? insights.get(deal.contact_id) : undefined;
+    if (awaitingOnly && !insight?.score.isAwaitingReply) return false;
+    if (sourceFilter !== "all") {
+      const isAd = !!(insight?.adHeadline || insight?.adBody);
+      if (sourceFilter === "ad" ? !isAd : isAd) return false;
+    }
+    if (search.trim()) {
+      const q = search.trim().toLowerCase();
+      const hay = `${deal.title} ${deal.contact?.name ?? ""} ${deal.contact?.phone ?? ""}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
 
   const loadPipelines = useCallback(async () => {
     const { data, error } = await supabase
@@ -175,7 +224,6 @@ export default function PipelinesPage() {
     if (!selectedPipelineId) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setStages([]);
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setDeals([]);
       return;
     }
@@ -410,14 +458,84 @@ export default function PipelinesPage() {
         </div>
       ) : (
         <>
-          <PipelineAnalytics stages={stages} deals={deals} />
-          <PipelineBoard
-            stages={stages}
-            deals={deals}
-            onDealMoved={handleDealMoved}
-            onAddDeal={handleAddDeal}
-            onEditDeal={handleEditDeal}
-          />
+          <div className="flex gap-1 rounded-lg border border-border bg-muted/40 p-1">
+            {(
+              [
+                { key: "board", label: "Board" },
+                { key: "funnel", label: "Funnel" },
+                { key: "activity", label: "Activity" },
+              ] as const
+            ).map((t) => (
+              <button
+                key={t.key}
+                onClick={() => setView(t.key)}
+                className={
+                  "flex-1 rounded-md px-3 py-1.5 text-sm font-medium transition-colors " +
+                  (view === t.key
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground")
+                }
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+
+          {view === "board" && (
+            <>
+              <div className="flex flex-wrap items-center gap-2">
+                <Input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search name, phone, title…"
+                  className="h-8 w-56 bg-muted border-border text-foreground"
+                />
+                <select
+                  value={sourceFilter}
+                  onChange={(e) =>
+                    setSourceFilter(e.target.value as "all" | "ad" | "organic")
+                  }
+                  className="h-8 rounded border border-border bg-muted px-2 text-sm text-foreground"
+                >
+                  <option value="all">All sources</option>
+                  <option value="ad">Ad</option>
+                  <option value="organic">Organic</option>
+                </select>
+                <label className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    checked={awaitingOnly}
+                    onChange={(e) => setAwaitingOnly(e.target.checked)}
+                  />
+                  Awaiting reply only
+                </label>
+                {filteredDeals.length !== deals.length && (
+                  <span className="text-xs text-muted-foreground">
+                    {filteredDeals.length} of {deals.length} deals
+                  </span>
+                )}
+              </div>
+              <PipelineAnalytics stages={stages} deals={filteredDeals} />
+              <PipelineBoard
+                stages={stages}
+                deals={filteredDeals}
+                insights={insights}
+                onDealMoved={handleDealMoved}
+                onAddDeal={handleAddDeal}
+                onEditDeal={handleEditDeal}
+              />
+            </>
+          )}
+          {view === "funnel" && accountId && selectedPipelineId && (
+            <PipelineFunnel
+              key={selectedPipelineId}
+              accountId={accountId}
+              pipelineId={selectedPipelineId}
+            />
+          )}
+          {view === "activity" && accountId && (
+            <PipelineActivity accountId={accountId} />
+          )}
         </>
       )}
 

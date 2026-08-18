@@ -112,7 +112,6 @@ function formatDuration(seconds: number): string {
 const OPUS_ENCODER_PATH = "/opus/encoderWorker.min.js";
 
 export function MessageComposer({
-  conversationId,
   sessionExpired,
   onSend,
   onSendMedia,

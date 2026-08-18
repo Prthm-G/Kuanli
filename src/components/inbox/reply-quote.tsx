@@ -3,6 +3,7 @@
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Message } from "@/types";
+import { formatWhatsAppText } from "@/lib/whatsapp/format-text";
 
 interface ReplyQuoteProps {
   /** Sender label of the quoted message: "You" for our own messages,
@@ -56,7 +57,7 @@ export function ReplyQuote({
          *  `break-words` also wraps long URLs that have no whitespace
          *  to break on. Issue #165. */}
         <div className="whitespace-pre-wrap break-words text-xs text-foreground/80">
-          {preview}
+          {formatWhatsAppText(preview)}
         </div>
       </div>
       {onDismiss && (

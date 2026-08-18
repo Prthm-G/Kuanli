@@ -28,10 +28,12 @@ import {
   PanelRightClose,
   Trash2,
   Loader2,
+  Bot,
 } from "lucide-react";
 import { format, isToday, isYesterday, differenceInHours } from "date-fns";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import {
   Dialog,
   DialogContent,
@@ -592,6 +594,42 @@ export function MessageThread({
     [conversation, onStatusChange]
   );
 
+  /**
+   * Per-conversation AI toggle (KB-BOTTOGGLE-R4-15). Mirrors
+   * `conversations.bot_active`, which the webhook checks before forwarding the
+   * message to n8n. `!== false` so a null/undefined column reads as ON, matching
+   * the DB default and the behaviour before this switch existed.
+   */
+  const [botActive, setBotActive] = useState(
+    conversation?.bot_active !== false,
+  );
+
+  useEffect(() => {
+    setBotActive(conversation?.bot_active !== false);
+  }, [conversation?.id, conversation?.bot_active]);
+
+  const handleBotToggle = useCallback(
+    async (next: boolean) => {
+      if (!conversation) return;
+      const previous = botActive;
+      setBotActive(next); // optimistic
+
+      const supabase = createClient();
+      const { error } = await supabase
+        .from("conversations")
+        .update({ bot_active: next })
+        .eq("id", conversation.id);
+
+      if (error) {
+        setBotActive(previous);
+        toast.error("Could not change AI replies");
+        return;
+      }
+      toast.success(next ? "AI replies on" : "AI replies off");
+    },
+    [conversation, botActive],
+  );
+
   const handleOpenTemplates = useCallback(() => {
     setTemplateModalOpen(true);
   }, []);
@@ -960,6 +998,35 @@ export function MessageThread({
               <Trash2 className="h-3.5 w-3.5" />
             </button>
           </RequireRole>
+
+          {/* AI replies toggle (KB-BOTTOGGLE-R4-15) */}
+          <div
+            className="inline-flex items-center gap-1.5 h-7 px-2 rounded-md"
+            title={
+              botActive
+                ? "Auretris replies automatically to this chat"
+                : "Auretris will not reply to this chat"
+            }
+          >
+            <Bot
+              className={cn(
+                "h-3.5 w-3.5 shrink-0",
+                botActive ? "text-primary" : "text-muted-foreground",
+              )}
+            />
+            <span className="hidden sm:inline text-xs text-muted-foreground">
+              AI
+            </span>
+            <Switch
+              checked={botActive}
+              onCheckedChange={(v) => handleBotToggle(!!v)}
+              aria-label={
+                botActive
+                  ? "Turn off AI replies for this chat"
+                  : "Turn on AI replies for this chat"
+              }
+            />
+          </div>
 
           {/* Status dropdown */}
           <DropdownMenu>

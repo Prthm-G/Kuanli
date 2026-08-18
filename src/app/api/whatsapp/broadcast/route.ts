@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { sendTemplateMessage } from '@/lib/whatsapp/meta-api'
 import { decrypt } from '@/lib/whatsapp/encryption'
+import { getPrimaryConfig } from '@/lib/whatsapp/config-resolver'
 import type { SendTimeParams } from '@/lib/whatsapp/template-send-builder'
 import { isMessageTemplate } from '@/lib/whatsapp/template-row-guard'
 import {
@@ -134,13 +135,13 @@ export async function POST(request: Request) {
       )
     }
 
-    const { data: config, error: configError } = await supabase
-      .from('whatsapp_config')
-      .select('*')
-      .eq('account_id', accountId)
-      .single()
-
-    if (configError || !config) {
+    // Multi-number (034): broadcasts are account-level marketing sends; they go
+    // out from the account's primary number. (Per-number broadcast selection is
+    // a future UI enhancement.)
+    let config
+    try {
+      config = await getPrimaryConfig(supabase, accountId)
+    } catch {
       return NextResponse.json(
         {
           error:

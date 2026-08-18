@@ -27,6 +27,10 @@ export default function InboxPage() {
   const deepLinkConvId = searchParams.get("c");
 
   const [conversations, setConversations] = useState<Conversation[]>([]);
+  // Multi-number (034/035): phone_number_id -> human number label, used to badge
+  // each conversation with the business number it belongs to. Only surfaced when
+  // the account owns more than one number.
+  const [numberLabels, setNumberLabels] = useState<Record<string, string>>({});
   const [activeConversation, setActiveConversation] =
     useState<Conversation | null>(null);
   const [activeContact, setActiveContact] = useState<Contact | null>(null);
@@ -203,13 +207,25 @@ export default function InboxPage() {
         return;
       }
 
+      // Multi-number (034/035): an account may own several numbers. Consider the
+      // account connected if any is connected, and build the phone_number_id ->
+      // display-number map for the inbox source badge.
       const { data } = await supabase
         .from("whatsapp_config")
-        .select("status")
-        .eq("account_id", accountId)
-        .maybeSingle();
+        .select("phone_number_id, display_phone_number, status")
+        .eq("account_id", accountId);
 
-      setWhatsappConnected(data?.status === "connected");
+      const rows = Array.isArray(data) ? data : [];
+      setWhatsappConnected(rows.some((c) => c.status === "connected"));
+
+      const labels: Record<string, string> = {};
+      for (const r of rows) {
+        if (r.phone_number_id) {
+          labels[r.phone_number_id] =
+            r.display_phone_number || r.phone_number_id;
+        }
+      }
+      setNumberLabels(labels);
     };
 
     checkConnection();
@@ -603,6 +619,7 @@ export default function InboxPage() {
             conversations={conversations}
             onConversationsLoaded={handleConversationsLoaded}
             resyncToken={resyncToken}
+            numberLabels={numberLabels}
           />
         </div>
 
@@ -646,7 +663,17 @@ export default function InboxPage() {
             toggle — which is itself desktop-only — never affects it. */}
         {contactPanelOpen && (
           <div className="hidden lg:block">
-            <ContactSidebar contact={activeContact} />
+            <ContactSidebar
+              contact={activeContact}
+              conversation={activeConversation}
+              /* Refetch just this thread instead of the old
+                 window.location.reload(), which threw away the whole inbox
+                 (scroll position, open thread, realtime subscriptions) to
+                 pick up one changed field. */
+              onContactUpdated={() =>
+                activeConversation && hydrateConversation(activeConversation.id)
+              }
+            />
           </div>
         )}
       </div>

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { decrypt } from '@/lib/whatsapp/encryption'
+import { getPrimaryConfig } from '@/lib/whatsapp/config-resolver'
 import {
   getSubscribedApps,
   verifyPhoneNumber,
@@ -55,13 +56,12 @@ export async function GET() {
     })
   }
 
-  const { data: config } = await supabase
-    .from('whatsapp_config')
-    .select('*')
-    .eq('account_id', accountId)
-    .maybeSingle()
-
-  if (!config) {
+  // Multi-number (034): diagnose the account's primary number. (Per-number
+  // diagnostics are a deferred settings-UI enhancement.)
+  let config
+  try {
+    config = await getPrimaryConfig(supabase, accountId)
+  } catch {
     return NextResponse.json({
       live: false,
       checks: { config_exists: false },

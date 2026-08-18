@@ -94,10 +94,15 @@ export function WhatsAppConfig() {
       // account sees the same saved configuration. UNIQUE(account_id)
       // on the table guarantees the .maybeSingle() return type
       // remains accurate.
+      // Multi-number (034): an account may own several numbers. This form edits
+      // the primary number; a full numbers-list UI is a follow-up.
       const { data, error } = await supabase
         .from('whatsapp_config')
         .select('*')
         .eq('account_id', acctId)
+        .order('is_primary', { ascending: false })
+        .order('created_at', { ascending: true })
+        .limit(1)
         .maybeSingle();
 
       if (error) {
@@ -168,7 +173,13 @@ export function WhatsAppConfig() {
       return;
     }
     fetchConfig(accountId);
-  }, [authLoading, profileLoading, user, accountId, fetchConfig]);
+  // `user` is a fresh object on every Supabase onAuthStateChange event — which
+  // fires on token refresh AND on tab focus — so depending on it re-ran this
+  // effect and fetchConfig() wiped whatever was half-typed in the form. Key on
+  // the stable id instead. The lint rule wants the whole `user` object back;
+  // that is precisely the bug, so the narrowing is intentional.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authLoading, profileLoading, user?.id, accountId, fetchConfig]);
 
   async function handleSave() {
     if (!phoneNumberId.trim()) {

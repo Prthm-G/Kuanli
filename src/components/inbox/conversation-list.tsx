@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 import type { Conversation, ConversationStatus } from "@/types";
-import { Search, ChevronDown } from "lucide-react";
+import { Search, ChevronDown, Phone } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { Input } from "@/components/ui/input";
 import {
@@ -28,6 +28,12 @@ interface ConversationListProps {
    * or the tab was throttled. Optional so existing callers keep working.
    */
   resyncToken?: number;
+  /**
+   * Multi-number (034/035): phone_number_id -> human number label. When the
+   * account owns more than one number, each conversation row is badged with the
+   * business number it belongs to. Omitted/single-entry => no badge.
+   */
+  numberLabels?: Record<string, string>;
 }
 
 const STATUS_COLORS: Record<ConversationStatus, string> = {
@@ -52,7 +58,10 @@ export function ConversationList({
   conversations,
   onConversationsLoaded,
   resyncToken = 0,
+  numberLabels,
 }: ConversationListProps) {
+  // Only worth badging when the account actually has more than one number.
+  const showNumberBadges = !!numberLabels && Object.keys(numberLabels).length > 1;
   const [search, setSearch] = useState("");
   // Closed conversations are archived. They remain available through
   // the Closed/All filters, but should disappear from the working inbox.
@@ -219,6 +228,11 @@ export function ConversationList({
                 conversation={conv}
                 isActive={conv.id === activeConversationId}
                 onSelect={handleSelect}
+                sourceNumber={
+                  showNumberBadges && conv.phone_number_id
+                    ? numberLabels?.[conv.phone_number_id]
+                    : undefined
+                }
               />
             ))}
           </div>
@@ -232,12 +246,15 @@ interface ConversationItemProps {
   conversation: Conversation;
   isActive: boolean;
   onSelect: (conversation: Conversation) => void;
+  /** Human label of the business number this thread belongs to (multi-number). */
+  sourceNumber?: string;
 }
 
 function ConversationItem({
   conversation,
   isActive,
   onSelect,
+  sourceNumber,
 }: ConversationItemProps) {
   const contact = conversation.contact;
   const displayName = contact?.name || contact?.phone || "Unknown";
@@ -264,6 +281,8 @@ function ConversationItem({
       {/* Avatar */}
       <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-muted text-sm font-medium text-foreground">
         {contact?.avatar_url ? (
+          // Arbitrary user-supplied avatar URL — see contact-sidebar.
+          // eslint-disable-next-line @next/next/no-img-element
           <img
             src={contact.avatar_url}
             alt={displayName}
@@ -301,6 +320,15 @@ function ConversationItem({
             />
           </div>
         </div>
+        {sourceNumber && (
+          <span
+            className="mt-1 inline-flex max-w-full items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
+            title={`Incoming WhatsApp number: ${sourceNumber}`}
+          >
+            <Phone className="h-2.5 w-2.5 shrink-0" />
+            <span className="truncate">{sourceNumber}</span>
+          </span>
+        )}
       </div>
     </button>
   );

@@ -3,3 +3,22 @@
 2026-07-31T07:24:09Z -- commit-only (push disabled for this repo)
 2026-07-31T07:32:03Z -- committed 2 file(s) touching: .auto-commit.log,.gitignore
 2026-07-31T07:32:03Z -- commit-only (push disabled for this repo)
+2026-07-31T18:05:01Z -- committed 1 file(s) touching: .auto-commit.log
+2026-07-31T18:05:01Z -- commit-only (push disabled for this repo)
+2026-08-01T18:05:01Z -- ABORTED: possible secret-shaped content in: src/app/api/whatsapp/webhook/route.ts
+2026-08-02T18:05:01Z -- ABORTED: possible secret-shaped content in: src/app/api/whatsapp/webhook/route.ts
+2026-08-03T18:05:01Z -- ABORTED: possible secret-shaped content in: src/app/api/whatsapp/webhook/route.ts
+2026-08-04T18:05:01Z -- ABORTED: possible secret-shaped content in: src/app/api/whatsapp/webhook/route.ts
+2026-08-05T18:05:01Z -- ABORTED: possible secret-shaped content in: src/app/api/whatsapp/webhook/route.ts
+2026-08-06T18:05:01Z -- ABORTED: possible secret-shaped content in: src/app/api/whatsapp/webhook/route.ts
+2026-08-07T18:05:01Z -- ABORTED: possible secret-shaped content in: src/app/api/whatsapp/webhook/route.ts
+2026-08-08T18:05:01Z -- ABORTED: possible secret-shaped content in: src/app/api/whatsapp/webhook/route.ts
+2026-08-09T18:05:01Z -- ABORTED: possible secret-shaped content in: src/app/api/whatsapp/webhook/route.ts
+2026-08-10T18:05:01Z -- ABORTED: possible secret-shaped content in: src/app/api/whatsapp/webhook/route.ts
+2026-08-11T18:05:02Z -- ABORTED: possible secret-shaped content in: src/app/api/whatsapp/webhook/route.ts
+2026-08-12T18:05:01Z -- ABORTED: possible secret-shaped content in: src/app/api/whatsapp/webhook/route.ts
+2026-08-13T18:05:01Z -- ABORTED: possible secret-shaped content in: src/app/api/whatsapp/webhook/route.ts
+2026-08-14T18:05:01Z -- ABORTED: possible secret-shaped content in: src/app/api/whatsapp/broadcast/route.ts src/app/api/whatsapp/config/route.ts src/app/api/whatsapp/config/verify-registration/route.ts src/app/api/whatsapp/media/[mediaId]/route.ts src/app/api/whatsapp/react/route.ts src/app/api/whatsapp/send/route.ts src/app/api/whatsapp/templates/[id]/route.ts src/app/api/whatsapp/templates/submit/route.ts src/app/api/whatsapp/templates/sync/route.ts src/app/api/whatsapp/webhook/route.ts src/components/settings/whatsapp-config.tsx src/lib/automations/meta-send.ts src/lib/flows/meta-send.ts src/lib/whatsapp/config-resolver.test.ts src/lib/whatsapp/config-resolver.ts src/types/index.ts
+2026-08-15T18:05:01Z -- ABORTED: possible secret-shaped content in: src/app/api/whatsapp/broadcast/route.ts src/app/api/whatsapp/config/route.ts src/app/api/whatsapp/config/verify-registration/route.ts src/app/api/whatsapp/media/[mediaId]/route.ts src/app/api/whatsapp/react/route.ts src/app/api/whatsapp/send/route.ts src/app/api/whatsapp/templates/[id]/route.ts src/app/api/whatsapp/templates/submit/route.ts src/app/api/whatsapp/templates/sync/route.ts src/app/api/whatsapp/webhook/route.ts src/components/settings/whatsapp-config.tsx src/lib/automations/meta-send.ts src/lib/flows/meta-send.ts src/lib/whatsapp/config-resolver.test.ts src/lib/whatsapp/config-resolver.ts src/types/index.ts
+2026-08-16T18:05:02Z -- ABORTED: possible secret-shaped content in: src/app/api/whatsapp/broadcast/route.ts src/app/api/whatsapp/config/route.ts src/app/api/whatsapp/config/verify-registration/route.ts src/app/api/whatsapp/media/[mediaId]/route.ts src/app/api/whatsapp/react/route.ts src/app/api/whatsapp/send/route.ts src/app/api/whatsapp/templates/[id]/route.ts src/app/api/whatsapp/templates/submit/route.ts src/app/api/whatsapp/templates/sync/route.ts src/app/api/whatsapp/webhook/route.ts src/components/settings/whatsapp-config.tsx src/lib/automations/meta-send.ts src/lib/flows/meta-send.ts src/lib/whatsapp/config-resolver.test.ts src/lib/whatsapp/config-resolver.ts src/types/index.ts
+2026-08-17T18:05:01Z -- ABORTED: possible secret-shaped content in: src/app/api/whatsapp/broadcast/route.ts src/app/api/whatsapp/config/route.ts src/app/api/whatsapp/config/verify-registration/route.ts src/app/api/whatsapp/media/[mediaId]/route.ts src/app/api/whatsapp/react/route.ts src/app/api/whatsapp/send/route.ts src/app/api/whatsapp/templates/[id]/route.ts src/app/api/whatsapp/templates/submit/route.ts src/app/api/whatsapp/templates/sync/route.ts src/app/api/whatsapp/webhook/route.ts src/components/settings/whatsapp-config.tsx src/lib/automations/meta-send.ts src/lib/flows/meta-send.ts src/lib/whatsapp/config-resolver.test.ts src/lib/whatsapp/config-resolver.ts src/types/index.ts

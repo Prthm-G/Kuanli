@@ -12,6 +12,10 @@ import {
   handleTemplateWebhookChange,
   isTemplateWebhookField,
 } from '@/lib/whatsapp/template-webhook';
+import {
+  normalizeMessageStatus,
+  statusesOverwritableBy,
+} from '@/lib/whatsapp/message-status';
 
 // ===== n8n WEBHOOK FORWARDING =====
 async function forwardToN8n(eventType: string, data: Record<string, unknown>) {
@@ -95,6 +99,14 @@ interface WhatsAppMessage {
   referral?: { headline?: string; body?: string; source_url?: string };
 }
 
+// A message sent from the business's WhatsApp Business app (or a linked
+// companion device), mirrored to us via the `smb_message_echoes` webhook
+// field. Same per-type content shape as WhatsAppMessage, plus the
+// customer's number in `to` (echoes carry no `contacts[]`/profile name).
+interface WhatsAppMessageEcho extends WhatsAppMessage {
+  to: string;
+}
+
 interface WhatsAppWebhookEntry {
   id: string;
   changes: Array<{
@@ -109,6 +121,7 @@ interface WhatsAppWebhookEntry {
         wa_id: string;
       }>;
       messages?: WhatsAppMessage[];
+      message_echoes?: WhatsAppMessageEcho[];
       statuses?: Array<{
         id: string;
         status: string;
@@ -231,6 +244,15 @@ async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
         continue;
       }
 
+      // Messages sent from the business's WhatsApp Business app (Coexistence).
+      // No `messages`/`contacts` keys are present on this field, so this
+      // must be handled before the `!value.messages || !value.contacts`
+      // guard below — otherwise it's silently dropped.
+      if (change.field === 'smb_message_echoes') {
+        await processEchoChange(change.value);
+        continue;
+      }
+
       const value = change.value;
 
       if (value.statuses) {
@@ -268,6 +290,10 @@ async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
       }
 
       const config = configRows[0];
+      await backfillDisplayPhoneNumber(
+        config,
+        value.metadata.display_phone_number
+      );
       const decryptedAccessToken = decrypt(config.access_token);
 
       for (let i = 0; i < value.messages.length; i++) {
@@ -284,6 +310,177 @@ async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
         );
       }
     }
+  }
+}
+
+/**
+ * Backfill whatsapp_config.display_phone_number from the webhook payload.
+ *
+ * Meta puts the human-readable number in `metadata.display_phone_number` on
+ * every inbound change, but nothing read it. Migration 035 added the column and
+ * only populates it when a number is saved through the settings form, so any
+ * row predating that migration keeps a null and the inbox badge falls back to
+ * the opaque phone_number_id (inbox/page.tsx). Filling it here is self-healing:
+ * the next inbound message on a number fixes its own badge, and numbers added
+ * later never develop the gap.
+ *
+ * The `.is(null)` predicate keeps this idempotent and race-safe, and the early
+ * return means the common case costs no query at all.
+ */
+async function backfillDisplayPhoneNumber(
+  config: { id: string; display_phone_number: string | null },
+  displayPhoneNumber: string | undefined
+) {
+  if (config.display_phone_number || !displayPhoneNumber) return;
+
+  const { error } = await supabaseAdmin()
+    .from('whatsapp_config')
+    .update({ display_phone_number: displayPhoneNumber })
+    .eq('id', config.id)
+    .is('display_phone_number', null);
+
+  if (error) {
+    console.error(
+      '[webhook] failed to backfill display_phone_number for config',
+      config.id,
+      error
+    );
+  }
+}
+
+async function processEchoChange(
+  value: WhatsAppWebhookEntry['changes'][number]['value']
+) {
+  const items = value.message_echoes;
+  if (!items || items.length === 0) return;
+
+  const phoneNumberId = value.metadata.phone_number_id;
+
+  const { data: configRows, error: configError } = await supabaseAdmin()
+    .from('whatsapp_config')
+    .select('*')
+    .eq('phone_number_id', phoneNumberId);
+
+  if (configError) {
+    console.error(
+      '[webhook] whatsapp_config lookup failed for phone_number_id (echo)',
+      phoneNumberId,
+      configError
+    );
+    return;
+  }
+  if (!configRows || configRows.length === 0) return;
+  if (configRows.length > 1) {
+    console.error(
+      '[webhook] duplicate whatsapp_config rows for phone_number_id (echo)',
+      phoneNumberId,
+      '- owners:',
+      configRows.map((c: { user_id: string }) => c.user_id)
+    );
+    return;
+  }
+
+  const config = configRows[0];
+  await backfillDisplayPhoneNumber(config, value.metadata.display_phone_number);
+  const decryptedAccessToken = decrypt(config.access_token);
+
+  // Isolated per item: one malformed/unexpected echo must not abort the
+  // rest of this delivery's other changes (the route already returned its
+  // 200 to Meta before processWebhook finishes running).
+  for (const echo of items) {
+    try {
+      await processEchoItem(
+        echo,
+        config.account_id,
+        config.user_id,
+        decryptedAccessToken,
+        phoneNumberId
+      );
+    } catch (err) {
+      console.error(
+        '[webhook] failed to process smb_message_echoes item',
+        echo.id,
+        err
+      );
+    }
+  }
+}
+
+async function processEchoItem(
+  echo: WhatsAppMessageEcho,
+  accountId: string,
+  configOwnerUserId: string,
+  accessToken: string,
+  phoneNumberId: string
+) {
+  // No contacts[]/profile name on this field — resolve by phone alone.
+  const customerPhone = normalizePhone(echo.to);
+
+  const contactOutcome = await findOrCreateContact(
+    accountId,
+    configOwnerUserId,
+    customerPhone,
+    ''
+  );
+  if (!contactOutcome) return;
+  const contactRecord = contactOutcome.contact;
+
+  const conversation = await findOrCreateConversation(
+    accountId,
+    configOwnerUserId,
+    contactRecord.id,
+    phoneNumberId
+  );
+  if (!conversation) return;
+
+  const { contentText, mediaUrl } = await parseMessageContent(
+    echo,
+    accessToken
+  );
+
+  const ALLOWED_CONTENT_TYPES = new Set([
+    'text',
+    'image',
+    'document',
+    'audio',
+    'video',
+    'location',
+    'template',
+    'interactive',
+  ]);
+  const contentType = ALLOWED_CONTENT_TYPES.has(echo.type)
+    ? echo.type
+    : echo.type === 'sticker'
+      ? 'image'
+      : 'text';
+
+  const echoTimestamp = Number.parseInt(echo.timestamp, 10);
+  const echoCreatedAt = Number.isFinite(echoTimestamp)
+    ? new Date(echoTimestamp * 1000).toISOString()
+    : new Date().toISOString();
+
+  const { error: msgError } = await supabaseAdmin().from('messages').insert({
+    conversation_id: conversation.id,
+    sender_type: 'agent',
+    content_type: contentType,
+    content_text: contentText,
+    media_url: mediaUrl,
+    message_id: echo.id,
+    status: 'sent',
+    created_at: echoCreatedAt,
+  });
+
+  if (msgError) {
+    if (isUniqueViolation(msgError)) {
+      // Meta retries webhooks. The WAMID uniqueness guard makes a retry a
+      // successful no-op instead of duplicating the mirrored message.
+      return;
+    }
+    console.error(
+      '[webhook] failed to insert smb_message_echoes message for conversation',
+      conversation.id,
+      msgError
+    );
   }
 }
 
@@ -316,12 +513,23 @@ async function handleStatusUpdate(status: {
   timestamp: string;
   recipient_id: string;
 }) {
-  const { error: msgErr } = await supabaseAdmin()
-    .from('messages')
-    .update({ status: status.status })
-    .eq('message_id', status.id);
+  const nextStatus = normalizeMessageStatus(status.status);
+  if (nextStatus === null) {
+    console.warn('[webhook] ignoring unrecognised message status:', status.status);
+  } else {
+    const overwritable = statusesOverwritableBy(nextStatus);
+    // Empty means nothing may advance to `nextStatus` (it is already at or past
+    // it, or terminal), so there is no row to touch.
+    if (overwritable.length > 0) {
+      const { error: msgErr } = await supabaseAdmin()
+        .from('messages')
+        .update({ status: nextStatus })
+        .eq('message_id', status.id)
+        .in('status', overwritable);
 
-  if (msgErr) console.error('Error updating message status:', msgErr);
+      if (msgErr) console.error('Error updating message status:', msgErr);
+    }
+  }
 
   const tsIso = new Date(parseInt(status.timestamp) * 1000).toISOString();
   const { data: recipient, error: recFetchErr } = await supabaseAdmin()
@@ -443,7 +651,8 @@ async function processMessage(
   const conversation = await findOrCreateConversation(
     accountId,
     configOwnerUserId,
-    contactRecord.id
+    contactRecord.id,
+    phoneNumberId
   );
   if (!conversation) return;
 
@@ -538,31 +747,45 @@ async function processMessage(
   await flagBroadcastReplyIfAny(accountId, contactRecord.id);
 
   // ===== FIRE AND FORGET TO n8n =====
-  forwardToN8n('message.received', {
-    raw_webhook: {
-      entry: [
-        {
-          changes: [
-            {
-              value: {
-                messages: [
-                  {
-                    ...message,
-                    text: { body: contentText ?? message.text?.body ?? '' },
-                  },
-                ],
-                contacts: [contact],
-                metadata: { phone_number_id: phoneNumberId },
+  // Per-conversation AI toggle (KB-BOTTOGGLE-R4-15). `bot_active` defaults to
+  // true, so existing and new threads keep replying exactly as before; the
+  // inbox switch sets it false to silence the bot on a personal chat.
+  // Gating the forward is what disables the reply: this is the only n8n call
+  // site, and the workflow it triggers exists solely to produce the AI answer.
+  // Inbound is still stored, tagged and shown in the inbox as normal.
+  if (conversation.bot_active === false) {
+    console.log(
+      '[webhook] AI replies disabled, skipping n8n forward for conversation',
+      conversation.id
+    );
+  } else {
+    forwardToN8n('message.received', {
+      raw_webhook: {
+        entry: [
+          {
+            changes: [
+              {
+                value: {
+                  messages: [
+                    {
+                      ...message,
+                      text: { body: contentText ?? message.text?.body ?? '' },
+                    },
+                  ],
+                  contacts: [contact],
+                  metadata: { phone_number_id: phoneNumberId },
+                },
               },
-            },
-          ],
-        },
-      ],
-    },
-    conversation_id: conversation.id,
-    contact_id: contactRecord.id,
-    account_id: accountId,
-  }).catch((err) => console.error('[n8n forward] error:', err));
+            ],
+          },
+        ],
+      },
+      conversation_id: conversation.id,
+      contact_id: contactRecord.id,
+      account_id: accountId,
+      access_token: accessToken,
+    }).catch((err) => console.error('[n8n forward] error:', err));
+  }
   // ===================================
 
   const flowResult = await dispatchInboundToFlows({
@@ -765,13 +988,20 @@ async function findOrCreateContact(
 async function findOrCreateConversation(
   accountId: string,
   configOwnerUserId: string,
-  contactId: string
+  contactId: string,
+  phoneNumberId: string
 ) {
+  // Threads are keyed by (account, contact, business number) since migration
+  // 037. A lead who also writes to another of the account's numbers gets a
+  // separate thread there rather than re-tagging this one, so each number keeps
+  // its own conversation and replies always leave from the number that thread
+  // belongs to.
   const { data: existing, error: lookupError } = await supabaseAdmin()
     .from('conversations')
     .select('*')
     .eq('account_id', accountId)
     .eq('contact_id', contactId)
+    .eq('phone_number_id', phoneNumberId)
     .maybeSingle();
 
   if (lookupError) {
@@ -791,6 +1021,7 @@ async function findOrCreateConversation(
       account_id: accountId,
       user_id: configOwnerUserId,
       contact_id: contactId,
+      phone_number_id: phoneNumberId,
     })
     .select()
     .single();
@@ -802,6 +1033,7 @@ async function findOrCreateConversation(
         .select('*')
         .eq('account_id', accountId)
         .eq('contact_id', contactId)
+        .eq('phone_number_id', phoneNumberId)
         .maybeSingle();
       if (raced) return raced;
     }

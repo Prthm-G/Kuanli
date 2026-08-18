@@ -22,7 +22,6 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Badge } from '@/components/ui/badge';
 import { Loader2, AlertTriangle } from 'lucide-react';
 
 interface ContactFormProps {
@@ -77,6 +76,13 @@ export function ContactForm({
       setDupMatch(null);
       fetchTags();
     }
+    // Deliberately keyed on [open, contact] only. This effect seeds the form
+    // from its props when the dialog opens; it must NOT re-run while the user
+    // is typing. `contactTags` is an array prop with a fresh identity on every
+    // render and `fetchTags` is redefined each render, so listing either would
+    // re-seed the form continuously and discard input — the same defect that
+    // was fixed in whatsapp-config.tsx.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, contact]);
 
   // Look up an existing contact with this number (new contacts only).

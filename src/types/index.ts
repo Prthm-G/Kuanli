@@ -100,6 +100,21 @@ export interface Contact {
   avatar_url?: string;
   created_at: string;
   updated_at: string;
+  /**
+   * Enrollment / DCId fields (migration 026). The contacts page, the inbox
+   * contact sidebar and the pipeline deal card all read these; they were being
+   * reached through `as any` casts because the type never declared them.
+   *
+   * `roll_number` is assigned by a DB trigger, never by the client: every new
+   * contact gets a placeholder `LD-YYMM-####` on insert, replaced with a real
+   * `D<university><year><session>####` the first time `university` is set. The
+   * remaining three are written only through the `update_contact_enrollment`
+   * RPC, which enforces the agent role in the contact's own account.
+   */
+  roll_number?: string;
+  university?: string;
+  intake_year?: string;
+  intake_session?: string;
 }
 
 export interface Tag {
@@ -156,6 +171,32 @@ export interface Conversation {
   created_at: string;
   updated_at: string;
   contact?: Contact;
+  /**
+   * Business WhatsApp number this thread belongs to (migration 034). Set on
+   * inbound by the webhook; drives which number outbound replies leave from and
+   * the inbox source-number badge. Optional: legacy/pre-migration rows may be
+   * null until the next inbound tags them.
+   */
+  phone_number_id?: string | null;
+  /**
+   * Whether the Auretris AI agent may auto-reply to this thread
+   * (KB-BOTTOGGLE-R4-15). Defaults to true in the DB, so every conversation
+   * keeps replying unless a human switches it off in the inbox — used to
+   * silence the bot on personal chats. Inbound is still received and stored
+   * either way; only the n8n forward is skipped.
+   */
+  bot_active?: boolean | null;
+  /**
+   * What the Auretris bot worked out the lead is interested in, mirrored from
+   * n8n's `bot_conversation_state` by migration 038. A read model: the bot owns
+   * these values, Kuanli only displays them and uses them to pre-fill
+   * enrollment. Null until the lead actually picks, which is meaningful — it is
+   * where a lead stalled.
+   */
+  interest_university?: string | null;
+  interest_mode?: string | null;
+  interest_course?: string | null;
+  interest_updated_at?: string | null;
 }
 
 export type SenderType = 'customer' | 'agent' | 'bot';

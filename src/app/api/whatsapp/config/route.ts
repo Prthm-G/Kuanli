@@ -7,6 +7,7 @@ import {
   verifyPhoneNumber,
 } from '@/lib/whatsapp/meta-api'
 import { encrypt, decrypt } from '@/lib/whatsapp/encryption'
+import { getPrimaryConfig } from '@/lib/whatsapp/config-resolver'
 
 /**
  * Resolve the caller's account_id from their profile. Inlined here
@@ -85,21 +86,13 @@ export async function GET() {
       )
     }
 
-    const { data: config, error: configError } = await supabase
-      .from('whatsapp_config')
-      .select('phone_number_id, access_token, status')
-      .eq('account_id', accountId)
-      .maybeSingle()
-
-    if (configError) {
-      console.error('Error fetching whatsapp_config:', configError)
-      return NextResponse.json(
-        { connected: false, reason: 'db_error', message: 'Failed to fetch configuration' },
-        { status: 200 }
-      )
-    }
-
-    if (!config) {
+    // Multi-number (034): an account may own several numbers. This health
+    // check reports on the primary (default) number so its shape stays stable
+    // for the existing "Test API Connection" button.
+    let config
+    try {
+      config = await getPrimaryConfig(supabase, accountId)
+    } catch {
       return NextResponse.json(
         {
           connected: false,
@@ -269,18 +262,19 @@ export async function POST(request: Request) {
       )
     }
 
-    // Look up any pre-existing row for this account so we know whether
-    // this number is already registered with Meta — if so we can skip
-    // /register when the user didn't provide a PIN this time around.
+    // Look up any pre-existing row for THIS number on this account so we know
+    // whether it is already registered with Meta — if so we can skip /register
+    // when the user didn't provide a PIN this time around. Multi-number (034):
+    // key on (account_id, phone_number_id), not account_id alone, so saving a
+    // second number inserts a new row instead of clobbering the first.
     const { data: existing } = await supabase
       .from('whatsapp_config')
       .select('id, registered_at, phone_number_id')
       .eq('account_id', accountId)
+      .eq('phone_number_id', phone_number_id)
       .maybeSingle()
 
-    const sameNumber =
-      existing?.phone_number_id === phone_number_id &&
-      existing?.registered_at != null
+    const sameNumber = existing != null && existing.registered_at != null
 
     // Step 1: register the phone number for inbound webhooks.
     //
@@ -355,6 +349,9 @@ export async function POST(request: Request) {
     // user through a retry.
     const baseRow = {
       phone_number_id,
+      // Human-readable number (migration 035) for the inbox source-number
+      // badge; comes straight from Meta's verification response.
+      display_phone_number: phoneInfo?.display_phone_number ?? null,
       waba_id: waba_id || null,
       access_token: encryptedAccessToken,
       verify_token: encryptedVerifyToken,
@@ -367,10 +364,13 @@ export async function POST(request: Request) {
     }
 
     if (existing) {
+      // Update THIS number's row specifically. Never `.eq('account_id')` now
+      // that an account can own more than one number — that would overwrite
+      // every number on the account with this one's credentials.
       const { error: updateError } = await supabase
         .from('whatsapp_config')
         .update(baseRow)
-        .eq('account_id', accountId)
+        .eq('id', existing.id)
 
       if (updateError) {
         console.error('Error updating whatsapp_config:', updateError)
@@ -380,15 +380,21 @@ export async function POST(request: Request) {
         )
       }
     } else {
-      // Insert with both columns: `account_id` is the tenancy key
-      // (NOT NULL post-017, UNIQUE so duplicates trip the constraint
-      // up-front), `user_id` is the audit column identifying which
-      // member of the account saved the config.
+      // A brand-new number for this account. The first number an account saves
+      // becomes its primary (the default for account/WABA-level operations and
+      // the outbound fallback); additional numbers are added as non-primary.
+      // `account_id` is the tenancy key; `user_id` is the audit column.
+      const { count: accountRowCount } = await supabase
+        .from('whatsapp_config')
+        .select('id', { count: 'exact', head: true })
+        .eq('account_id', accountId)
+
       const { error: insertError } = await supabase
         .from('whatsapp_config')
         .insert({
           account_id: accountId,
           user_id: user.id,
+          is_primary: (accountRowCount ?? 0) === 0,
           ...baseRow,
         })
 
@@ -438,7 +444,7 @@ export async function POST(request: Request) {
  * Used by the "Reset Configuration" button to recover from a corrupted
  * encrypted token (mismatched ENCRYPTION_KEY across environments).
  */
-export async function DELETE() {
+export async function DELETE(request: Request) {
   try {
     const supabase = await createClient()
 
@@ -459,10 +465,52 @@ export async function DELETE() {
       )
     }
 
+    // Multi-number (034): an account can own several numbers, so DELETE must
+    // target one specific number rather than wiping the account's whole config.
+    const phoneNumberId = new URL(request.url).searchParams.get('phone_number_id')
+
+    const { data: rows, error: listError } = await supabase
+      .from('whatsapp_config')
+      .select('id, phone_number_id, is_primary')
+      .eq('account_id', accountId)
+
+    if (listError) {
+      console.error('Error listing whatsapp_config for delete:', listError)
+      return NextResponse.json(
+        { error: 'Failed to delete configuration' },
+        { status: 500 }
+      )
+    }
+
+    if (!rows || rows.length === 0) {
+      return NextResponse.json({ success: true })
+    }
+
+    let target: { id: string; is_primary: boolean } | undefined
+    if (phoneNumberId) {
+      target = rows.find((r) => r.phone_number_id === phoneNumberId)
+      if (!target) {
+        return NextResponse.json(
+          { error: 'No configuration found for that number.' },
+          { status: 404 }
+        )
+      }
+    } else if (rows.length === 1) {
+      target = rows[0]
+    } else {
+      return NextResponse.json(
+        {
+          error:
+            'Multiple WhatsApp numbers are configured. Pass ?phone_number_id= to choose which one to remove.',
+        },
+        { status: 400 }
+      )
+    }
+
     const { error: deleteError } = await supabase
       .from('whatsapp_config')
       .delete()
-      .eq('account_id', accountId)
+      .eq('id', target.id)
 
     if (deleteError) {
       console.error('Error deleting whatsapp_config:', deleteError)
@@ -470,6 +518,18 @@ export async function DELETE() {
         { error: 'Failed to delete configuration' },
         { status: 500 }
       )
+    }
+
+    // If we removed the primary and other numbers remain, promote another so
+    // the account always has exactly one primary.
+    if (target.is_primary) {
+      const remaining = rows.find((r) => r.id !== target!.id)
+      if (remaining) {
+        await supabase
+          .from('whatsapp_config')
+          .update({ is_primary: true })
+          .eq('id', remaining.id)
+      }
     }
 
     return NextResponse.json({ success: true })

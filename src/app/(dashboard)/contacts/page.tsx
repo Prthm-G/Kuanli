@@ -593,7 +593,7 @@ export default function ContactsPage() {
                 </TableCell>
               </TableRow>
             ) : (
-              contacts.filter(c => activeTab === 'all' ? true : activeTab === 'leads' ? (c as any).roll_number?.startsWith('LD-') : !!(c as any).university).map((contact) => (
+              contacts.filter(c => activeTab === 'all' ? true : activeTab === 'leads' ? c.roll_number?.startsWith('LD-') : !!c.university).map((contact) => (
                 <TableRow
                   key={contact.id}
                   className="border-border hover:bg-muted/50 cursor-pointer"
@@ -616,7 +616,7 @@ export default function ContactsPage() {
                     {contact.email || <span className="text-muted-foreground">-</span>}
                   </TableCell>
                   <TableCell className="font-semibold text-primary tracking-wider">
-                    {(contact as any).roll_number || <span className="text-muted-foreground">-</span>}
+                    {contact.roll_number || <span className="text-muted-foreground">-</span>}
                   </TableCell>
                   <TableCell className="text-muted-foreground hidden lg:table-cell text-sm">
                     {contact.company || <span className="text-muted-foreground">-</span>}

@@ -1,8 +1,9 @@
 "use client";
 
-import { Suspense, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
+import Image from "next/image";
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -25,8 +26,15 @@ export default function SignupPage() {
 
 function SignupPageInner() {
   const searchParams = useSearchParams();
-  const router = useRouter();
   const inviteToken = searchParams.get("invite");
+
+  const [fullName, setFullName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [success, setSuccess] = useState(false);
 
   // --- SECURITY LOCK ---
   // This is a UX convenience only, not the real enforcement — it
@@ -36,22 +44,25 @@ function SignupPageInner() {
   // the token before creating any account; public self-serve
   // signup is disabled at the GoTrue level (GOTRUE_DISABLE_SIGNUP=
   // true in docker-compose.yml).
-  if (!inviteToken) {
-    if (typeof window !== "undefined") {
-      window.location.href = "/login?error=" + encodeURIComponent("Signups are strictly invite-only. Please contact your administrator.");
+  //
+  // Sits BELOW the hooks and redirects from an effect. It used to be an
+  // early `return null` above the seven useState calls, which changed the
+  // hook count between renders — React throws "Rendered more hooks than
+  // during the previous render" the moment `invite` appears or disappears
+  // on a mounted component. Navigating during render was the second half
+  // of the same bug: render may be invoked speculatively.
+  useEffect(() => {
+    if (!inviteToken) {
+      window.location.href =
+        "/login?error=" +
+        encodeURIComponent(
+          "Signups are strictly invite-only. Please contact your administrator.",
+        );
     }
-    return null;
-  }
+  }, [inviteToken]);
+
+  if (!inviteToken) return null;
   // ---------------------
-
-
-  const [fullName, setFullName] = useState("");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [success, setSuccess] = useState(false);
 
   const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -94,7 +105,14 @@ function SignupPageInner() {
         <Card className="w-full max-w-md border-slate-700/50 bg-slate-900/80 backdrop-blur-xl shadow-2xl text-slate-100">
           <CardHeader className="items-center text-center">
             <div className="mb-6 flex justify-center">
-              <img src="/logo.png" alt="Kuanli CRM" className="h-16 object-contain drop-shadow-2xl" onError={(e) => { e.currentTarget.style.display='none' }} />
+              <Image
+                src="/kuanli_logo.png"
+                alt="Kuanli CRM"
+                width={64}
+                height={64}
+                priority
+                className="h-16 w-16 object-contain drop-shadow-2xl"
+              />
             </div>
             <CardTitle className="text-xl text-white">
               Check your email
@@ -125,7 +143,14 @@ function SignupPageInner() {
       <Card className="w-full max-w-md border-slate-700/50 bg-slate-900/80 backdrop-blur-xl shadow-2xl text-slate-100">
         <CardHeader className="items-center text-center">
           <div className="mb-6 flex justify-center">
-            <img src="/logo.png" alt="Kuanli CRM" className="h-16 object-contain drop-shadow-2xl" onError={(e) => { e.currentTarget.style.display='none' }} />
+            <Image
+                src="/kuanli_logo.png"
+                alt="Kuanli CRM"
+                width={64}
+                height={64}
+                priority
+                className="h-16 w-16 object-contain drop-shadow-2xl"
+              />
           </div>
           <CardTitle className="text-xl text-white">
             {inviteToken ? "Create account & join" : "Create account"}

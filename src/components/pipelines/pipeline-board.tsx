@@ -15,6 +15,7 @@ import {
   type DragStartEvent,
 } from "@dnd-kit/core";
 import type { Deal, PipelineStage } from "@/types";
+import type { QueueLead } from "@/lib/queue/types";
 import { DealCard } from "./deal-card";
 import { Button } from "@/components/ui/button";
 import { Plus } from "lucide-react";
@@ -24,6 +25,8 @@ import { formatCurrency } from "@/lib/currency";
 interface PipelineBoardProps {
   stages: PipelineStage[];
   deals: Deal[];
+  /** Per-contact queue insight (score / awaiting / interest), optional. */
+  insights?: Map<string, QueueLead>;
   onDealMoved: (dealId: string, newStageId: string) => void;
   onAddDeal: (stageId: string) => void;
   onEditDeal: (deal: Deal) => void;
@@ -32,6 +35,7 @@ interface PipelineBoardProps {
 export function PipelineBoard({
   stages,
   deals,
+  insights,
   onDealMoved,
   onAddDeal,
   onEditDeal,
@@ -118,6 +122,7 @@ export function PipelineBoard({
               currency={defaultCurrency}
               onAddDeal={onAddDeal}
               onEditDeal={onEditDeal}
+              insights={insights}
             />
           );
         })}
@@ -192,6 +197,7 @@ function StageColumn({
   currency,
   onAddDeal,
   onEditDeal,
+  insights,
 }: {
   stage: PipelineStage;
   deals: Deal[];
@@ -199,6 +205,7 @@ function StageColumn({
   currency: string;
   onAddDeal: (stageId: string) => void;
   onEditDeal: (deal: Deal) => void;
+  insights?: Map<string, QueueLead>;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: stage.id });
 
@@ -246,6 +253,9 @@ function StageColumn({
               deal={deal}
               stage={stage}
               onEdit={onEditDeal}
+              insight={
+                deal.contact_id ? insights?.get(deal.contact_id) : undefined
+              }
             />
           ))
         )}
@@ -268,10 +278,12 @@ function DraggableDealCard({
   deal,
   stage,
   onEdit,
+  insight,
 }: {
   deal: Deal;
   stage: PipelineStage;
   onEdit: (deal: Deal) => void;
+  insight?: QueueLead;
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: deal.id,
@@ -284,7 +296,7 @@ function DraggableDealCard({
       {...attributes}
       style={{ opacity: isDragging ? 0.3 : 1, touchAction: "none" }}
     >
-      <DealCard deal={deal} stage={stage} onEdit={onEdit} />
+      <DealCard deal={deal} stage={stage} onEdit={onEdit} insight={insight} />
     </div>
   );
 }

@@ -14,6 +14,7 @@ import { WhatsAppConfig } from '@/components/settings/whatsapp-config';
 import { TemplateManager } from '@/components/settings/template-manager';
 import { FieldsAndTagsPanel } from '@/components/settings/fields-and-tags-panel';
 import { DealsSettings } from '@/components/settings/deals-settings';
+import { FollowupsPanel } from '@/components/settings/followups-panel';
 import { MembersTab } from '@/components/settings/members-tab';
 import {
   resolveSection,
@@ -46,7 +47,7 @@ export default function SettingsPage() {
       appearance: mode.charAt(0).toUpperCase() + mode.slice(1),
       deals: defaultCurrency,
     }),
-    [mode, defaultCurrency],
+    [mode, defaultCurrency]
   );
 
   const panel: Record<SettingsSection, ReactNode> = {
@@ -58,16 +59,17 @@ export default function SettingsPage() {
     templates: <TemplateManager />,
     fields: <FieldsAndTagsPanel />,
     deals: <DealsSettings />,
+    followups: <FollowupsPanel />,
     members: <MembersTab />,
   };
 
   return (
     <div>
       <div>
-        <h1 className="text-2xl font-bold tracking-tight text-foreground">
+        <h1 className="text-foreground text-2xl font-bold tracking-tight">
           Settings
         </h1>
-        <p className="mt-1 text-sm text-muted-foreground">
+        <p className="text-muted-foreground mt-1 text-sm">
           Everything in one place — your account and your workspace. Pick a
           section to manage it.
         </p>

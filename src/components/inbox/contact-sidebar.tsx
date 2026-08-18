@@ -3,14 +3,13 @@
 import { useState, useEffect, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { useAuth } from "@/hooks/use-auth";
-import { cn } from "@/lib/utils";
-import type { Contact, Deal, ContactNote, Tag } from "@/types";
+import type { Contact, Conversation, Deal, ContactNote, Tag } from "@/types";
+import { EnrollmentPanel } from "./enrollment-panel";
 import {
   Phone,
   Mail,
   Copy,
   Check,
-  User,
   Tag as TagIcon,
   DollarSign,
   StickyNote,
@@ -22,9 +21,19 @@ import { format } from "date-fns";
 
 interface ContactSidebarProps {
   contact: Contact | null;
+  /** The open thread. Supplies the bot-inferred university that pre-fills
+   *  enrollment; optional so the sidebar still renders without one. */
+  conversation?: Conversation | null;
+  /** Called after enrollment succeeds so the parent can refetch instead of
+   *  the component reloading the whole page. */
+  onContactUpdated?: () => void;
 }
 
-export function ContactSidebar({ contact }: ContactSidebarProps) {
+export function ContactSidebar({
+  contact,
+  conversation,
+  onContactUpdated,
+}: ContactSidebarProps) {
   const { accountId } = useAuth();
   const [copied, setCopied] = useState(false);
   const [deals, setDeals] = useState<Deal[]>([]);
@@ -134,6 +143,9 @@ export function ContactSidebar({ contact }: ContactSidebarProps) {
           <div className="flex flex-col items-center text-center">
             <div className="flex h-16 w-16 items-center justify-center rounded-full bg-muted text-lg font-semibold text-foreground">
               {contact.avatar_url ? (
+                // avatar_url is an arbitrary https URL pasted in the UI, so
+                // there is no finite remotePatterns list for the optimizer.
+                // eslint-disable-next-line @next/next/no-img-element
                 <img
                   src={contact.avatar_url}
                   alt={displayName}
@@ -144,7 +156,7 @@ export function ContactSidebar({ contact }: ContactSidebarProps) {
               )}
             </div>
             <h3 className="mt-3 text-sm font-semibold text-foreground">
-              {displayName} {(contact as any).roll_number ? ` — ${(contact as any).roll_number}` : ""}
+              {displayName} {contact.roll_number ? ` — ${contact.roll_number}` : ""}
             </h3>
             {contact.company && (
               <p className="text-xs text-muted-foreground">{contact.company}</p>
@@ -212,40 +224,20 @@ export function ContactSidebar({ contact }: ContactSidebarProps) {
               
               University Enrollment
             </div>
-            {!(contact as any).university ? (
-              <div className="mt-2 space-y-2 rounded-lg bg-muted p-3">
-                <select id="uni-select" className="w-full text-sm bg-background p-1.5 rounded border border-border">
-                  <option value="LPU">Lovely Professional University (LPU)</option>
-                  <option value="CU">Chandigarh University (CU)</option>
-                  <option value="AMI">Amity University (AMI)</option>
-                </select>
-                <div className="flex gap-2">
-                  <select id="year-select" className="w-1/2 text-sm bg-background p-1.5 rounded border border-border">
-                    <option value="26">2026</option>
-                    <option value="27">2027</option>
-                  </select>
-                  <select id="intake-select" className="w-1/2 text-sm bg-background p-1.5 rounded border border-border">
-                    <option value="J">July Intake (J)</option>
-                    <option value="A">August Intake (A)</option>
-                  </select>
-                </div>
-                <button onClick={async () => {
-                  const u = (document.getElementById('uni-select') as any).value;
-                  const y = (document.getElementById('year-select') as any).value;
-                  const i = (document.getElementById('intake-select') as any).value;
-                  
-                  const supabase = createClient();
-                  const { error } = await supabase.rpc('update_contact_enrollment', { p_contact_id: contact.id, p_university: u, p_intake_year: y, p_intake_session: i });
-                  if (error) { alert("Database Error: " + error.message); return; }
-                  window.location.reload();
-                }} className="mt-2 w-full bg-primary text-primary-foreground py-1.5 rounded text-sm font-medium hover:bg-primary/90 transition-colors">
-                  Generate DCId
-                </button>
-              </div>
+            {!contact.university ? (
+              /* Keyed on the thread so switching conversations re-seeds the
+                 suggested university, without resetting the notes / deals /
+                 tags state this sidebar also holds. */
+              <EnrollmentPanel
+                key={conversation?.id ?? "none"}
+                contact={contact}
+                interestUniversity={conversation?.interest_university}
+                onDone={onContactUpdated}
+              />
             ) : (
               <div className="mt-2 rounded-lg bg-primary/10 p-3 text-sm border border-primary/20">
-                <p className="font-bold text-primary tracking-wide text-lg">{(contact as any).roll_number}</p>
-                <p className="text-xs text-muted-foreground mt-1">{(contact as any).university} • 20{(contact as any).intake_year} • Intake {(contact as any).intake_session}</p>
+                <p className="font-bold text-primary tracking-wide text-lg">{contact.roll_number}</p>
+                <p className="text-xs text-muted-foreground mt-1">{contact.university} • 20{contact.intake_year} • Intake {contact.intake_session}</p>
               </div>
             )}
           </div>

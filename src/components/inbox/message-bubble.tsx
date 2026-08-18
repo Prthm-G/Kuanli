@@ -17,6 +17,7 @@ import {
 import { format } from "date-fns";
 import { ReplyQuote } from "./reply-quote";
 import { MessageReactions } from "./message-reactions";
+import { formatWhatsAppText } from "@/lib/whatsapp/format-text";
 
 interface MessageBubbleProps {
   message: Message;
@@ -107,6 +108,10 @@ function MediaImage({ url, alt }: { url: string; alt: string }) {
   }
 
   return (
+    // WhatsApp media is served by /api/whatsapp/media/<id>, which requires the
+    // caller's session. The image optimizer refetches server-side without it,
+    // so this must stay a plain img.
+    // eslint-disable-next-line @next/next/no-img-element
     <img
       src={src ?? ""}
       alt={alt}
@@ -121,7 +126,7 @@ function MessageContent({ message }: { message: Message }) {
     case "text":
       return (
         <p className="whitespace-pre-wrap break-words text-sm">
-          {message.content_text}
+          {formatWhatsAppText(message.content_text)}
         </p>
       );
 
@@ -135,7 +140,7 @@ function MessageContent({ message }: { message: Message }) {
           )}
           {message.content_text && (
             <p className="mt-1 whitespace-pre-wrap break-words text-sm">
-              {message.content_text}
+              {formatWhatsAppText(message.content_text)}
             </p>
           )}
         </div>
@@ -155,7 +160,7 @@ function MessageContent({ message }: { message: Message }) {
           )}
           {message.content_text && (
             <p className="mt-1 whitespace-pre-wrap break-words text-sm">
-              {message.content_text}
+              {formatWhatsAppText(message.content_text)}
             </p>
           )}
         </div>
@@ -217,7 +222,7 @@ function MessageContent({ message }: { message: Message }) {
           </span>
           {message.content_text && (
             <p className="mt-1 whitespace-pre-wrap break-words text-sm">
-              {message.content_text}
+              {formatWhatsAppText(message.content_text)}
             </p>
           )}
         </div>

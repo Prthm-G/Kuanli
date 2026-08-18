@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { getMediaUrl, downloadMedia } from '@/lib/whatsapp/meta-api'
 import { decrypt } from '@/lib/whatsapp/encryption'
+import { getPrimaryConfig } from '@/lib/whatsapp/config-resolver'
 
 export async function GET(
   request: Request,
@@ -48,14 +49,13 @@ export async function GET(
       )
     }
 
-    // Fetch and decrypt WhatsApp config
-    const { data: config, error: configError } = await supabase
-      .from('whatsapp_config')
-      .select('*')
-      .eq('account_id', accountId)
-      .single()
-
-    if (configError || !config) {
+    // Fetch and decrypt WhatsApp config. Multi-number (034): media lives on the
+    // shared WABA, so any of the account's numbers can fetch it — use the
+    // primary config's token.
+    let config
+    try {
+      config = await getPrimaryConfig(supabase, accountId)
+    } catch {
       return NextResponse.json(
         { error: 'WhatsApp not configured' },
         { status: 400 }

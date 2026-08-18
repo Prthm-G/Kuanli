@@ -7,6 +7,7 @@ import {
   type MediaKind,
 } from '@/lib/whatsapp/meta-api'
 import { decrypt, encrypt, isLegacyFormat } from '@/lib/whatsapp/encryption'
+import { getConfigForConversation } from '@/lib/whatsapp/config-resolver'
 import { supabaseAdmin } from '@/lib/flows/admin-client'
 import {
   sanitizePhoneForMeta,
@@ -165,14 +166,12 @@ export async function POST(request: Request) {
       )
     }
 
-    // Fetch and decrypt WhatsApp config
-    const { data: config, error: configError } = await supabase
-      .from('whatsapp_config')
-      .select('*')
-      .eq('account_id', accountId)
-      .single()
-
-    if (configError || !config) {
+    // Fetch and decrypt WhatsApp config. Multi-number (034): send from the
+    // number this conversation belongs to, not "the account's config".
+    let config
+    try {
+      config = await getConfigForConversation(supabase, conversation_id, accountId)
+    } catch {
       return NextResponse.json(
         { error: 'WhatsApp not configured. Please set up your WhatsApp integration first.' },
         { status: 400 }

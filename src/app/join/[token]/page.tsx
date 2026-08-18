@@ -22,7 +22,7 @@
 // this page after email verification.
 // ============================================================
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { toast } from 'sonner';
@@ -232,13 +232,26 @@ export default function JoinPage() {
     }
   }, []);
 
-  
+
   // --- AUTO-ACCEPT & TELEPORT ---
+  // Redeem exactly once, as soon as auth and the peek have both resolved.
+  //
+  // Guarded by a ref rather than by the `accepting` state. handleAccept()
+  // calls setAccepting(true) synchronously, so gating on that state made the
+  // effect depend on something the effect itself set, cascading renders. A ref
+  // updates without scheduling a render and cannot re-trigger the effect.
+  const autoAcceptedRef = useRef(false);
   useEffect(() => {
-    if (authedUserId && peek?.ok && !accepting && !conflictMessage) {
-      handleAccept();
-    }
-  }, [authedUserId, peek, accepting, conflictMessage, handleAccept]);
+    if (autoAcceptedRef.current) return;
+    if (!authedUserId || !peek?.ok || conflictMessage) return;
+    autoAcceptedRef.current = true;
+    // handleAccept flips `accepting` before awaiting the redeem POST. That is
+    // the ordinary "start an async request, show a spinner" effect, which is
+    // what effects are for; the rule targets effects that derive state
+    // synchronously and cascade. The ref above bounds this to a single run.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void handleAccept();
+  }, [authedUserId, peek, conflictMessage, handleAccept]);
   // ------------------------------
 
   // ----- Loading state (peek pending OR auth not yet resolved) -----

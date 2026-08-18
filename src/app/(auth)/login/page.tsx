@@ -2,6 +2,7 @@
 
 import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import Image from "next/image";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -14,7 +15,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { MessageSquare, UsersRound } from "lucide-react";
 
 // `useSearchParams` opts the component out of static prerendering
 // unless it sits under a Suspense boundary. We split the form into
@@ -71,7 +71,14 @@ function LoginPageInner() {
       <Card className="w-full max-w-md border-slate-700/50 bg-slate-900/80 backdrop-blur-xl shadow-2xl text-slate-100">
         <CardHeader className="items-center text-center">
           <div className="mb-6 flex justify-center">
-            <img src="/logo.png" alt="Kuanli CRM" className="h-16 object-contain drop-shadow-2xl" onError={(e) => { e.currentTarget.style.display='none' }} />
+            <Image
+                src="/kuanli_logo.png"
+                alt="Kuanli CRM"
+                width={64}
+                height={64}
+                priority
+                className="h-16 w-16 object-contain drop-shadow-2xl"
+              />
           </div>
           <CardTitle className="text-xl text-white">
             {inviteToken ? "Sign in to accept" : "Welcome back"}

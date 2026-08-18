@@ -1,5 +1,6 @@
 import { sendTextMessage, sendTemplateMessage } from '@/lib/whatsapp/meta-api'
 import { decrypt } from '@/lib/whatsapp/encryption'
+import { getConfigForConversation } from '@/lib/whatsapp/config-resolver'
 import {
   sanitizePhoneForMeta,
   isValidE164,
@@ -83,14 +84,13 @@ async function sendViaMeta(input: SendInput): Promise<{ whatsapp_message_id: str
     throw new Error(`contact phone invalid: ${contact.phone}`)
   }
 
-  const { data: config, error: configErr } = await db
-    .from('whatsapp_config')
-    .select('*')
-    .eq('account_id', input.accountId)
-    .single()
-  if (configErr || !config) {
-    throw new Error('WhatsApp not configured for this account')
-  }
+  // Multi-number (034): reply from the same number this conversation belongs
+  // to, falling back to the account's primary number.
+  const config = await getConfigForConversation(
+    db,
+    input.conversationId,
+    input.accountId,
+  )
 
   const accessToken = decrypt(config.access_token)
 
