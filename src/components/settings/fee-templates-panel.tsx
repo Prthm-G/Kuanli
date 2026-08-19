@@ -13,18 +13,24 @@ import {
   type FeeTemplate,
 } from '@/lib/payments/types';
 import { Switch } from '@/components/ui/switch';
+import { Button } from '@/components/ui/button';
+import { Pencil, Plus, Trash2 } from 'lucide-react';
+import { FeeTemplateDialog } from './fee-template-dialog';
 
 /**
  * Fee templates (migration 056): what each programme costs, per university,
  * mode and payment option.
  *
- * Read-only apart from the active toggle, deliberately and for the same reason
- * as the follow-up ladder panel next door: these numbers are quoted to
- * students and remitted to universities, and the seeded set came from
- * brochures and fee sheets that were reviewed before they were loaded. Editing
- * amounts inline invites a typo into a figure nobody re-checks. The toggle is
- * the safe control — it retires a template from the picker without touching
- * any student's existing plan, which snapshots its own amounts.
+ * Editing is deliberately behind a dialog rather than inline. These numbers are
+ * quoted to students and remitted to universities, and the seeded set came from
+ * brochures and fee sheets that were reviewed before loading (migration 058);
+ * an inline field invites a typo into a figure nobody re-checks. The dialog
+ * shows the per-term/total relationship while you type, which is where the
+ * mistakes actually happen.
+ *
+ * Nothing here can move an existing student's balance: a plan snapshots its
+ * amounts when it is applied. Retiring a template only removes it from the
+ * picker for future students.
  */
 export function FeeTemplatesPanel() {
   const { accountId, accountRole } = useAuth();
@@ -32,6 +38,8 @@ export function FeeTemplatesPanel() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [reload, setReload] = useState(0);
+  const [editing, setEditing] = useState<FeeTemplate | null>(null);
+  const [dialogOpen, setDialogOpen] = useState(false);
 
   const canEdit = accountRole === 'owner' || accountRole === 'admin';
 
@@ -69,6 +77,30 @@ export function FeeTemplatesPanel() {
     return [...map.entries()].sort(([a], [b]) => a.localeCompare(b));
   }, [templates]);
 
+  async function remove(t: FeeTemplate) {
+    const name = [t.program, t.specialization].filter(Boolean).join(' ');
+    if (
+      !window.confirm(
+        `Delete the ${name} ${OPTION_LABEL[t.paymentOption].toLowerCase()} plan?\n\n` +
+          'Students already on it keep their agreed figures — their plans hold ' +
+          'their own copy. This only removes it from the picker for new students.'
+      )
+    )
+      return;
+
+    setBusy(t.id);
+    const { error: err } = await createClient()
+      .from('fee_templates')
+      .delete()
+      .eq('id', t.id);
+    setBusy(null);
+    if (err) toast.error(`Could not delete: ${err.message}`);
+    else {
+      toast.success('Fee plan deleted');
+      setReload((k) => k + 1);
+    }
+  }
+
   async function toggle(t: FeeTemplate, active: boolean) {
     setBusy(t.id);
     const { error: err } = await createClient()
@@ -86,19 +118,33 @@ export function FeeTemplatesPanel() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="text-foreground text-lg font-semibold">Fee plans</h2>
-        <p className="text-muted-foreground mt-1 text-sm">
-          What each programme costs. A plan applied to a student snapshots these
-          amounts, so retiring or replacing a plan here never changes what an
-          existing student owes.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-foreground text-lg font-semibold">Fee plans</h2>
+          <p className="text-muted-foreground mt-1 text-sm">
+            What each programme costs. A plan applied to a student snapshots
+            these amounts, so editing, retiring or deleting one here never
+            changes what an existing student owes.
+          </p>
+        </div>
+        {canEdit && (
+          <Button
+            onClick={() => {
+              setEditing(null);
+              setDialogOpen(true);
+            }}
+          >
+            <Plus className="mr-1.5 h-4 w-4" />
+            Add fee plan
+          </Button>
+        )}
       </div>
 
       {templates.length === 0 && (
         <p className="text-muted-foreground text-sm">
-          No fee plans yet. They are seeded from the university brochures and
-          fee sheets; ask whoever runs the migrations to load them.
+          No fee plans yet. The LPU and Amity catalogues are seeded from their
+          brochures and fee sheets; DBU has to be entered by hand because its
+          brochures are scanned images.
         </p>
       )}
 
@@ -148,12 +194,37 @@ export function FeeTemplatesPanel() {
                     </div>
                   )}
                 </div>
-                <Switch
-                  checked={t.active}
-                  disabled={!canEdit || busy === t.id}
-                  onCheckedChange={(v) => void toggle(t, v)}
-                  aria-label={`${t.active ? 'Retire' : 'Activate'} ${t.program} ${OPTION_LABEL[t.paymentOption]}`}
-                />
+                <div className="flex shrink-0 items-center gap-2">
+                  {canEdit && (
+                    <>
+                      <button
+                        onClick={() => {
+                          setEditing(t);
+                          setDialogOpen(true);
+                        }}
+                        disabled={busy === t.id}
+                        aria-label={`Edit ${t.program} ${OPTION_LABEL[t.paymentOption]}`}
+                        className="border-border text-muted-foreground hover:text-foreground hover:bg-muted/50 rounded-md border p-1.5"
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        onClick={() => void remove(t)}
+                        disabled={busy === t.id}
+                        aria-label={`Delete ${t.program} ${OPTION_LABEL[t.paymentOption]}`}
+                        className="border-border text-muted-foreground rounded-md border p-1.5 hover:bg-red-500/10 hover:text-red-400"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </>
+                  )}
+                  <Switch
+                    checked={t.active}
+                    disabled={!canEdit || busy === t.id}
+                    onCheckedChange={(v) => void toggle(t, v)}
+                    aria-label={`${t.active ? 'Retire' : 'Activate'} ${t.program} ${OPTION_LABEL[t.paymentOption]}`}
+                  />
+                </div>
               </div>
             ))}
           </div>
@@ -162,9 +233,20 @@ export function FeeTemplatesPanel() {
 
       {!canEdit && templates.length > 0 && (
         <p className="text-muted-foreground text-xs">
-          Only an owner or admin can retire a fee plan.
+          Only an owner or admin can change a fee plan.
         </p>
       )}
+
+      {/* Keyed so opening the dialog for a different plan remounts it with
+          fresh initial state. Resetting the fields from an effect instead
+          would be a cascading render the compiler rejects. */}
+      <FeeTemplateDialog
+        key={`${dialogOpen}-${editing?.id ?? 'new'}`}
+        open={dialogOpen}
+        onOpenChange={setDialogOpen}
+        template={editing}
+        onSaved={() => setReload((k) => k + 1)}
+      />
     </div>
   );
 }
