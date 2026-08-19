@@ -19,6 +19,12 @@ import { buildMediaPath, MEDIA_MAX_BYTES } from '@/lib/storage/upload-media';
  * everything else — photos, voice notes, documents nobody got to yet —
  * still points at Meta. This covers those.
  *
+ * It also covers ECHOES: media an agent sent from the WhatsApp Business
+ * app on their phone. Those never touch the composer, so they have no
+ * chat-media object and Meta expires them on the same 30-day clock. On
+ * this deployment they are the MAJORITY of at-risk media, not an edge
+ * case, because counsellors reply from their phones.
+ *
  * Everything here is BEST EFFORT and returns `null` rather than
  * throwing. The caller is the Meta webhook, and a webhook that starts
  * failing is worse than an attachment that expires: Meta retries the
@@ -73,6 +79,13 @@ export interface MirrorInboundMediaArgs {
   fileName?: string | null;
   /** Meta's message timestamp (epoch SECONDS) — keeps object names distinct. */
   messageTimestamp?: string | number | null;
+  /**
+   * Second path segment. Defaults to `inbound` (media a customer sent
+   * us). The echo path passes `echo` for media an agent sent from the
+   * WhatsApp Business app, which Meta hosts and expires exactly the
+   * same way — the composer's own uploads never come through here.
+   */
+  folder?: string;
   /** Injected in tests. */
   download?: typeof downloadMedia;
 }
@@ -161,6 +174,7 @@ export async function mirrorInboundMedia(
     fileSize,
     fileName,
     messageTimestamp,
+    folder = MIRROR_FOLDER,
     download = downloadMedia,
   } = args;
 
@@ -210,7 +224,7 @@ export async function mirrorInboundMedia(
     // `null` suppresses buildMediaPath's wall-clock stamp: the media id
     // already makes this path unique AND stable, and it's the stability
     // that makes a redelivery idempotent rather than duplicative.
-    const path = buildMediaPath(accountId, objectName, null, MIRROR_FOLDER);
+    const path = buildMediaPath(accountId, objectName, null, folder);
 
     // `upsert: true` for that same reason: on the rare Meta redelivery
     // the second pass rewrites byte-identical content at the same key

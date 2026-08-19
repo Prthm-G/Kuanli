@@ -410,7 +410,8 @@ async function processEchoChange(
         config.account_id,
         config.user_id,
         decryptedAccessToken,
-        phoneNumberId
+        phoneNumberId,
+        config.mirror_inbound_media !== false
       );
     } catch (err) {
       console.error(
@@ -427,7 +428,9 @@ async function processEchoItem(
   accountId: string,
   configOwnerUserId: string,
   accessToken: string,
-  phoneNumberId: string
+  phoneNumberId: string,
+  // Per-account opt-out for the media mirror (migration 051).
+  mirrorMedia: boolean
 ) {
   // No contacts[]/profile name on this field — resolve by phone alone.
   const customerPhone = normalizePhone(echo.to);
@@ -449,9 +452,10 @@ async function processEchoItem(
   );
   if (!conversation) return;
 
-  const { contentText, mediaUrl } = await parseMessageContent(
+  const { contentText, mediaUrl, mediaType } = await parseMessageContent(
     echo,
-    accessToken
+    accessToken,
+    mirrorMedia ? { accountId, folder: 'echo' } : null
   );
 
   const ALLOWED_CONTENT_TYPES = new Set([
@@ -481,6 +485,7 @@ async function processEchoItem(
     content_type: contentType,
     content_text: contentText,
     media_url: mediaUrl,
+    media_type: mediaType,
     message_id: echo.id,
     status: 'sent',
     created_at: echoCreatedAt,
@@ -860,11 +865,13 @@ async function processMessage(
 async function parseMessageContent(
   message: WhatsAppMessage,
   accessToken: string,
-  // Tenancy + opt-out for the inbound media mirror (migration 051).
-  // Null disables mirroring, which is the correct behaviour for the
-  // echo path: an echo is our OWN outbound send, whose media already
-  // has a durable chat-media URL.
-  mirror: { accountId: string } | null = null
+  // Tenancy + opt-out for the media mirror (migration 051). Null
+  // disables mirroring. Both the inbound and the echo path pass a
+  // value: an echo is an agent's send from the WhatsApp Business app,
+  // which Meta hosts and expires exactly like inbound media. Only the
+  // composer's own sends are already durable, and those never reach
+  // this function.
+  mirror: { accountId: string; folder?: string } | null = null
 ) {
   const verifyAndBuildUrl = async (media: {
     id: string;
@@ -896,6 +903,7 @@ async function parseMessageContent(
           fileSize: media.file_size,
           fileName: media.filename,
           messageTimestamp: message.timestamp,
+          folder: mirror.folder,
         });
         if (mirrored) return mirrored;
       }
