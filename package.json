@@ -1,17 +1,17 @@
 {
-  "name": "wacrm",
+  "name": "kuanli",
   "version": "0.2.2",
   "private": true,
-  "description": "Self-hostable CRM template for WhatsApp built on Next.js and Supabase — shared inbox, contacts, sales pipelines, broadcasts, and no-code automations.",
+  "description": "WhatsApp CRM for student admissions — shared inbox, per-university pipelines, application and document tracking, and an automated re-engagement engine. Built on Next.js and Supabase.",
   "license": "MIT",
-  "author": "Arnas Donauskas",
-  "homepage": "https://github.com/ArnasDon/wacrm",
+  "author": "Pratham Goel",
+  "homepage": "https://github.com/Prthm-G/wacrm",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ArnasDon/wacrm.git"
+    "url": "git+https://github.com/Prthm-G/wacrm.git"
   },
   "bugs": {
-    "url": "https://github.com/ArnasDon/wacrm/issues"
+    "url": "https://github.com/Prthm-G/wacrm/issues"
   },
   "keywords": [
     "crm",

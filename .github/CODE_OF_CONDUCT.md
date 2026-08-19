@@ -9,13 +9,14 @@ that standard.
 ## Reporting
 
 If you witness or experience behaviour that violates the Code, please
-report it privately to the project maintainer:
+report it privately to the project maintainer
+([@Prthm-G](https://github.com/Prthm-G)) via a direct message on GitHub,
+or by opening a private security advisory if you would rather the report
+not be visible at all.
 
-- Email: **a.donauskas@hostinger.com** with `[CRM template conduct]` in
-  the subject.
-
-Reports are handled confidentially. Expect an acknowledgement within
-72 hours and a decision on next steps within a week.
+Reports are handled confidentially. This project is maintained by one
+person alongside other work, so expect an acknowledgement within a few
+days rather than the same afternoon.
 
 ## Enforcement
 

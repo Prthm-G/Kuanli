@@ -1,13 +1,20 @@
 # Changelog
 
-User-visible changes in `wacrm`. Self-hosters: when pulling an update,
-check this file for any **migration required** notes and apply the
-matching SQL files from `supabase/migrations/` against your Supabase
-project before restarting the app.
+User-visible changes in Kuanli. When pulling an update, check this file
+for any **migration required** notes and apply the matching SQL files
+from `supabase/migrations/` before restarting the app.
 
 Versions follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Pre-1.0, `MINOR` bumps cover new modules; `PATCH` bumps cover bug fixes
 and polish.
+
+> **History note.** Entries at 0.2.2 and earlier are inherited from
+> [ArnasDon/wacrm](https://github.com/ArnasDon/wacrm), the MIT-licensed
+> template this project forked from in June 2026. They are kept for
+> provenance. Everything after that point is Kuanli's own work and does
+> not correspond to upstream releases of the same number — upstream has
+> continued independently and its 0.3.0+ releases are unrelated to the
+> entries here.
 
 ## [Unreleased]
 

@@ -1,10 +1,9 @@
 <!--
-Heads up: this is a template, not a collaborative product. Most
-changes belong in your fork. See CONTRIBUTING.md for which kinds of
-upstream PRs tend to land (security, correctness, docs) vs. which
-belong in a fork (new features, stack swaps, opinionated refactors).
-If you haven't opened an issue yet for a non-trivial change, consider
-doing that first to check alignment.
+This is a production CRM, so changes are reviewed against a live
+system. See CONTRIBUTING.md before starting anything non-trivial —
+opening an issue first to check alignment saves rework. Changes that
+touch the WhatsApp webhook, auth, RLS policies, or a migration get
+extra scrutiny.
 
 Keep this short and specific. The commit message is where the "why"
 lives; this is where the reviewer gets the "what" and "how to try it".
