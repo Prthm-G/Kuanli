@@ -178,7 +178,10 @@ export async function mirrorInboundMedia(
   }
 
   try {
-    const { buffer, contentType } = await download({ downloadUrl, accessToken });
+    const { buffer, contentType } = await download({
+      downloadUrl,
+      accessToken,
+    });
 
     // Meta's `file_size` is advisory; the transfer is the truth. Check
     // again so an understated size can't push an oversized object into
