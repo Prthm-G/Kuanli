@@ -52,8 +52,30 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(url)
   }
 
-  // Protected pages - redirect to login if not authenticated
-  const protectedPaths = ['/dashboard', '/inbox', '/contacts', '/pipelines', '/broadcasts', '/automations', '/settings']
+  // Protected pages - redirect to login if not authenticated.
+  //
+  // This list has to stay in step with the sidebar's navItems. It had drifted:
+  // /queue, /applications, /reports, /analytics and /flows all shipped after it
+  // was written and were never added, so a logged-out visitor got an empty
+  // client-rendered shell instead of the login page. No data was exposed (those
+  // pages fetch nothing without an accountId, and RLS grants anon no rows), but
+  // the intended behaviour is a redirect, and a page that renders for a signed-
+  // out visitor is one careless server component away from being a real leak.
+  const protectedPaths = [
+    '/dashboard',
+    '/inbox',
+    '/queue',
+    '/contacts',
+    '/follow-ups',
+    '/pipelines',
+    '/applications',
+    '/reports',
+    '/analytics',
+    '/broadcasts',
+    '/automations',
+    '/flows',
+    '/settings',
+  ]
   if (!user && protectedPaths.some(path => request.nextUrl.pathname.startsWith(path))) {
     const url = request.nextUrl.clone()
     url.pathname = '/login'
