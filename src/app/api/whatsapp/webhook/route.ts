@@ -651,7 +651,10 @@ async function handleReaction(
 
 async function processMessage(
   message: WhatsAppMessage,
-  contact: { profile: { name: string }; wa_id: string },
+  // Meta omits `profile` when the sender has no profile name set, and can
+  // send an empty `contacts[]`, so neither the entry nor the profile is
+  // guaranteed to be present.
+  contact: { profile?: { name?: string }; wa_id: string } | undefined,
   accountId: string,
   configOwnerUserId: string,
   accessToken: string,
@@ -660,7 +663,7 @@ async function processMessage(
   mirrorMedia: boolean
 ) {
   const senderPhone = normalizePhone(message.from);
-  const contactName = contact.profile.name;
+  const contactName = contact?.profile?.name ?? '';
 
   const contactOutcome = await findOrCreateContact(
     accountId,
