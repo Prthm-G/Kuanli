@@ -28,6 +28,7 @@ const report = (rows: EodRow[]): EodReport => ({
     withCourse: rows.filter((r) => r.course).length,
     enrolled: rows.filter((r) => r.rollNumber && !r.rollNumber.startsWith("LD-")).length,
   },
+  followups: { logged: 0, overdue: 0 },
 });
 
 describe("renderEodEmail", () => {

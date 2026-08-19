@@ -27,9 +27,26 @@ export interface EodSummary {
   enrolled: number;
 }
 
+/**
+ * Counsellor follow-up activity in the same window (migration 054).
+ *
+ * Kept beside the conversation summary rather than inside it: `summarise()` is
+ * a pure function of the conversation rows and cannot know these, and folding
+ * them in would mean returning two numbers it always had to guess at zero.
+ */
+export interface FollowUpActivity {
+  /** Manual follow-ups logged in the window. */
+  logged: number;
+  /** Open commitments whose due date has already passed, as of now. Not
+   *  windowed — an overdue follow-up is overdue regardless of the period the
+   *  report is showing. */
+  overdue: number;
+}
+
 export interface EodReport {
   rows: EodRow[];
   summary: EodSummary;
+  followups: FollowUpActivity;
 }
 
 /** True when the roll number is still the auto-assigned lead placeholder. */

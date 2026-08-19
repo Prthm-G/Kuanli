@@ -125,12 +125,14 @@ export default function ReportsPage() {
         ))}
       </div>
 
-      {s && (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      {report && s && (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
           <Stat label="New conversations" value={s.total} />
           <Stat label="University known" value={s.withUniversity} />
           <Stat label="Course known" value={s.withCourse} />
           <Stat label="Roll number issued" value={s.enrolled} />
+          <Stat label="Follow-ups logged" value={report.followups.logged} />
+          <Stat label="Still overdue" value={report.followups.overdue} />
         </div>
       )}
 

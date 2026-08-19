@@ -7,8 +7,10 @@ import { useEffect } from 'react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/hooks/use-auth';
 import { useTotalUnread } from '@/hooks/use-total-unread';
+import { useFollowupDueCount } from '@/hooks/use-followup-due-count';
 import {
   BarChart3,
+  ClipboardCheck,
   ClipboardList,
   FileCheck,
   Crown,
@@ -87,6 +89,7 @@ const navItems: NavItem[] = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/inbox', label: 'Inbox', icon: MessageSquare },
   { href: '/queue', label: 'Work Queue', icon: ListOrdered },
+  { href: '/follow-ups', label: 'Follow-ups', icon: ClipboardCheck },
   { href: '/contacts', label: 'Contacts', icon: Users },
   { href: '/pipelines', label: 'Pipelines', icon: GitBranch },
   { href: '/applications', label: 'Applications', icon: FileCheck },
@@ -111,6 +114,7 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
   const pathname = usePathname();
   const { profile, profileLoading, account, accountRole, signOut } = useAuth();
   const totalUnread = useTotalUnread();
+  const followupsDue = useFollowupDueCount();
   // Only surface the account-name strip when it actually carries
   // information. A solo user's personal account is named after them
   // (the 017 signup trigger seeds it from `full_name`), so showing it
@@ -217,6 +221,13 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
               const showUnreadDot =
                 item.href === '/inbox' && totalUnread > 0 && !isActive;
 
+              // Follow-ups get a number rather than a dot: "something is
+              // unread" is enough for the inbox, but "how far behind am I"
+              // is the whole question here, and the count is small enough
+              // to read at a glance.
+              const showDueCount =
+                item.href === '/follow-ups' && followupsDue > 0;
+
               return (
                 <li key={item.href}>
                   <Link
@@ -246,6 +257,14 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
                       >
                         <span className="bg-primary absolute inline-flex h-full w-full animate-ping rounded-full opacity-75" />
                         <span className="bg-primary relative inline-flex h-2 w-2 rounded-full" />
+                      </span>
+                    )}
+                    {showDueCount && (
+                      <span
+                        aria-label={`${followupsDue} follow-up${followupsDue === 1 ? '' : 's'} due`}
+                        className="bg-amber-500/15 text-amber-400 inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-[10px] font-semibold"
+                      >
+                        {followupsDue}
                       </span>
                     )}
                   </Link>

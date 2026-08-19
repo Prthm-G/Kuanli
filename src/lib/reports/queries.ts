@@ -1,7 +1,13 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+import { loadOverdueCount } from "../followups/queries";
 import { resolveRange, type EodPeriod } from "./period";
-import { summarise, type EodReport, type EodRow } from "./types";
+import {
+  summarise,
+  type EodReport,
+  type EodRow,
+  type FollowUpActivity,
+} from "./types";
 
 /**
  * Conversations started in the window, with the lead's inferred interest.
@@ -74,5 +80,57 @@ export async function loadEodReport(
     };
   });
 
-  return { rows, summary: summarise(rows) };
+  return {
+    rows,
+    summary: summarise(rows),
+    followups: await loadFollowUpActivity(supabase, accountId, start, end),
+  };
+}
+
+/**
+ * Follow-up activity for the EOD report (migration 054).
+ *
+ * Two counts, deliberately asymmetric:
+ *   logged  — entries filed inside the report window. Windowed, because "what
+ *             did we do today" is the question the report answers.
+ *   overdue — commitments past their date right now. NOT windowed: a promise
+ *             broken last week is still broken today, and hiding it because
+ *             the report is scoped to today would defeat the point.
+ *
+ * `overdue` goes through the `follow_up_overdue_count` RPC rather than a
+ * `next_due_at < now()` filter here. Two reasons, both of which produce a
+ * plausible-looking wrong number otherwise:
+ *
+ *   Only a contact's NEWEST entry is live — a later log line settles whatever
+ *   an earlier one promised — and PostgREST cannot express "newest per
+ *   contact". A flat filter would count every commitment ever made and climb
+ *   forever.
+ *
+ *   This function runs on the cron path too (/api/reports/eod, service-role
+ *   client, no user session), where `follow_up_worklist` would raise 42501.
+ *   The RPC accepts service_role explicitly.
+ *
+ * Neither failure takes the report down: the conversation rows are the
+ * report's reason to exist, so a broken count falls back to zero.
+ */
+async function loadFollowUpActivity(
+  supabase: SupabaseClient,
+  accountId: string,
+  start: Date,
+  end: Date,
+): Promise<FollowUpActivity> {
+  const [logged, overdue] = await Promise.all([
+    supabase
+      .from("follow_up_entries")
+      .select("id", { count: "exact", head: true })
+      .eq("account_id", accountId)
+      .gte("occurred_at", start.toISOString())
+      .lt("occurred_at", end.toISOString()),
+    loadOverdueCount(supabase, accountId).catch(() => 0),
+  ]);
+
+  return {
+    logged: logged.error ? 0 : (logged.count ?? 0),
+    overdue,
+  };
 }

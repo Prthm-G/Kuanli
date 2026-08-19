@@ -5,6 +5,7 @@ import { createClient } from "@/lib/supabase/client";
 import { useAuth } from "@/hooks/use-auth";
 import type { Contact, Conversation, Deal, ContactNote, Tag } from "@/types";
 import { EnrollmentPanel } from "./enrollment-panel";
+import { NextDueStrip } from "@/components/followups/next-due-strip";
 import {
   Phone,
   Mail,
@@ -282,6 +283,16 @@ export function ContactSidebar({
               )}
             </div>
           </div>
+
+          {/* Divider */}
+          <div className="my-4 border-t border-border" />
+
+          {/* Follow-up (migration 054) */}
+          <NextDueStrip
+            contactId={contact.id}
+            contactName={contact.name}
+            conversationId={conversation?.id ?? null}
+          />
 
           {/* Divider */}
           <div className="my-4 border-t border-border" />

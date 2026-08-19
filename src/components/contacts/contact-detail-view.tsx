@@ -14,6 +14,7 @@ import {
   SheetDescription,
 } from '@/components/ui/sheet';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import { ContactFollowupsTab } from '@/components/followups/contact-followups-tab';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -414,6 +415,12 @@ export function ContactDetailView({
                 >
                   Deals
                 </TabsTrigger>
+                <TabsTrigger
+                  value="followups"
+                  className="data-active:bg-muted data-active:text-primary text-muted-foreground"
+                >
+                  Follow-ups
+                </TabsTrigger>
               </TabsList>
 
               {/* Details Tab */}
@@ -674,6 +681,20 @@ export function ContactDetailView({
                       </div>
                     ))}
                   </div>
+                )}
+              </TabsContent>
+
+              {/* Follow-ups Tab (migration 054) — manual log merged with the
+                  automated ladder's sends. */}
+              <TabsContent
+                value="followups"
+                className="flex-1 overflow-y-auto px-4 py-3"
+              >
+                {contactId && (
+                  <ContactFollowupsTab
+                    contactId={contactId}
+                    contactName={contact?.name}
+                  />
                 )}
               </TabsContent>
             </Tabs>
