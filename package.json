@@ -5,13 +5,13 @@
   "description": "WhatsApp CRM for student admissions — shared inbox, per-university pipelines, application and document tracking, and an automated re-engagement engine. Built on Next.js and Supabase.",
   "license": "MIT",
   "author": "Pratham Goel",
-  "homepage": "https://github.com/Prthm-G/wacrm",
+  "homepage": "https://github.com/Prthm-G/Kunali",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Prthm-G/wacrm.git"
+    "url": "git+https://github.com/Prthm-G/Kunali.git"
   },
   "bugs": {
-    "url": "https://github.com/Prthm-G/wacrm/issues"
+    "url": "https://github.com/Prthm-G/Kunali/issues"
   },
   "keywords": [
     "crm",

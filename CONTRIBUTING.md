@@ -8,8 +8,8 @@ changes.
 ## Running it locally
 
 ```bash
-git clone https://github.com/Prthm-G/wacrm.git
-cd wacrm
+git clone https://github.com/Prthm-G/Kunali.git
+cd Kunali
 npm install
 cp .env.local.example .env.local   # Supabase + Meta credentials
 npm run dev
