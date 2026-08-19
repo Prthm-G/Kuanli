@@ -15,6 +15,7 @@ import {
 } from '@/components/ui/sheet';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { ContactFollowupsTab } from '@/components/followups/contact-followups-tab';
+import { StudentPayments } from '@/components/payments/student-payments';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -421,6 +422,12 @@ export function ContactDetailView({
                 >
                   Follow-ups
                 </TabsTrigger>
+                <TabsTrigger
+                  value="payments"
+                  className="data-active:bg-muted data-active:text-primary text-muted-foreground"
+                >
+                  Payments
+                </TabsTrigger>
               </TabsList>
 
               {/* Details Tab */}
@@ -694,6 +701,21 @@ export function ContactDetailView({
                   <ContactFollowupsTab
                     contactId={contactId}
                     contactName={contact?.name}
+                  />
+                )}
+              </TabsContent>
+
+              {/* Payments Tab (migration 056) — the student's fee plan,
+                  schedule and every payment against it. */}
+              <TabsContent
+                value="payments"
+                className="flex-1 overflow-y-auto px-4 py-3"
+              >
+                {contactId && (
+                  <StudentPayments
+                    contactId={contactId}
+                    contactName={contact?.name}
+                    onChanged={onUpdated}
                   />
                 )}
               </TabsContent>

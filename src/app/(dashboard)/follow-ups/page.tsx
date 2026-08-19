@@ -8,8 +8,18 @@ import { useAuth } from '@/hooks/use-auth';
 import { loadWorklist } from '@/lib/followups/queries';
 import { actionableCount, bucketWorklist } from '@/lib/followups/due';
 import type { WorklistRow } from '@/lib/followups/types';
+import { loadLedger } from '@/lib/payments/queries';
+import type { LedgerRow } from '@/lib/payments/types';
 import { Worklist } from '@/components/followups/worklist';
+import { LedgerTable } from '@/components/payments/ledger-table';
+import { StudentPayments } from '@/components/payments/student-payments';
 import { Button } from '@/components/ui/button';
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from '@/components/ui/sheet';
 
 /**
  * Follow-ups and payments. Two tabs on one page because they are the same
@@ -25,6 +35,13 @@ export default function FollowUpsPage() {
   const [rows, setRows] = useState<WorklistRow[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  const [ledger, setLedger] = useState<LedgerRow[] | null>(null);
+  const [ledgerLoading, setLedgerLoading] = useState(true);
+  const [ledgerError, setLedgerError] = useState<string | null>(null);
+  // The per-student drawer opened from a ledger row. Kept here rather than in
+  // the table so recording a payment can refresh the ledger behind it.
+  const [openStudent, setOpenStudent] = useState<LedgerRow | null>(null);
 
   const load = useCallback(async () => {
     if (!accountId) return;
@@ -43,15 +60,39 @@ export default function FollowUpsPage() {
     void load();
   }, [load]);
 
+  const loadPayments = useCallback(async () => {
+    if (!accountId) return;
+    setLedgerLoading(true);
+    setLedgerError(null);
+    try {
+      setLedger(await loadLedger(createClient(), accountId));
+    } catch (e) {
+      setLedgerError(e instanceof Error ? e.message : 'Could not load payments');
+    } finally {
+      setLedgerLoading(false);
+    }
+  }, [accountId]);
+
+  // Only fetched once the Payments tab is actually opened: the ledger is a
+  // four-table RPC and most visits here are about follow-ups.
+  useEffect(() => {
+    if (view === 'payments') void loadPayments();
+  }, [view, loadPayments]);
+
   const due = useMemo(() => actionableCount(rows ?? []), [rows]);
   const overdue = useMemo(
     () => bucketWorklist(rows ?? []).overdue.length,
     [rows]
   );
 
+  const awaitingCheck = ledger?.filter((r) => r.reported > 0).length ?? 0;
+
   const tabs: { key: View; label: string }[] = [
     { key: 'followups', label: `Follow-ups (${due})` },
-    { key: 'payments', label: 'Payments' },
+    {
+      key: 'payments',
+      label: awaitingCheck > 0 ? `Payments (${awaitingCheck})` : 'Payments',
+    },
   ];
 
   return (
@@ -68,8 +109,8 @@ export default function FollowUpsPage() {
         </div>
         <Button
           variant="outline"
-          onClick={() => void load()}
-          disabled={loading}
+          onClick={() => void (view === 'payments' ? loadPayments() : load())}
+          disabled={view === 'payments' ? ledgerLoading : loading}
         >
           <RefreshCw className="mr-2 h-4 w-4" />
           Refresh
@@ -103,10 +144,39 @@ export default function FollowUpsPage() {
       )}
 
       {view === 'payments' && (
-        <div className="border-border text-muted-foreground rounded-lg border border-dashed p-10 text-center text-sm">
-          Payment tracking lands in the next change (KB-FEEPAY-R4-32).
-        </div>
+        <LedgerTable
+          rows={ledger ?? []}
+          loading={ledgerLoading}
+          error={ledgerError}
+          onOpenStudent={(contactId) =>
+            setOpenStudent(
+              ledger?.find((r) => r.contactId === contactId) ?? null
+            )
+          }
+        />
       )}
+
+      <Sheet
+        open={!!openStudent}
+        onOpenChange={(o) => !o && setOpenStudent(null)}
+      >
+        <SheetContent className="border-border bg-background w-full overflow-y-auto sm:max-w-xl">
+          <SheetHeader>
+            <SheetTitle className="text-foreground">
+              {openStudent?.name || openStudent?.phone || 'Student'}
+            </SheetTitle>
+          </SheetHeader>
+          <div className="px-4 pb-6">
+            {openStudent && (
+              <StudentPayments
+                contactId={openStudent.contactId}
+                contactName={openStudent.name}
+                onChanged={() => void loadPayments()}
+              />
+            )}
+          </div>
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }

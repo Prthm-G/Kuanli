@@ -7,7 +7,10 @@ import { toast } from 'sonner';
 
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
+import { formatCurrency } from '@/lib/currency';
 import { loadApplicationTracker } from '@/lib/applications/queries';
+import { loadLedger } from '@/lib/payments/queries';
+import type { LedgerRow } from '@/lib/payments/types';
 import { computeProgress } from '@/lib/applications/progress';
 import type {
   DocStatus,
@@ -30,13 +33,26 @@ export default function ApplicationsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  // Money state per contact, keyed by contact id. Documents and fees are the
+  // two halves of "is this application actually progressing", so they belong
+  // on the same row.
+  const [ledger, setLedger] = useState<Map<string, LedgerRow>>(new Map());
 
   const load = useCallback(async () => {
     if (!accountId) return;
     setLoading(true);
     setError(null);
     try {
-      setContacts(await loadApplicationTracker(createClient(), accountId));
+      const supabase = createClient();
+      setContacts(await loadApplicationTracker(supabase, accountId));
+      try {
+        const rows = await loadLedger(supabase, accountId);
+        setLedger(new Map(rows.map((r) => [r.contactId, r])));
+      } catch {
+        // The document tracker is this page's job; a failed ledger fetch
+        // hides the fee strip rather than taking the page down.
+        setLedger(new Map());
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not load applications');
     } finally {
@@ -138,6 +154,7 @@ export default function ApplicationsPage() {
 
       {contacts?.map((c) => {
         const progress = computeProgress(c.required);
+        const money = ledger.get(c.contactId);
         return (
           <div
             key={c.contactId}
@@ -157,6 +174,36 @@ export default function ApplicationsPage() {
                 )}
               </div>
               <div className="flex items-center gap-3">
+                {money && money.agreedTotal > 0 && (
+                  <span
+                    className={
+                      'text-sm ' +
+                      (money.outstanding > 0
+                        ? 'text-muted-foreground'
+                        : 'text-emerald-500')
+                    }
+                    title={
+                      money.reported > 0
+                        ? `${formatCurrency(money.reported, money.currency)} reported but not yet verified`
+                        : undefined
+                    }
+                  >
+                    {formatCurrency(money.received, money.currency)} /{' '}
+                    {formatCurrency(money.agreedTotal, money.currency)}
+                    {money.outstanding > 0 && (
+                      <span className="text-muted-foreground">
+                        {' '}
+                        · {formatCurrency(money.outstanding, money.currency)} due
+                      </span>
+                    )}
+                    {money.reported > 0 && (
+                      <span className="ml-1 text-amber-500">
+                        · {formatCurrency(money.reported, money.currency)}{' '}
+                        unverified
+                      </span>
+                    )}
+                  </span>
+                )}
                 <span className="text-muted-foreground text-sm">
                   {progress.verified}/{progress.total} verified
                 </span>
