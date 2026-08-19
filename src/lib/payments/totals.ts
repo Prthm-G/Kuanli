@@ -67,14 +67,18 @@ export function ledgerTotals(rows: LedgerRow[]): {
   agreed: number;
   received: number;
   reported: number;
+  discounts: number;
   outstanding: number;
+  inHand: number;
   students: number;
 } {
   return {
     agreed: sum(rows.map((r) => r.agreedTotal)),
     received: sum(rows.map((r) => r.received)),
     reported: sum(rows.map((r) => r.reported)),
+    discounts: sum(rows.map((r) => r.discounts)),
     outstanding: sum(rows.map((r) => r.outstanding)),
+    inHand: sum(rows.map((r) => r.inHand)),
     students: rows.length,
   };
 }

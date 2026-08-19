@@ -159,11 +159,84 @@ export interface LedgerRow {
   received: number;
   /** Reported but not yet checked. Deliberately not counted as received. */
   reported: number;
+  /** Every discount that is not rejected, so a pending one already counts. */
+  discounts: number;
+  /** The reversible part of `discounts`. */
+  pendingDiscounts: number;
   outstanding: number;
+  /** Settled money in minus settled money out: the float plus commission. */
+  inHand: number;
   nextDueLabel: string | null;
   nextDueDate: string | null;
   nextDueAmount: number | null;
   lastPaymentAt: string | null;
+}
+
+/** Mirrors `payment_party_enum`. */
+export const ROUTE_PARTIES = [
+  'student',
+  'skeure',
+  'university',
+  'bank',
+] as const;
+export type RouteParty = (typeof ROUTE_PARTIES)[number];
+
+/** Mirrors `hop_status_enum`. */
+export const HOP_STATUSES = ['pending', 'sent', 'settled', 'failed'] as const;
+export type HopStatus = (typeof HOP_STATUSES)[number];
+
+export const PARTY_LABEL: Record<RouteParty, string> = {
+  student: 'Student',
+  skeure: 'Skeure',
+  university: 'University',
+  bank: 'Bank',
+};
+
+export const HOP_STATUS_LABEL: Record<HopStatus, string> = {
+  pending: 'Pending',
+  sent: 'Sent',
+  settled: 'Settled',
+  failed: 'Failed',
+};
+
+/** One leg of a payment's journey (migration 057). */
+export interface PaymentHop {
+  id: string;
+  paymentId: string;
+  hopOrder: number;
+  fromParty: RouteParty;
+  toParty: RouteParty;
+  movedAt: string | null;
+  amount: number;
+  method: PaymentMethod | null;
+  reference: string | null;
+  status: HopStatus;
+  note: string | null;
+}
+
+/** Mirrors `discount_status_enum`. */
+export type DiscountStatus = 'pending' | 'approved' | 'rejected';
+
+export const DISCOUNT_STATUS_LABEL: Record<DiscountStatus, string> = {
+  pending: 'Awaiting approval',
+  approved: 'Approved',
+  rejected: 'Rejected',
+};
+
+export interface FeeDiscount {
+  id: string;
+  contactId: string;
+  planId: string | null;
+  installmentId: string | null;
+  amount: number;
+  reason: string;
+  status: DiscountStatus;
+  proposedBy: string;
+  proposedByName: string | null;
+  decidedBy: string | null;
+  decidedAt: string | null;
+  decisionNote: string | null;
+  createdAt: string;
 }
 
 export interface NewPayment {

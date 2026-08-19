@@ -9,9 +9,12 @@ import { useAuth } from '@/hooks/use-auth';
 import { formatCurrency } from '@/lib/currency';
 import {
   applyFeeTemplate,
+  decideDiscount,
   decidePayment,
+  loadDiscounts,
   loadFeeTemplates,
   loadStudentAccount,
+  proposeDiscount,
   receiptUrl,
 } from '@/lib/payments/queries';
 import {
@@ -22,11 +25,13 @@ import {
   totalsFor,
 } from '@/lib/payments/totals';
 import {
+  DISCOUNT_STATUS_LABEL,
   HEAD_LABEL,
   METHOD_LABEL,
   OPTION_LABEL,
   STATUS_LABEL,
   TERM_NOUN,
+  type FeeDiscount,
   type FeeInstallment,
   type FeePlan,
   type FeeTemplate,
@@ -40,7 +45,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { Input } from '@/components/ui/input';
 import { PaymentDialog } from './payment-dialog';
+import { RouteEditor } from './route-editor';
 
 function formatDate(d: string | null): string {
   if (!d) return '—';
@@ -91,10 +98,14 @@ export function StudentPayments({
   refreshKey = 0,
   onChanged,
 }: StudentPaymentsProps) {
-  const { accountId, accountRole, defaultCurrency } = useAuth();
+  const { accountId, accountRole, defaultCurrency, user } = useAuth();
   const [plan, setPlan] = useState<FeePlan | null>(null);
   const [installments, setInstallments] = useState<FeeInstallment[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
+  const [discounts, setDiscounts] = useState<FeeDiscount[]>([]);
+  const [discountAmount, setDiscountAmount] = useState('');
+  const [discountReason, setDiscountReason] = useState('');
+  const [proposing, setProposing] = useState(false);
   const [templates, setTemplates] = useState<FeeTemplate[]>([]);
   const [templateId, setTemplateId] = useState('');
   const [loading, setLoading] = useState(true);
@@ -113,15 +124,17 @@ export function StudentPayments({
     void (async () => {
       try {
         const supabase = createClient();
-        const [acctData, tpls] = await Promise.all([
+        const [acctData, tpls, discs] = await Promise.all([
           loadStudentAccount(supabase, contactId),
           loadFeeTemplates(supabase, accountId),
+          loadDiscounts(supabase, contactId),
         ]);
         if (cancelled) return;
         setPlan(acctData.plan);
         setInstallments(acctData.installments);
         setPayments(acctData.payments);
         setTemplates(tpls);
+        setDiscounts(discs);
         setError(null);
       } catch (e) {
         if (!cancelled)
@@ -146,7 +159,31 @@ export function StudentPayments({
     () => totalsFor(plan?.agreedTotal ?? 0, payments),
     [plan?.agreedTotal, payments]
   );
-  const extra = overpayment(plan?.agreedTotal ?? 0, totals.received);
+  // Everything not rejected counts, so a pending discount already reduces the
+  // balance. That is the operator's immediate-effect decision, and it has to
+  // match the payment_ledger RPC exactly or the drawer and the table disagree.
+  const liveDiscounts = useMemo(
+    () =>
+      discounts
+        .filter((d) => d.status !== 'rejected')
+        .reduce((a, d) => a + d.amount, 0),
+    [discounts]
+  );
+  const pendingDiscounts = useMemo(
+    () =>
+      discounts
+        .filter((d) => d.status === 'pending')
+        .reduce((a, d) => a + d.amount, 0),
+    [discounts]
+  );
+  const outstanding = Math.max(
+    0,
+    (plan?.agreedTotal ?? 0) - totals.received - liveDiscounts
+  );
+  const extra = overpayment(
+    (plan?.agreedTotal ?? 0) - liveDiscounts,
+    totals.received
+  );
   const next = useMemo(
     () => nextUnsettled(installments, payments),
     [installments, payments]
@@ -183,6 +220,59 @@ export function StudentPayments({
       toast.error(
         e instanceof Error ? e.message : 'Could not update the payment'
       );
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function submitDiscount() {
+    if (!accountId || !user?.id) return;
+    const value = Number(discountAmount);
+    if (!Number.isFinite(value) || value <= 0) {
+      toast.error('Enter the discount amount');
+      return;
+    }
+    if (!discountReason.trim()) {
+      toast.error('Say why — the reason is what an admin decides on');
+      return;
+    }
+    setBusy('discount');
+    try {
+      await proposeDiscount(createClient(), accountId, user.id, {
+        contactId,
+        planId: plan?.id ?? null,
+        amount: value,
+        reason: discountReason,
+      });
+      toast.success('Discount applied, pending approval');
+      setDiscountAmount('');
+      setDiscountReason('');
+      setProposing(false);
+      refresh();
+    } catch (e) {
+      toast.error(
+        e instanceof Error ? e.message : 'Could not add the discount'
+      );
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function onDiscountDecision(
+    d: FeeDiscount,
+    status: 'approved' | 'rejected'
+  ) {
+    setBusy(d.id);
+    try {
+      await decideDiscount(createClient(), d.id, status);
+      toast.success(
+        status === 'approved'
+          ? 'Discount approved'
+          : 'Rejected — the balance has gone back up and a follow-up was logged'
+      );
+      refresh();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Could not decide');
     } finally {
       setBusy(null);
     }
@@ -259,9 +349,22 @@ export function StudentPayments({
             />
             <Stat
               label="Outstanding"
-              value={formatCurrency(totals.outstanding, currency)}
+              value={formatCurrency(outstanding, currency)}
             />
           </div>
+
+          {liveDiscounts > 0 && (
+            <p className="text-muted-foreground text-xs">
+              {formatCurrency(liveDiscounts, currency)} discounted
+              {pendingDiscounts > 0 && (
+                <span className="text-amber-500">
+                  {' '}
+                  · {formatCurrency(pendingDiscounts, currency)} of that is
+                  awaiting approval and may be reversed
+                </span>
+              )}
+            </p>
+          )}
 
           {extra > 0 && (
             <p className="text-xs text-emerald-500">
@@ -402,6 +505,139 @@ export function StudentPayments({
                     </>
                   )}
                 </div>
+                {/* Where this money actually went. Only meaningful once it is
+                    real money, so hidden for a rejected payment. */}
+                {p.status !== 'rejected' && (
+                  <RouteEditor
+                    paymentId={p.id}
+                    paymentAmount={p.amount}
+                    currency={p.currency}
+                    canEdit={canRecord}
+                    refreshKey={reload}
+                    onChanged={refresh}
+                  />
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section>
+        <div className="mb-2 flex items-center justify-between">
+          <h3 className="text-muted-foreground text-xs font-semibold tracking-wider uppercase">
+            Discounts
+          </h3>
+          {canRecord && plan && !proposing && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setProposing(true)}
+            >
+              <Plus className="mr-1.5 h-3.5 w-3.5" />
+              Add discount
+            </Button>
+          )}
+        </div>
+
+        {proposing && (
+          <div className="border-border mb-2 space-y-2 rounded-lg border p-3">
+            <p className="text-muted-foreground text-xs">
+              This reduces the balance straight away. An admin reviews it after,
+              and if it is rejected the balance goes back up — so agree it
+              before quoting a lower number.
+            </p>
+            <div className="grid grid-cols-3 gap-2">
+              <Input
+                type="number"
+                min="1"
+                step="0.01"
+                placeholder="Amount"
+                value={discountAmount}
+                onChange={(e) => setDiscountAmount(e.target.value)}
+              />
+              <div className="col-span-2">
+                <Input
+                  placeholder="Why (an admin decides on this)"
+                  value={discountReason}
+                  onChange={(e) => setDiscountReason(e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setProposing(false)}
+                disabled={busy === 'discount'}
+              >
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => void submitDiscount()}
+                disabled={busy === 'discount'}
+              >
+                Apply discount
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {discounts.length === 0 ? (
+          <p className="text-muted-foreground text-sm">None.</p>
+        ) : (
+          <div className="border-border divide-border divide-y rounded-lg border">
+            {discounts.map((d) => (
+              <div key={d.id} className="space-y-1 px-3 py-2 text-sm">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <span className="text-foreground font-medium">
+                    {formatCurrency(d.amount, currency)}
+                  </span>
+                  <span
+                    className={
+                      'rounded-full px-2 py-0.5 text-xs font-medium ' +
+                      (d.status === 'approved'
+                        ? 'bg-emerald-500/15 text-emerald-500'
+                        : d.status === 'rejected'
+                          ? 'bg-red-500/15 text-red-400'
+                          : 'bg-amber-500/15 text-amber-500')
+                    }
+                  >
+                    {DISCOUNT_STATUS_LABEL[d.status]}
+                  </span>
+                  {d.proposedByName && (
+                    <span className="text-muted-foreground text-xs">
+                      by {d.proposedByName}
+                    </span>
+                  )}
+                </div>
+                <p className="text-muted-foreground text-xs">{d.reason}</p>
+                {d.decisionNote && (
+                  <p className="text-muted-foreground text-xs">
+                    Decision: {d.decisionNote}
+                  </p>
+                )}
+                {canVerify && d.status === 'pending' && (
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => void onDiscountDecision(d, 'approved')}
+                      disabled={busy === d.id}
+                      className="inline-flex items-center rounded-md border border-emerald-500/40 px-2 py-0.5 text-xs font-medium text-emerald-500 hover:bg-emerald-500/10"
+                    >
+                      <Check className="mr-1 h-3 w-3" />
+                      Approve
+                    </button>
+                    <button
+                      onClick={() => void onDiscountDecision(d, 'rejected')}
+                      disabled={busy === d.id}
+                      className="inline-flex items-center rounded-md border border-red-500/40 px-2 py-0.5 text-xs font-medium text-red-400 hover:bg-red-500/10"
+                    >
+                      <X className="mr-1 h-3 w-3" />
+                      Reject
+                    </button>
+                  </div>
+                )}
               </div>
             ))}
           </div>

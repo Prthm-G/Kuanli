@@ -84,7 +84,7 @@ export function LedgerTable({
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
         <Stat label="Agreed" value={formatCurrency(totals.agreed, currency)} />
         <Stat
           label="Received"
@@ -99,6 +99,9 @@ export function LedgerTable({
           label="Outstanding"
           value={formatCurrency(totals.outstanding, currency)}
         />
+        {/* Settled money in minus settled money out, from the route hops. What
+            is sitting with us right now: float plus retained commission. */}
+        <Stat label="In hand" value={formatCurrency(totals.inHand, currency)} />
       </div>
 
       <div className="border-border bg-muted/40 flex gap-1 rounded-lg border p-1">

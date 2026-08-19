@@ -64,7 +64,10 @@ function row(over: Partial<LedgerRow> = {}): LedgerRow {
     agreedTotal: 66600,
     received: 15000,
     reported: 0,
+    discounts: 0,
+    pendingDiscounts: 0,
     outstanding: 51600,
+    inHand: 0,
     nextDueLabel: 'Application fee',
     nextDueDate: '2026-08-19',
     nextDueAmount: 600,
@@ -124,21 +127,29 @@ describe('ledgerTotals', () => {
         agreedTotal: 66600,
         received: 15000,
         reported: 0,
-        outstanding: 51600,
+        discounts: 5000,
+        outstanding: 46600,
+        inHand: 3000,
       }),
       row({
         contactId: 'c2',
         agreedTotal: 40000,
         received: 40000,
         reported: 0,
+        discounts: 0,
         outstanding: 0,
+        inHand: 0,
       }),
     ]);
     expect(t).toEqual({
       agreed: 106600,
       received: 55000,
       reported: 0,
-      outstanding: 51600,
+      discounts: 5000,
+      // 66,600 agreed less 15,000 received less the 5,000 discount.
+      outstanding: 46600,
+      // Settled in minus settled out, i.e. the retained commission.
+      inHand: 3000,
       students: 2,
     });
   });

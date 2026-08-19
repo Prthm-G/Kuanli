@@ -11,6 +11,7 @@ import type { WorklistRow } from '@/lib/followups/types';
 import { loadLedger } from '@/lib/payments/queries';
 import type { LedgerRow } from '@/lib/payments/types';
 import { Worklist } from '@/components/followups/worklist';
+import { ApprovalsQueue } from '@/components/payments/approvals-queue';
 import { LedgerTable } from '@/components/payments/ledger-table';
 import { StudentPayments } from '@/components/payments/student-payments';
 import { Button } from '@/components/ui/button';
@@ -67,7 +68,9 @@ export default function FollowUpsPage() {
     try {
       setLedger(await loadLedger(createClient(), accountId));
     } catch (e) {
-      setLedgerError(e instanceof Error ? e.message : 'Could not load payments');
+      setLedgerError(
+        e instanceof Error ? e.message : 'Could not load payments'
+      );
     } finally {
       setLedgerLoading(false);
     }
@@ -140,6 +143,13 @@ export default function FollowUpsPage() {
           loading={loading}
           error={error}
           onChanged={() => void load()}
+        />
+      )}
+
+      {view === 'payments' && (
+        <ApprovalsQueue
+          refreshKey={ledger?.length ?? 0}
+          onDecided={() => void loadPayments()}
         />
       )}
 

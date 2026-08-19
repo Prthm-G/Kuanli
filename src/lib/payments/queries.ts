@@ -1,15 +1,20 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import type {
+  DiscountStatus,
+  FeeDiscount,
   FeeInstallment,
   FeePlan,
   FeeTemplate,
+  HopStatus,
   LedgerRow,
   NewPayment,
   Payment,
+  PaymentHop,
   PaymentMethod,
   PaymentOption,
   PaymentStatus,
+  RouteParty,
 } from './types';
 
 const n = (v: unknown): number => Number(v ?? 0);
@@ -45,6 +50,9 @@ export async function loadLedger(
     received: string | number;
     reported: string | number;
     outstanding: string | number;
+    discounts: string | number;
+    pending_discounts: string | number;
+    in_hand: string | number;
     next_due_label: string | null;
     next_due_date: string | null;
     next_due_amount: string | number | null;
@@ -64,7 +72,10 @@ export async function loadLedger(
     agreedTotal: n(r.agreed_total),
     received: n(r.received),
     reported: n(r.reported),
+    discounts: n(r.discounts),
+    pendingDiscounts: n(r.pending_discounts),
     outstanding: n(r.outstanding),
+    inHand: n(r.in_hand),
     nextDueLabel: r.next_due_label ?? null,
     nextDueDate: r.next_due_date ?? null,
     nextDueAmount: nOrNull(r.next_due_amount),
@@ -352,4 +363,265 @@ export async function receiptUrl(
     .createSignedUrl(storagePath, 60 * 10);
 
   return error ? null : (data?.signedUrl ?? null);
+}
+
+/** Route hops for one payment (migration 057), in hop order. */
+export async function loadHops(
+  supabase: SupabaseClient,
+  paymentId: string
+): Promise<PaymentHop[]> {
+  const { data, error } = await supabase
+    .from('payment_hops')
+    .select(
+      'id, payment_id, hop_order, from_party, to_party, moved_at, amount, ' +
+        'method, reference, status, note'
+    )
+    .eq('payment_id', paymentId)
+    .order('hop_order');
+
+  if (error) throw new Error(`Route query failed: ${error.message}`);
+
+  type Raw = Record<string, unknown>;
+  return ((data ?? []) as unknown as Raw[]).map((r) => ({
+    id: String(r.id),
+    paymentId: String(r.payment_id),
+    hopOrder: n(r.hop_order),
+    fromParty: r.from_party as RouteParty,
+    toParty: r.to_party as RouteParty,
+    movedAt: (r.moved_at as string) ?? null,
+    amount: n(r.amount),
+    method: (r.method as PaymentMethod) ?? null,
+    reference: (r.reference as string) ?? null,
+    status: r.status as HopStatus,
+    note: (r.note as string) ?? null,
+  }));
+}
+
+/**
+ * Record a leg. hop_order is derived from what is already there rather than
+ * asked for: the UNIQUE (payment_id, hop_order) constraint makes a guessed
+ * number a 23505, and the order is simply "next".
+ */
+export async function recordHop(
+  supabase: SupabaseClient,
+  accountId: string,
+  userId: string,
+  paymentId: string,
+  hop: {
+    fromParty: RouteParty;
+    toParty: RouteParty;
+    amount: number;
+    status: HopStatus;
+    movedAt?: string | null;
+    method?: PaymentMethod | null;
+    reference?: string | null;
+  }
+): Promise<void> {
+  const existing = await loadHops(supabase, paymentId);
+  const nextOrder =
+    existing.reduce((max, h) => Math.max(max, h.hopOrder), 0) + 1;
+
+  const { error } = await supabase.from('payment_hops').insert({
+    account_id: accountId,
+    payment_id: paymentId,
+    hop_order: nextOrder,
+    from_party: hop.fromParty,
+    to_party: hop.toParty,
+    amount: hop.amount,
+    status: hop.status,
+    // A settled or sent leg needs a date (CHECK constraint); default to now
+    // rather than making the counsellor fill in a field they will always set
+    // to today anyway.
+    moved_at:
+      hop.status === 'pending' || hop.status === 'failed'
+        ? (hop.movedAt ?? null)
+        : (hop.movedAt ?? new Date().toISOString()),
+    method: hop.method ?? null,
+    reference: hop.reference?.trim() || null,
+    recorded_by: userId,
+  });
+
+  if (error) throw new Error(`Could not record the leg: ${error.message}`);
+}
+
+/** Discounts for one student, newest first. */
+export async function loadDiscounts(
+  supabase: SupabaseClient,
+  contactId: string
+): Promise<FeeDiscount[]> {
+  const { data, error } = await supabase
+    .from('fee_discounts')
+    .select(
+      'id, contact_id, plan_id, installment_id, amount, reason, status, ' +
+        'proposed_by, decided_by, decided_at, decision_note, created_at, ' +
+        'proposer:profiles!fee_discounts_proposed_by_fkey(full_name)'
+    )
+    .eq('contact_id', contactId)
+    .order('created_at', { ascending: false });
+
+  if (error) throw new Error(`Discounts query failed: ${error.message}`);
+  return mapDiscounts(data);
+}
+
+/** Every discount still awaiting a decision, for the admin approvals queue. */
+export async function loadPendingDiscounts(
+  supabase: SupabaseClient,
+  accountId: string
+): Promise<(FeeDiscount & { contactName: string | null })[]> {
+  const { data, error } = await supabase
+    .from('fee_discounts')
+    .select(
+      'id, contact_id, plan_id, installment_id, amount, reason, status, ' +
+        'proposed_by, decided_by, decided_at, decision_note, created_at, ' +
+        'proposer:profiles!fee_discounts_proposed_by_fkey(full_name), ' +
+        'contact:contacts(name)'
+    )
+    .eq('account_id', accountId)
+    .eq('status', 'pending')
+    .order('created_at', { ascending: false });
+
+  if (error)
+    throw new Error(`Pending discounts query failed: ${error.message}`);
+
+  const rows = (data ?? []) as unknown as Record<string, unknown>[];
+  return mapDiscounts(data).map((d, i) => {
+    const c = rows[i]?.contact;
+    const contact = Array.isArray(c) ? c[0] : c;
+    return {
+      ...d,
+      contactName: (contact as { name?: string } | null)?.name ?? null,
+    };
+  });
+}
+
+function mapDiscounts(data: unknown): FeeDiscount[] {
+  type Raw = Record<string, unknown>;
+  return ((data ?? []) as unknown as Raw[]).map((r) => {
+    const proposer = Array.isArray(r.proposer) ? r.proposer[0] : r.proposer;
+    return {
+      id: String(r.id),
+      contactId: String(r.contact_id),
+      planId: (r.plan_id as string) ?? null,
+      installmentId: (r.installment_id as string) ?? null,
+      amount: n(r.amount),
+      reason: String(r.reason ?? ''),
+      status: r.status as DiscountStatus,
+      proposedBy: String(r.proposed_by),
+      proposedByName:
+        (proposer as { full_name?: string } | null)?.full_name ?? null,
+      decidedBy: (r.decided_by as string) ?? null,
+      decidedAt: (r.decided_at as string) ?? null,
+      decisionNote: (r.decision_note as string) ?? null,
+      createdAt: String(r.created_at),
+    };
+  });
+}
+
+/**
+ * Propose a discount. It takes effect on the outstanding balance immediately
+ * (the operator's decision) and an admin reviews it after the fact; the RLS
+ * INSERT policy pins status to pending and proposed_by to the caller, so a
+ * counsellor cannot approve their own.
+ */
+export async function proposeDiscount(
+  supabase: SupabaseClient,
+  accountId: string,
+  userId: string,
+  discount: {
+    contactId: string;
+    planId?: string | null;
+    installmentId?: string | null;
+    amount: number;
+    reason: string;
+  }
+): Promise<void> {
+  const { error } = await supabase.from('fee_discounts').insert({
+    account_id: accountId,
+    contact_id: discount.contactId,
+    plan_id: discount.planId ?? null,
+    installment_id: discount.installmentId ?? null,
+    amount: discount.amount,
+    reason: discount.reason.trim(),
+    proposed_by: userId,
+  });
+
+  if (error)
+    throw new Error(`Could not propose the discount: ${error.message}`);
+}
+
+/**
+ * Admin decision, via `decide_fee_discount`. Rejecting also writes a follow-up
+ * entry against the contact, because rejection raises a balance that has
+ * probably already been quoted.
+ */
+export async function decideDiscount(
+  supabase: SupabaseClient,
+  discountId: string,
+  status: 'approved' | 'rejected',
+  note?: string
+): Promise<void> {
+  const { error } = await supabase.rpc('decide_fee_discount', {
+    p_discount_id: discountId,
+    p_status: status,
+    p_note: note?.trim() || null,
+  });
+
+  if (error) throw new Error(`Could not update the discount: ${error.message}`);
+}
+
+/** Payments awaiting an admin decision, for the approvals queue. */
+export async function loadPendingPayments(
+  supabase: SupabaseClient,
+  accountId: string
+): Promise<(Payment & { contactName: string | null })[]> {
+  const { data, error } = await supabase
+    .from('payments')
+    .select(
+      'id, contact_id, plan_id, installment_id, paid_at, amount, currency, ' +
+        'method, reference, note, status, logged_by, verified_by, verified_at, ' +
+        'decision_note, ' +
+        'logged:profiles!payments_logged_by_fkey(full_name), ' +
+        'contact:contacts(name), ' +
+        'receipts:payment_receipts(id, storage_path, mime_type, created_at)'
+    )
+    .eq('account_id', accountId)
+    .eq('status', 'reported')
+    .order('paid_at', { ascending: false });
+
+  if (error) throw new Error(`Pending payments query failed: ${error.message}`);
+
+  type Raw = Record<string, unknown>;
+  return ((data ?? []) as unknown as Raw[]).map((r) => {
+    const logged = Array.isArray(r.logged) ? r.logged[0] : r.logged;
+    const contact = Array.isArray(r.contact) ? r.contact[0] : r.contact;
+    return {
+      id: String(r.id),
+      contactId: String(r.contact_id),
+      planId: (r.plan_id as string) ?? null,
+      installmentId: (r.installment_id as string) ?? null,
+      paidAt: String(r.paid_at),
+      amount: n(r.amount),
+      currency: String(r.currency ?? 'INR'),
+      method: r.method as PaymentMethod,
+      reference: (r.reference as string) ?? null,
+      note: (r.note as string) ?? null,
+      status: r.status as PaymentStatus,
+      loggedBy: String(r.logged_by),
+      loggedByName:
+        (logged as { full_name?: string } | null)?.full_name ?? null,
+      verifiedBy: null,
+      verifiedByName: null,
+      verifiedAt: null,
+      decisionNote: (r.decision_note as string) ?? null,
+      receipts: (
+        (r.receipts ?? []) as unknown as Record<string, unknown>[]
+      ).map((x) => ({
+        id: String(x.id),
+        storagePath: String(x.storage_path),
+        mimeType: (x.mime_type as string) ?? null,
+        createdAt: String(x.created_at),
+      })),
+      contactName: (contact as { name?: string } | null)?.name ?? null,
+    };
+  });
 }
