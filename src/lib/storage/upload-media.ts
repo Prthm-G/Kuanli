@@ -45,7 +45,8 @@ export const MEDIA_MAX_BYTES_BY_KIND = {
 export function buildMediaPath(
   accountId: string,
   fileName: string,
-  now: number = Date.now(),
+  now: number | null = Date.now(),
+  subfolder?: string,
 ): string {
   // Only treat the trailing segment as an extension when there's a real
   // one — a bare name like "README" has no extension and falls back to
@@ -57,7 +58,17 @@ export function buildMediaPath(
       .replace(/\.[^.]+$/, "")
       .replace(/[^a-zA-Z0-9_-]+/g, "_")
       .slice(0, 40) || "file";
-  return `account-${accountId}/${now}-${safeBase}.${ext}`;
+  // `subfolder` becomes a SECOND segment. The chat-media policies match
+  // on `foldername(name)[1]` only, so the account folder stays the
+  // access-control boundary and an extra level is free.
+  const dir = subfolder
+    ? `account-${accountId}/${subfolder}`
+    : `account-${accountId}`;
+  // `now: null` suppresses the wall-clock prefix, for callers whose key
+  // must be deterministic (the inbound mirror keys on Meta's media id,
+  // so a redelivery rewrites the same object instead of duplicating).
+  const stamp = now === null ? "" : `${now}-`;
+  return `${dir}/${stamp}${safeBase}.${ext}`;
 }
 
 export interface UploadAccountMediaResult {

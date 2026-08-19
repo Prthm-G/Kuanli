@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { createHmac } from 'node:crypto';
 import { decrypt, encrypt, isLegacyFormat } from '@/lib/whatsapp/encryption';
 import { getMediaUrl } from '@/lib/whatsapp/meta-api';
+import { mirrorInboundMedia } from '@/lib/whatsapp/mirror-inbound-media';
 import { normalizePhone } from '@/lib/whatsapp/phone-utils';
 import { findExistingContact, isUniqueViolation } from '@/lib/contacts/dedupe';
 import { verifyMetaWebhookSignature } from '@/lib/whatsapp/webhook-signature';
@@ -73,15 +74,26 @@ interface WhatsAppMessage {
   timestamp: string;
   type: string;
   text?: { body: string };
-  image?: { id: string; mime_type: string; caption?: string };
-  video?: { id: string; mime_type: string; caption?: string };
+  image?: {
+    id: string;
+    mime_type: string;
+    caption?: string;
+    file_size?: number;
+  };
+  video?: {
+    id: string;
+    mime_type: string;
+    caption?: string;
+    file_size?: number;
+  };
   document?: {
     id: string;
     mime_type: string;
     filename?: string;
     caption?: string;
+    file_size?: number;
   };
-  audio?: { id: string; mime_type: string };
+  audio?: { id: string; mime_type: string; file_size?: number };
   sticker?: { id: string; mime_type: string };
   location?: {
     latitude: number;
@@ -306,7 +318,11 @@ async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
           config.account_id,
           config.user_id,
           decryptedAccessToken,
-          phoneNumberId
+          phoneNumberId,
+          // Default ON: the bug being fixed is silent data loss, so an
+          // account that never finds the setting should keep its
+          // attachments rather than keep losing them.
+          config.mirror_inbound_media !== false
         );
       }
     }
@@ -634,7 +650,9 @@ async function processMessage(
   accountId: string,
   configOwnerUserId: string,
   accessToken: string,
-  phoneNumberId: string
+  phoneNumberId: string,
+  // Per-account opt-out for the inbound media mirror (migration 051).
+  mirrorMedia: boolean
 ) {
   const senderPhone = normalizePhone(message.from);
   const contactName = contact.profile.name;
@@ -662,7 +680,11 @@ async function processMessage(
   }
 
   const { contentText, mediaUrl, mediaType, interactiveReplyId } =
-    await parseMessageContent(message, accessToken);
+    await parseMessageContent(
+      message,
+      accessToken,
+      mirrorMedia ? { accountId } : null
+    );
 
   let replyToInternalId: string | null = null;
   if (message.context?.id) {
@@ -672,7 +694,6 @@ async function processMessage(
     );
   }
 
-  void mediaType;
 
   const ALLOWED_CONTENT_TYPES = new Set([
     'text',
@@ -708,6 +729,10 @@ async function processMessage(
     content_type: contentType,
     content_text: contentText,
     media_url: mediaUrl,
+    // Meta told us the MIME type; recording it means a download does not
+    // have to guess an extension from bytes it has not fetched yet
+    // (migration 051).
+    media_type: mediaType,
     message_id: message.id,
     status: 'delivered',
     created_at: messageCreatedAt,
@@ -834,14 +859,50 @@ async function processMessage(
 
 async function parseMessageContent(
   message: WhatsAppMessage,
-  accessToken: string
+  accessToken: string,
+  // Tenancy + opt-out for the inbound media mirror (migration 051).
+  // Null disables mirroring, which is the correct behaviour for the
+  // echo path: an echo is our OWN outbound send, whose media already
+  // has a durable chat-media URL.
+  mirror: { accountId: string } | null = null
 ) {
-  const verifyAndBuildUrl = async (mediaId: string): Promise<string | null> => {
+  const verifyAndBuildUrl = async (media: {
+    id: string;
+    mime_type?: string;
+    filename?: string;
+    file_size?: number;
+  }): Promise<string | null> => {
     try {
-      await getMediaUrl({ mediaId, accessToken });
-      return `/api/whatsapp/media/${mediaId}`;
+      // Called for its side effect of proving the id is fetchable; the
+      // CDN url it returns is short-lived, which is exactly why the
+      // stored value has to be either a mirror or the proxy pointer.
+      const { url: downloadUrl } = await getMediaUrl({
+        mediaId: media.id,
+        accessToken,
+      });
+
+      // Copy the bytes into chat-media so they outlive Meta's ~30-day
+      // retention. Best effort by design: on any failure this returns
+      // null and we keep the proxy pointer, which still works for as
+      // long as Meta holds the media.
+      if (mirror) {
+        const mirrored = await mirrorInboundMedia({
+          storage: supabaseAdmin().storage,
+          accountId: mirror.accountId,
+          mediaId: media.id,
+          downloadUrl,
+          accessToken,
+          mimeType: media.mime_type,
+          fileSize: media.file_size,
+          fileName: media.filename,
+          messageTimestamp: message.timestamp,
+        });
+        if (mirrored) return mirrored;
+      }
+
+      return `/api/whatsapp/media/${media.id}`;
     } catch (err) {
-      console.error('[webhook] media verification failed:', mediaId, err);
+      console.error('[webhook] media verification failed:', media.id, err);
       return null;
     }
   };
@@ -860,14 +921,14 @@ async function parseMessageContent(
     case 'image':
       empty.contentText = message.image?.caption || null;
       if (message.image?.id) {
-        empty.mediaUrl = await verifyAndBuildUrl(message.image.id);
+        empty.mediaUrl = await verifyAndBuildUrl(message.image);
         empty.mediaType = message.image.mime_type;
       }
       break;
     case 'video':
       empty.contentText = message.video?.caption || null;
       if (message.video?.id) {
-        empty.mediaUrl = await verifyAndBuildUrl(message.video.id);
+        empty.mediaUrl = await verifyAndBuildUrl(message.video);
         empty.mediaType = message.video.mime_type;
       }
       break;
@@ -875,13 +936,13 @@ async function parseMessageContent(
       empty.contentText =
         message.document?.caption || message.document?.filename || null;
       if (message.document?.id) {
-        empty.mediaUrl = await verifyAndBuildUrl(message.document.id);
+        empty.mediaUrl = await verifyAndBuildUrl(message.document);
         empty.mediaType = message.document.mime_type;
       }
       break;
     case 'audio':
       if (message.audio?.id) {
-        empty.mediaUrl = await verifyAndBuildUrl(message.audio.id);
+        empty.mediaUrl = await verifyAndBuildUrl(message.audio);
         empty.mediaType = message.audio.mime_type;
       }
       break;
