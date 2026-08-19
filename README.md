@@ -75,8 +75,8 @@ every table.
 ## Running it
 
 ```bash
-git clone https://github.com/Prthm-G/Kunali.git
-cd Kunali
+git clone https://github.com/Prthm-G/Kuanli.git
+cd Kuanli
 npm install
 cp .env.local.example .env.local   # Supabase + Meta credentials
 npm run dev

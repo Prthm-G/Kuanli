@@ -8,7 +8,7 @@ Thanks for taking the time to look into the security of this project.
 indexed by search engines and visible to everyone long before a fix lands.
 
 Instead, please report privately through
-[GitHub Security Advisories](https://github.com/Prthm-G/Kunali/security/advisories/new),
+[GitHub Security Advisories](https://github.com/Prthm-G/Kuanli/security/advisories/new),
 which keeps the disclosure and the fix in one place.
 
 Include, if you can:

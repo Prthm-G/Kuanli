@@ -1,10 +1,10 @@
 blank_issues_enabled: false
 contact_links:
   - name: Security vulnerability (private)
-    url: https://github.com/Prthm-G/Kunali/security/advisories/new
+    url: https://github.com/Prthm-G/Kuanli/security/advisories/new
     about: Do not file security issues in public. Follow the private disclosure flow.
   - name: Setup and self-hosting
-    url: https://github.com/Prthm-G/Kunali/blob/main/README.md
+    url: https://github.com/Prthm-G/Kuanli/blob/main/README.md
     about: Running it locally, environment variables, and applying migrations are covered in the README.
   - name: Original upstream template
     url: https://github.com/ArnasDon/wacrm
