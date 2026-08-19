@@ -5,8 +5,17 @@ vi.mock('./meta-api', () => ({
   uploadResumableMedia: vi.fn(async () => ({ handle: 'HANDLE123' })),
 }));
 
+// The SSRF guard does real DNS resolution, so stub it here and let it
+// pass by default — these cases are about header handling, not URL
+// vetting. The guard's own rules are covered in lib/webhooks/ssrf.test.ts;
+// that it is actually wired in is covered by the last case below.
+vi.mock('@/lib/webhooks/ssrf', () => ({
+  isDeliverableUrl: vi.fn(async () => true),
+}));
+
 import { ensureImageHeaderHandle } from './template-header-handle';
 import { uploadResumableMedia } from './meta-api';
+import { isDeliverableUrl } from '@/lib/webhooks/ssrf';
 import type { TemplatePayload } from './template-validators';
 
 function payload(over: Partial<TemplatePayload> = {}): TemplatePayload {
@@ -33,6 +42,7 @@ function imgResponse(type = 'image/jpeg', size = 1024, ok = true, status = 200):
 describe('ensureImageHeaderHandle', () => {
   beforeEach(() => {
     vi.mocked(uploadResumableMedia).mockClear();
+    vi.mocked(isDeliverableUrl).mockResolvedValue(true);
   });
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -77,5 +87,16 @@ describe('ensureImageHeaderHandle', () => {
     vi.stubEnv('META_APP_ID', 'app-1');
     vi.stubGlobal('fetch', vi.fn(async () => imgResponse('image/png', 6 * 1024 * 1024)));
     await expect(ensureImageHeaderHandle(payload(), 'tok')).rejects.toThrow(/5 MB/);
+  });
+
+  it('refuses a header URL the SSRF guard rejects, without fetching', async () => {
+    vi.stubEnv('META_APP_ID', 'app-1');
+    const fetchSpy = vi.fn(async () => imgResponse());
+    vi.stubGlobal('fetch', fetchSpy);
+    vi.mocked(isDeliverableUrl).mockResolvedValue(false);
+    const p = payload({ header_media_url: 'http://169.254.169.254/latest/meta-data' });
+    await expect(ensureImageHeaderHandle(p, 'tok')).rejects.toThrow(/publicly reachable/);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(uploadResumableMedia).not.toHaveBeenCalled();
   });
 });

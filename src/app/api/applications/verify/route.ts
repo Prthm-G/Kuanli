@@ -25,6 +25,7 @@
 import { NextResponse } from 'next/server';
 
 import { createClient } from '@/lib/supabase/server';
+import { hasMinRole, isAccountRole } from '@/lib/auth/roles';
 import { supabaseAdmin } from '@/lib/automations/admin-client';
 import { getPrimaryConfig } from '@/lib/whatsapp/config-resolver';
 import { getMediaUrl, downloadMedia } from '@/lib/whatsapp/meta-api';
@@ -47,6 +48,23 @@ export async function POST(request: Request) {
   } = await supabase.auth.getUser();
   if (authError || !user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  // Verifying archives the file and updates application_documents
+  // through the admin client, bypassing that table's `agent` minimum
+  // on UPDATE. Marking a student's document verified is a real
+  // decision, not a read (GHSA-34q7-fv77-625j).
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('account_role')
+    .eq('user_id', user.id)
+    .maybeSingle();
+  const role = profile?.account_role;
+  if (!isAccountRole(role) || !hasMinRole(role, 'agent')) {
+    return NextResponse.json(
+      { error: 'This action requires the agent role or higher.' },
+      { status: 403 }
+    );
   }
 
   let documentId: string | undefined;

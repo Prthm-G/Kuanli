@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/flows/admin-client'
 import { getFlowTemplate } from '@/lib/flows/templates'
+import { hasMinRole, isAccountRole } from '@/lib/auth/roles'
 
 /**
  * GET /api/flows — list the caller's flows.
@@ -56,13 +57,23 @@ export async function POST(request: Request) {
   // even though the admin client below bypasses RLS.
   const { data: profile } = await supabase
     .from('profiles')
-    .select('account_id')
+    .select('account_id, account_role')
     .eq('user_id', userId)
     .single()
   const accountId = profile?.account_id as string | undefined
   if (!accountId) {
     return NextResponse.json(
       { error: 'Your profile is not linked to an account.' },
+      { status: 403 },
+    )
+  }
+  // The insert below uses the admin client, which bypasses the
+  // `flows_insert` policy's `agent` minimum — enforce it here so a
+  // viewer can't create flows (GHSA-34q7-fv77-625j).
+  const role = profile?.account_role
+  if (!isAccountRole(role) || !hasMinRole(role, 'agent')) {
+    return NextResponse.json(
+      { error: 'This action requires the agent role or higher.' },
       { status: 403 },
     )
   }

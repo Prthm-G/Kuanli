@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/flows/admin-client'
+import { hasMinRole, isAccountRole, type AccountRole } from '@/lib/auth/roles'
 
 /**
  * GET   /api/flows/[id]  — fetch one flow with its nodes.
@@ -17,8 +18,21 @@ import { supabaseAdmin } from '@/lib/flows/admin-client'
  * gone; the "Beta" label in the UI is the only remaining signal.
  */
 
+/**
+ * Resolve the caller and confirm they can see the flow.
+ *
+ * `minRole` is REQUIRED for any mutation (GHSA-34q7-fv77-625j). The
+ * `flows_select` policy is `is_account_member(account_id)` with no
+ * minimum role, so a viewer passes the lookup below — but the writes
+ * in this file go through `supabaseAdmin()`, which bypasses the
+ * `flows_update` / `flows_delete` policies that do require `agent`.
+ * Without an explicit check here a read-only viewer could edit and
+ * delete flows. Mirror the RLS minimum rather than inventing one, so
+ * the route guard and the policy can't drift apart.
+ */
 async function requireOwnership(
   flowId: string,
+  minRole?: AccountRole,
 ): Promise<
   | {
       ok: true
@@ -43,6 +57,21 @@ async function requireOwnership(
     .maybeSingle()
   if (!flow) {
     return { ok: false, status: 404, body: { error: 'Not found' } }
+  }
+  if (minRole) {
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('account_role')
+      .eq('user_id', user.id)
+      .maybeSingle()
+    const role = profile?.account_role
+    if (!isAccountRole(role) || !hasMinRole(role, minRole)) {
+      return {
+        ok: false,
+        status: 403,
+        body: { error: `This action requires the ${minRole} role or higher.` },
+      }
+    }
   }
   return { ok: true, userId: user.id, supabase }
 }
@@ -91,7 +120,7 @@ export async function PUT(
   context: { params: Promise<{ id: string }> },
 ) {
   const { id } = await context.params
-  const guard = await requireOwnership(id)
+  const guard = await requireOwnership(id, 'agent')
   if (!guard.ok) return NextResponse.json(guard.body, { status: guard.status })
 
   const body = (await request.json().catch(() => null)) as PutBody | null
@@ -177,7 +206,7 @@ export async function DELETE(
   context: { params: Promise<{ id: string }> },
 ) {
   const { id } = await context.params
-  const guard = await requireOwnership(id)
+  const guard = await requireOwnership(id, 'agent')
   if (!guard.ok) return NextResponse.json(guard.body, { status: guard.status })
 
   // CASCADE on flow_nodes / flow_runs / flow_run_events handles the

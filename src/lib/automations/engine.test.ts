@@ -246,6 +246,17 @@ function updateStep() {
   };
 }
 
+function webhookStep(url: string) {
+  return {
+    id: "s1",
+    automation_id: "a1",
+    step_type: "send_webhook",
+    position: 0,
+    parent_step_id: null,
+    step_config: { url },
+  };
+}
+
 function customStep(field: string, value: string) {
   return {
     id: "s1",
@@ -256,3 +267,50 @@ function customStep(field: string, value: string) {
     step_config: { field, value },
   };
 }
+
+describe("send_webhook — SSRF guard (GHSA-8jqh-598v-rfxc)", () => {
+  beforeEach(() => {
+    h.state.owned = { id: "c1" };
+    h.state.automations = [automationWithUpdateStep()];
+  });
+
+  async function run() {
+    await runAutomationsForTrigger({
+      accountId: ACCOUNT,
+      triggerType: "new_message_received",
+      contactId: "c1",
+      context: {},
+    });
+  }
+
+  it.each([
+    ["loopback", "http://127.0.0.1/hook"],
+    ["cloud metadata", "http://169.254.169.254/latest/meta-data"],
+    ["compose service name", "http://n8n:5678/webhook/abc"],
+    ["private range", "http://10.0.0.5/hook"],
+  ])("refuses to fetch an internal destination: %s", async (_label, url) => {
+    h.state.steps = [webhookStep(url)];
+    const fetchSpy = vi.fn(async () => new Response("ok"));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await run();
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it("still delivers to a public destination", async () => {
+    h.state.steps = [webhookStep("http://8.8.8.8/hook")];
+    const fetchSpy = vi.fn(async () => new Response("ok", { status: 200 }));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await run();
+
+    expect(fetchSpy).toHaveBeenCalledOnce();
+    // Redirects must not be followed, or a public URL could bounce to
+    // an internal one and defeat the guard.
+    const [, init] = fetchSpy.mock.calls[0] as unknown as [string, RequestInit];
+    expect(init.redirect).toBe("manual");
+    vi.unstubAllGlobals();
+  });
+});

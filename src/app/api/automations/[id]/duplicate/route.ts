@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/automations/admin-client'
+import { hasMinRole, isAccountRole } from '@/lib/auth/roles'
 
 export async function POST(
   _request: Request,
@@ -12,6 +13,22 @@ export async function POST(
     data: { user },
   } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  // Duplicating inserts a new automation through the admin client,
+  // which bypasses the `automations_insert` policy's `agent` minimum
+  // (GHSA-34q7-fv77-625j).
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('account_role')
+    .eq('user_id', user.id)
+    .maybeSingle()
+  const role = profile?.account_role
+  if (!isAccountRole(role) || !hasMinRole(role, 'agent')) {
+    return NextResponse.json(
+      { error: 'This action requires the agent role or higher.' },
+      { status: 403 },
+    )
+  }
 
   const admin = supabaseAdmin()
   const { data: original, error: origErr } = await admin
