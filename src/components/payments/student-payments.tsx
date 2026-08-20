@@ -58,7 +58,25 @@ function formatDate(d: string | null): string {
   });
 }
 
-function describeTemplate(t: FeeTemplate): string {
+/**
+ * What paying per semester would cost for the same programme and route.
+ * Used to quote the lump-sum saving, which is a real incentive: an LPU Online
+ * MBA is 146,240 up front against 161,600 by semester.
+ */
+function perSemesterTotal(t: FeeTemplate, all: FeeTemplate[]): number | null {
+  const sibling = all.find(
+    (o) =>
+      o.paymentOption === 'per_semester' &&
+      o.university === t.university &&
+      o.mode === t.mode &&
+      o.program === t.program &&
+      o.specialization === t.specialization &&
+      o.variant === t.variant
+  );
+  return sibling?.totalFee ?? null;
+}
+
+function describeTemplate(t: FeeTemplate, all: FeeTemplate[] = []): string {
   const total = t.totalFee ?? null;
   const per = t.programmeFee ?? null;
   const bits = [
@@ -67,7 +85,7 @@ function describeTemplate(t: FeeTemplate): string {
       .join(' · '),
     OPTION_LABEL[t.paymentOption],
   ];
-  if (per != null && t.termCount) {
+  if (per != null && t.termCount && t.paymentOption !== 'lump_sum') {
     bits.push(
       `${formatCurrency(per, t.currency)} × ${t.termCount} ${TERM_NOUN[t.paymentOption]}${
         t.termCount === 1 ? '' : 's'
@@ -75,6 +93,16 @@ function describeTemplate(t: FeeTemplate): string {
     );
   }
   if (total != null) bits.push(`total ${formatCurrency(total, t.currency)}`);
+
+  // Only worth saying on the option that saves money, and only against a
+  // sibling that actually exists for this programme and route.
+  if (t.paymentOption !== 'per_semester' && total != null) {
+    const baseline = perSemesterTotal(t, all);
+    if (baseline != null && baseline > total) {
+      bits.push(`saves ${formatCurrency(baseline - total, t.currency)}`);
+    }
+  }
+
   if (t.variant) bits.push(t.variant);
   return bits.filter(Boolean).join(' · ');
 }
@@ -309,7 +337,7 @@ export function StudentPayments({
                 <SelectContent>
                   {templates.map((t) => (
                     <SelectItem key={t.id} value={t.id}>
-                      {describeTemplate(t)}
+                      {describeTemplate(t, templates)}
                     </SelectItem>
                   ))}
                 </SelectContent>
