@@ -33,6 +33,7 @@ describe('parseContactCsv', () => {
     expect(parseContactCsv(csv)).toEqual({
       hasTagsColumn: true,
       hasCompanyColumn: false,
+      hasSourceColumn: false,
       rows: [
         {
           phone: '+15551234567',
@@ -59,6 +60,7 @@ describe('parseContactCsv', () => {
     expect(parseContactCsv(csv)).toEqual({
       hasTagsColumn: false,
       hasCompanyColumn: false,
+      hasSourceColumn: false,
       rows: [
         {
           phone: '+15551234567',
@@ -69,5 +71,29 @@ describe('parseContactCsv', () => {
         },
       ],
     });
+  });
+
+  it('parses optional source column, dropping unrecognised values', () => {
+    const csv = `phone,name,source
++15551234567,Alice,Walk-in
++15559876543,Bob,reference
++15551112222,Cara,billboard`;
+
+    const result = parseContactCsv(csv);
+    expect(result.hasSourceColumn).toBe(true);
+    expect(result.rows.map((r) => r.source)).toEqual([
+      'walkin',
+      'reference',
+      undefined,
+    ]);
+  });
+
+  it('omits source when the column is absent', () => {
+    const csv = `phone,name
++15551234567,Alice`;
+
+    const result = parseContactCsv(csv);
+    expect(result.hasSourceColumn).toBe(false);
+    expect(result.rows[0].source).toBeUndefined();
   });
 });

@@ -108,7 +108,24 @@ interface WhatsAppMessage {
     list_reply?: { id: string; title: string; description?: string };
   };
   context?: { id: string };
-  referral?: { headline?: string; body?: string; source_url?: string };
+  // Click-to-WhatsApp ad context. Meta attaches this to the FIRST inbound
+  // message of a conversation that started from an ad, and only that one, so
+  // whatever is not captured here is not recoverable from a later message.
+  // `ctwa_clid` (the click id minted at ad tap) and `source_id` (the ad id) are
+  // the pair that ties an admission back to the ad that paid for it. Every
+  // field is optional: Meta sends only the ones the ad actually had.
+  referral?: {
+    headline?: string;
+    body?: string;
+    source_url?: string;
+    source_id?: string;
+    source_type?: string;
+    ctwa_clid?: string;
+    media_type?: string;
+    image_url?: string;
+    video_url?: string;
+    thumbnail_url?: string;
+  };
 }
 
 // A message sent from the business's WhatsApp Business app (or a linked
@@ -536,7 +553,10 @@ async function handleStatusUpdate(status: {
 }) {
   const nextStatus = normalizeMessageStatus(status.status);
   if (nextStatus === null) {
-    console.warn('[webhook] ignoring unrecognised message status:', status.status);
+    console.warn(
+      '[webhook] ignoring unrecognised message status:',
+      status.status
+    );
   } else {
     const overwritable = statusesOverwritableBy(nextStatus);
     // Empty means nothing may advance to `nextStatus` (it is already at or past
@@ -669,7 +689,8 @@ async function processMessage(
     accountId,
     configOwnerUserId,
     senderPhone,
-    contactName
+    contactName,
+    message.referral ? 'ads' : 'organic'
   );
   if (!contactOutcome) return;
   const contactRecord = contactOutcome.contact;
@@ -681,6 +702,38 @@ async function processMessage(
     phoneNumberId
   );
   if (!conversation) return;
+
+  // Written from here rather than from the referral block in
+  // parseMessageContent, which is a pure content parser with no conversation
+  // in hand. This reuses the conversation already resolved above and only
+  // fires on the first message of an ad-started thread, so it adds no round
+  // trip to an ordinary inbound message.
+  if (message.referral) {
+    await persistAdReferral(
+      conversation.id,
+      message.referral,
+      message.timestamp
+    );
+
+    // First-touch upgrade mirroring the n8n ad_headline semantics: a contact
+    // who arrived organically and later clicks an ad becomes 'ads', but a
+    // counsellor's manual attribution (reference/walkin) is never overwritten
+    // — the .eq('source','organic') guard makes this a no-op otherwise.
+    // Best-effort like persistAdReferral: log and continue.
+    if (!contactOutcome.wasCreated) {
+      const { error: sourceErr } = await supabaseAdmin()
+        .from('contacts')
+        .update({ source: 'ads', updated_at: new Date().toISOString() })
+        .eq('id', contactRecord.id)
+        .eq('source', 'organic');
+      if (sourceErr) {
+        console.warn(
+          '[webhook] failed to upgrade contact source to ads:',
+          sourceErr.message
+        );
+      }
+    }
+  }
 
   if (message.type === 'reaction') {
     await handleReaction(message, conversation.id, contactRecord.id);
@@ -701,7 +754,6 @@ async function processMessage(
       conversation.id
     );
   }
-
 
   const ALLOWED_CONTENT_TYPES = new Set([
     'text',
@@ -816,7 +868,11 @@ async function processMessage(
       conversation_id: conversation.id,
       contact_id: contactRecord.id,
       account_id: accountId,
-      access_token: accessToken,
+      // access_token was forwarded here for years and consumed by NOTHING -
+      // zero references in any workflow node (verified against the live
+      // export). Its only effect was to write a plaintext copy of the
+      // WhatsApp token into n8n's execution_data on every single message.
+      // n8n's own sends use its credential store. Do not add it back.
     }).catch((err) => console.error('[n8n forward] error:', err));
   }
   // ===================================
@@ -986,6 +1042,21 @@ async function parseMessageContent(
 
   // >>> INJECT THE FACEBOOK AD CONTEXT <<<
   if (message.referral) {
+    // TEMPORARY (added 2026-08-20, Skeure Growth phase 1.1): log the referral
+    // object verbatim to find out which fields Meta actually sends on this WABA.
+    // The interface above declares only headline/body/source_url, but TypeScript
+    // types are erased at runtime, so anything else Meta sends is still present
+    // on this object -- specifically `ctwa_clid` and `source_id`, which are what
+    // tie a WhatsApp lead back to the ad that paid for it. Right now they are
+    // read, used to build a display banner, and dropped.
+    // Contains ad metadata only, no message body and no phone number, so this is
+    // safe to log. Remove once the fields are confirmed and persisted properly.
+    console.log(
+      '[webhook] ctwa-probe referral keys:',
+      Object.keys(message.referral),
+      JSON.stringify(message.referral)
+    );
+
     const headline = message.referral.headline
       ? `🚀 *Ad Clicked:* ${message.referral.headline}`
       : '';
@@ -1008,7 +1079,11 @@ async function findOrCreateContact(
   accountId: string,
   configOwnerUserId: string,
   phone: string,
-  name: string
+  name: string,
+  // Stored lead channel (migration 073): 'ads' when the first inbound
+  // message carries a CTWA referral, else 'organic'. Only these two are
+  // ever webhook-derived; reference/walkin are counsellor-entered.
+  source: 'organic' | 'ads' = 'organic'
 ) {
   const existingContact = await findExistingContact(
     supabaseAdmin(),
@@ -1033,6 +1108,7 @@ async function findOrCreateContact(
       user_id: configOwnerUserId,
       phone,
       name: name || phone,
+      source,
     })
     .select()
     .single();
@@ -1118,4 +1194,64 @@ async function findOrCreateConversation(
   }
 
   return newConv;
+}
+
+/**
+ * Store the click-to-WhatsApp ad context on the conversation (migration 061).
+ *
+ * Meta attaches `referral` to the first inbound message of an ad-started
+ * conversation and to no later one, so this is the only chance to keep
+ * `ctwa_clid` and the ad id. Those two are what connects an admission back to
+ * the ad that paid for it; before this the referral was read only to build the
+ * display banner in parseMessageContent and the identifiers were dropped.
+ *
+ * Last touch wins, by design. A contact who clicks a second ad has genuinely
+ * re-entered from that ad, so the new referral overwrites the old one. Absent
+ * fields are written as NULL rather than left alone for the same reason: the
+ * row describes one referral event, and keeping ad A's headline next to ad B's
+ * click id would misattribute the conversion.
+ *
+ * A failure here is logged and swallowed. Attribution is valuable but it is not
+ * worth dropping the customer's message over.
+ */
+async function persistAdReferral(
+  conversationId: string,
+  referral: NonNullable<WhatsAppMessage['referral']>,
+  messageTimestamp: string
+) {
+  // Meta's own stamp on the message carrying the referral - the only temporal
+  // handle on the click. ad_referral_at (receipt wall-clock) stays for audit,
+  // but LAST TOUCH is decided by this value: Meta retries deliveries with no
+  // ordering guarantee, so a delayed retry of ad A landing after ad B used to
+  // overwrite B and stamp a LATER receipt time, making the record assert A was
+  // newest. A conversion then reports against the wrong ad, which trains the
+  // optimiser toward the wrong creative - worse than not reporting at all.
+  const ts = Number.parseInt(messageTimestamp, 10);
+  const msgAt = Number.isFinite(ts)
+    ? new Date(ts * 1000).toISOString()
+    : new Date().toISOString();
+
+  const { error } = await supabaseAdmin()
+    .from('conversations')
+    .update({
+      ctwa_clid: referral.ctwa_clid ?? null,
+      ad_source_id: referral.source_id ?? null,
+      ad_source_type: referral.source_type ?? null,
+      ad_headline: referral.headline ?? null,
+      ad_source_url: referral.source_url ?? null,
+      ad_referral_at: new Date().toISOString(),
+      ad_referral_msg_at: msgAt,
+    })
+    .eq('id', conversationId)
+    // The guard: only a NEWER click wins. An out-of-order replay of an older
+    // referral matches zero rows instead of clobbering the current one.
+    .or(`ad_referral_msg_at.is.null,ad_referral_msg_at.lt.${msgAt}`);
+
+  if (error) {
+    console.error(
+      '[webhook] failed to store ad referral for conversation',
+      conversationId,
+      error
+    );
+  }
 }

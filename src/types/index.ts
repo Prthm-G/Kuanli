@@ -115,6 +115,38 @@ export interface Contact {
   university?: string;
   intake_year?: string;
   intake_session?: string;
+  /** The roll/registration number the university itself issues after
+   *  admission (migration 071). Counsellor-entered free text — NOT the
+   *  internal DCId above, which stays trigger-assigned. */
+  university_roll_number?: string;
+  /** Stored lead CHANNEL (migration 073): where this contact came from.
+   *  'ads' is set by the webhook from WhatsApp ad referrals; the other
+   *  values are counsellor-entered. Distinct from ad_headline/ad_body,
+   *  the n8n-owned ad-creative record. */
+  source?: ContactSource;
+  /** Referrer's name when source is 'reference' (free text). */
+  source_detail?: string;
+}
+
+export type ContactSource = 'organic' | 'ads' | 'reference' | 'walkin';
+
+/**
+ * Student portal credential METADATA (migration 072) — the wire shape of
+ * /api/contacts/[contactId]/portal-credentials. The DB row also holds
+ * `password_ciphertext`, which deliberately has no field here: ciphertext
+ * never crosses the API boundary, and plaintext only via the audited
+ * reveal route.
+ */
+export interface PortalCredential {
+  id: string;
+  contact_id: string;
+  label: string;
+  portal_url: string | null;
+  username: string | null;
+  notes: string | null;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface Tag {
@@ -197,6 +229,30 @@ export interface Conversation {
   interest_mode?: string | null;
   interest_course?: string | null;
   interest_updated_at?: string | null;
+  /**
+   * Click-to-WhatsApp ad attribution (migration 061). Captured by the webhook
+   * from the `referral` object Meta puts on the first inbound message of an
+   * ad-started conversation, and on no later message.
+   *
+   * `ctwa_clid` is the click id minted at the moment of the ad tap and
+   * `ad_source_id` is the ad id; together they are what ties an admission back
+   * to the ad that paid for it, and `ctwa_clid` is what the Conversions API
+   * needs to report a conversion against that click.
+   *
+   * Null on every organic conversation, which is the majority and is a
+   * meaningful value here — it is what separates paid from organic.
+   *
+   * Last touch: a second ad click overwrites all of these together, since the
+   * conversion belongs to the click that led to it. `ad_referral_at` is when
+   * the referral was received, not when the click happened — Meta sends no
+   * click timestamp.
+   */
+  ctwa_clid?: string | null;
+  ad_source_id?: string | null;
+  ad_source_type?: string | null;
+  ad_headline?: string | null;
+  ad_source_url?: string | null;
+  ad_referral_at?: string | null;
 }
 
 export type SenderType = 'customer' | 'agent' | 'bot';

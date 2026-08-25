@@ -1,12 +1,13 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ClipboardCheck, RefreshCw } from 'lucide-react';
+import { ClipboardCheck, Printer, RefreshCw } from 'lucide-react';
 
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
 import { loadWorklist } from '@/lib/followups/queries';
 import { actionableCount, bucketWorklist } from '@/lib/followups/due';
+import { buildCallSheetHtml } from '@/lib/followups/call-sheet';
 import type { WorklistRow } from '@/lib/followups/types';
 import { loadLedger } from '@/lib/payments/queries';
 import type { LedgerRow } from '@/lib/payments/types';
@@ -110,14 +111,35 @@ export default function FollowUpsPage() {
               : '…'}
           </p>
         </div>
-        <Button
-          variant="outline"
-          onClick={() => void (view === 'payments' ? loadPayments() : load())}
-          disabled={view === 'payments' ? ledgerLoading : loading}
-        >
-          <RefreshCw className="mr-2 h-4 w-4" />
-          Refresh
-        </Button>
+        <div className="flex items-center gap-2">
+          {view === 'followups' && (
+            <Button
+              variant="outline"
+              onClick={() => {
+                // The paper register a counsellor works through in a day —
+                // overdue + today only, blank outcome column to write on.
+                const w = window.open('', '_blank');
+                if (!w) return;
+                w.document.write(buildCallSheetHtml(rows ?? []));
+                w.document.close();
+                w.focus();
+                w.print();
+              }}
+              disabled={loading || !rows || rows.length === 0}
+            >
+              <Printer className="mr-2 h-4 w-4" />
+              Print call sheet
+            </Button>
+          )}
+          <Button
+            variant="outline"
+            onClick={() => void (view === 'payments' ? loadPayments() : load())}
+            disabled={view === 'payments' ? ledgerLoading : loading}
+          >
+            <RefreshCw className="mr-2 h-4 w-4" />
+            Refresh
+          </Button>
+        </div>
       </div>
 
       <div className="border-border bg-muted/40 flex gap-1 rounded-lg border p-1">

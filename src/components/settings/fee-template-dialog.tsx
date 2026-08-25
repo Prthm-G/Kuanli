@@ -5,7 +5,8 @@ import { toast } from 'sonner';
 
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
-import { CURRENCIES } from '@/lib/currency';
+import { CURRENCIES, formatCurrency } from '@/lib/currency';
+import { feeRowReconciles } from '@/lib/courses/compose';
 import { ENROLLMENT_UNIVERSITIES } from '@/lib/reports/university-code';
 import {
   OPTION_LABEL,
@@ -109,6 +110,42 @@ export function FeeTemplateDialog({
     const terms = numOrNull(termCount);
     if (per == null && numOrNull(totalFee) == null) {
       toast.error('Give either a per-term fee or a total');
+      return;
+    }
+
+    // Refuse a row the bot would silently refuse to quote.
+    //
+    // This calls the EXACT predicate the composer gates on
+    // (feeRowReconciles), rather than re-deriving the arithmetic here. The
+    // rule was previously written out four separate times across this file,
+    // compose.ts and a SQL health check, and they had already drifted: a row
+    // with a blank per-term fee passed one and failed another.
+    //
+    // It matters because a rejected row makes the bot drop the whole fee block
+    // and send a course sheet with no prices — silent to the student, and until
+    // now silent here too. The classic way in is editing one field and not the
+    // other, or leaving the term count blank.
+    const candidate = {
+      paymentOption,
+      termCount: terms,
+      programmeFee: per,
+      examFee: numOrNull(examFee),
+      totalFee: numOrNull(totalFee),
+      applicationFee: numOrNull(applicationFee),
+      studyMaterialFee: numOrNull(studyMaterialFee),
+      currency,
+    };
+    if (!feeRowReconciles(candidate)) {
+      const computed =
+        per != null && terms != null
+          ? (per + (numOrNull(examFee) ?? 0)) * terms
+          : null;
+      toast.error(
+        computed != null && numOrNull(totalFee) != null
+          ? `These do not add up: ${formatCurrency(per! + (numOrNull(examFee) ?? 0), currency)} x ${terms} = ` +
+              `${formatCurrency(computed, currency)}, but the total says ${formatCurrency(numOrNull(totalFee)!, currency)}.`
+          : 'Give a per-term fee, a term count and a total that agree — the bot shows no fees at all for this course otherwise.'
+      );
       return;
     }
 

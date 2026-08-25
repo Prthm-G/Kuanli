@@ -1,4 +1,6 @@
-import type { QueueScore } from "./score";
+import type { ContactSource } from '@/types';
+
+import type { QueueScore } from './score';
 
 /** One workable lead, as returned by the `lead_queue` RPC (migration 041). */
 export interface QueueLead {
@@ -16,6 +18,8 @@ export interface QueueLead {
   specialization: string | null;
   adHeadline: string | null;
   adBody: string | null;
+  /** Stored lead channel (migration 073). */
+  source: ContactSource;
   customerMessages: number;
   lastCustomerAt: string | null;
   lastAgentAt: string | null;

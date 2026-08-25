@@ -2,6 +2,7 @@ import {
   BellRing,
   Coins,
   FileText,
+  GraduationCap,
   LayoutGrid,
   Palette,
   PlugZap,
@@ -31,6 +32,7 @@ export const SETTINGS_SECTIONS = [
   'fields',
   'deals',
   'fees',
+  'courses',
   'followups',
   'members',
 ] as const;
@@ -100,6 +102,12 @@ export const SECTION_META: Record<SettingsSection, SectionMeta> = {
     id: 'fees',
     label: 'Fee plans',
     icon: Wallet,
+    group: 'workspace',
+  },
+  courses: {
+    id: 'courses',
+    label: 'Course content',
+    icon: GraduationCap,
     group: 'workspace',
   },
   followups: {

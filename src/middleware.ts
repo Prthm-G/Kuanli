@@ -93,6 +93,10 @@ export async function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
-    '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+    // api/bot is excluded: it authenticates with its own shared secret, never
+    // a session, yet the old matcher ran a GoTrue round trip on every bot
+    // request and threw its result away - a network hop on the hot path and a
+    // shared fate with GoTrue the route was explicitly designed not to have.
+    '/((?!_next/static|_next/image|favicon.ico|api/bot|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
   ],
 }

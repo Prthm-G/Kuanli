@@ -87,7 +87,22 @@ export async function loadLedger(
 export async function loadFeeTemplates(
   supabase: SupabaseClient,
   accountId: string,
-  { includeInactive = false }: { includeInactive?: boolean } = {}
+  {
+    includeInactive = false,
+    university,
+    mode,
+    program,
+  }: {
+    includeInactive?: boolean;
+    /**
+     * Optional exact-match narrowing for the serve path. The bot's course
+     * lookup knows all three before it asks; without them every lead tap
+     * fetched the account's whole fee table (~250 rows) to use three.
+     */
+    university?: string;
+    mode?: string;
+    program?: string;
+  } = {}
 ): Promise<FeeTemplate[]> {
   let q = supabase
     .from('fee_templates')
@@ -99,6 +114,9 @@ export async function loadFeeTemplates(
     .eq('account_id', accountId);
 
   if (!includeInactive) q = q.eq('active', true);
+  if (university) q = q.eq('university', university);
+  if (mode) q = q.eq('mode', mode);
+  if (program) q = q.eq('program', program);
 
   const { data, error } = await q
     .order('university')
