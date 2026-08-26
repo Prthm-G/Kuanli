@@ -117,11 +117,13 @@ export function PipelineBoard({
             <StageColumn
               key={stage.id}
               stage={stage}
+              stages={sortedStages}
               deals={stageDeals}
               totalValue={totalValue}
               currency={defaultCurrency}
               onAddDeal={onAddDeal}
               onEditDeal={onEditDeal}
+              onMoveToStage={onDealMoved}
               insights={insights}
             />
           );
@@ -192,19 +194,23 @@ export function PipelineBoard({
 
 function StageColumn({
   stage,
+  stages,
   deals,
   totalValue,
   currency,
   onAddDeal,
   onEditDeal,
+  onMoveToStage,
   insights,
 }: {
   stage: PipelineStage;
+  stages: PipelineStage[];
   deals: Deal[];
   totalValue: number;
   currency: string;
   onAddDeal: (stageId: string) => void;
   onEditDeal: (deal: Deal) => void;
+  onMoveToStage: (dealId: string, stageId: string) => void;
   insights?: Map<string, QueueLead>;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: stage.id });
@@ -252,7 +258,9 @@ function StageColumn({
               key={deal.id}
               deal={deal}
               stage={stage}
+              stages={stages}
               onEdit={onEditDeal}
+              onMoveToStage={onMoveToStage}
               insight={
                 deal.contact_id ? insights?.get(deal.contact_id) : undefined
               }
@@ -277,12 +285,16 @@ function StageColumn({
 function DraggableDealCard({
   deal,
   stage,
+  stages,
   onEdit,
+  onMoveToStage,
   insight,
 }: {
   deal: Deal;
   stage: PipelineStage;
+  stages: PipelineStage[];
   onEdit: (deal: Deal) => void;
+  onMoveToStage: (dealId: string, stageId: string) => void;
   insight?: QueueLead;
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
@@ -296,7 +308,14 @@ function DraggableDealCard({
       {...attributes}
       style={{ opacity: isDragging ? 0.3 : 1, touchAction: "none" }}
     >
-      <DealCard deal={deal} stage={stage} onEdit={onEdit} insight={insight} />
+      <DealCard
+        deal={deal}
+        stage={stage}
+        stages={stages}
+        onEdit={onEdit}
+        onMoveToStage={onMoveToStage}
+        insight={insight}
+      />
     </div>
   );
 }

@@ -1,7 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Download } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { Download, Search, Upload } from 'lucide-react';
 
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
@@ -13,6 +14,8 @@ import {
 } from '@/lib/reports/register';
 import { sourceLabel } from '@/lib/contacts/source';
 import { Button } from '@/components/ui/button';
+import { AdmissionImportModal } from '@/components/reports/admission-import-modal';
+import { useCan } from '@/hooks/use-can';
 
 /**
  * Admission register: the per-university/intake master list of enrolled
@@ -27,6 +30,10 @@ export function AdmissionRegister() {
   const [error, setError] = useState<string | null>(null);
   const [universityFilter, setUniversityFilter] = useState('all');
   const [intakeFilter, setIntakeFilter] = useState('all');
+  const [search, setSearch] = useState('');
+  const [importOpen, setImportOpen] = useState(false);
+  const canImport = useCan('edit-settings');
+  const router = useRouter();
 
   // setState stays inside the promise callbacks (never synchronously in the
   // effect) — same posture as dashboard/page.tsx and the rule it satisfies.
@@ -66,15 +73,18 @@ export function AdmissionRegister() {
     [rows]
   );
 
-  const filtered = useMemo(
-    () =>
-      (rows ?? []).filter(
-        (r) =>
-          (universityFilter === 'all' || r.university === universityFilter) &&
-          (intakeFilter === 'all' || r.intake === intakeFilter)
-      ),
-    [rows, universityFilter, intakeFilter]
-  );
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return (rows ?? []).filter(
+      (r) =>
+        (universityFilter === 'all' || r.university === universityFilter) &&
+        (intakeFilter === 'all' || r.intake === intakeFilter) &&
+        (q === '' ||
+          [r.name, r.phone, r.dcid, r.universityRollNumber].some((v) =>
+            (v ?? '').toLowerCase().includes(q)
+          ))
+    );
+  }, [rows, universityFilter, intakeFilter, search]);
 
   function downloadCsv() {
     const blob = new Blob([registerCsv(filtered)], {
@@ -93,6 +103,17 @@ export function AdmissionRegister() {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-2">
+        <div className="relative w-full max-w-xs">
+          <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2" />
+          <input
+            type="search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search name, phone, roll…"
+            aria-label="Search register"
+            className="border-border bg-muted text-foreground h-8 w-full rounded border pr-2 pl-8 text-sm outline-none"
+          />
+        </div>
         <select
           value={universityFilter}
           onChange={(e) => setUniversityFilter(e.target.value)}
@@ -120,16 +141,29 @@ export function AdmissionRegister() {
         <span className="text-muted-foreground text-sm">
           {filtered.length} student{filtered.length === 1 ? '' : 's'}
         </span>
-        <Button
-          variant="outline"
-          onClick={downloadCsv}
-          disabled={filtered.length === 0}
-          className="ml-auto"
-        >
-          <Download className="mr-2 h-4 w-4" />
-          Export CSV
-        </Button>
+        <div className="ml-auto flex items-center gap-2">
+          {canImport && (
+            <Button variant="outline" onClick={() => setImportOpen(true)}>
+              <Upload className="mr-2 h-4 w-4" />
+              Import Excel
+            </Button>
+          )}
+          <Button
+            variant="outline"
+            onClick={downloadCsv}
+            disabled={filtered.length === 0}
+          >
+            <Download className="mr-2 h-4 w-4" />
+            Export CSV
+          </Button>
+        </div>
       </div>
+
+      <AdmissionImportModal
+        open={importOpen}
+        onOpenChange={setImportOpen}
+        onImported={load}
+      />
 
       <div className="border-border overflow-x-auto rounded-lg border">
         <table className="w-full min-w-[980px] text-sm">
@@ -177,7 +211,13 @@ export function AdmissionRegister() {
             {!loading &&
               !error &&
               filtered.map((r) => (
-                <tr key={r.contactId} className="hover:bg-muted/30">
+                <tr
+                  key={r.contactId}
+                  onClick={() =>
+                    router.push(`/contacts?contact=${r.contactId}`)
+                  }
+                  className="hover:bg-muted/30 cursor-pointer"
+                >
                   <td className="text-foreground px-3 py-2 font-mono text-xs">
                     {r.dcid ?? '—'}
                   </td>

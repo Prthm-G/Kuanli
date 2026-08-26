@@ -1,7 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { CalendarDays, Download } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { CalendarDays, Download, Search } from 'lucide-react';
 
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
@@ -70,11 +71,27 @@ export default function ReportsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [assigning, setAssigning] = useState<EodRow | null>(null);
+  const [eodSearch, setEodSearch] = useState('');
+  const router = useRouter();
 
   const rangeLabel = useMemo(
     () => describeRange(resolveRange(period)),
     [period]
   );
+
+  // Client-side filter so a counsellor can find one student in the day's
+  // conversations without scrolling. Matches name, phone, course, university,
+  // and roll number.
+  const filteredRows = useMemo(() => {
+    const q = eodSearch.trim().toLowerCase();
+    const rows = report?.rows ?? [];
+    if (!q) return rows;
+    return rows.filter((r) =>
+      [r.name, r.phone, r.course, r.university, r.rollNumber].some((v) =>
+        (v ?? '').toLowerCase().includes(q)
+      )
+    );
+  }, [report, eodSearch]);
 
   const load = useCallback(async () => {
     if (!accountId) return;
@@ -189,6 +206,20 @@ export default function ReportsPage() {
       )}
 
       {view === 'eod' && (
+        <div className="relative max-w-sm">
+          <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2" />
+          <input
+            type="search"
+            value={eodSearch}
+            onChange={(e) => setEodSearch(e.target.value)}
+            placeholder="Search name, phone, course, roll…"
+            aria-label="Search EOD rows"
+            className="border-input focus-visible:border-ring focus-visible:ring-ring/50 h-9 w-full rounded-lg border bg-transparent pr-2.5 pl-8 text-sm outline-none transition-colors focus-visible:ring-3 dark:bg-input/30"
+          />
+        </div>
+      )}
+
+      {view === 'eod' && (
         <div className="border-border overflow-x-auto rounded-lg border">
           <table className="w-full min-w-[860px] text-sm">
             <thead className="bg-muted/50 text-muted-foreground text-left text-xs tracking-wider uppercase">
@@ -221,20 +252,29 @@ export default function ReportsPage() {
                   </td>
                 </tr>
               )}
-              {!loading && !error && report?.rows.length === 0 && (
+              {!loading && !error && filteredRows.length === 0 && (
                 <tr>
                   <td
                     colSpan={8}
                     className="text-muted-foreground p-6 text-center"
                   >
-                    No new conversations in this period.
+                    {eodSearch.trim()
+                      ? 'No rows match your search.'
+                      : 'No new conversations in this period.'}
                   </td>
                 </tr>
               )}
               {!loading &&
                 !error &&
-                report?.rows.map((r) => (
-                  <tr key={r.conversationId} className="hover:bg-muted/30">
+                filteredRows.map((r) => (
+                  <tr
+                    key={r.conversationId}
+                    onClick={() =>
+                      r.contactId &&
+                      router.push(`/contacts?contact=${r.contactId}`)
+                    }
+                    className={`hover:bg-muted/30 ${r.contactId ? 'cursor-pointer' : ''}`}
+                  >
                     <Td>{new Date(r.createdAt).toLocaleString()}</Td>
                     <Td>{r.name || <Dash />}</Td>
                     <Td className="font-mono text-xs">{r.phone || <Dash />}</Td>
@@ -253,7 +293,10 @@ export default function ReportsPage() {
                         <Button
                           size="sm"
                           variant="outline"
-                          onClick={() => setAssigning(r)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setAssigning(r);
+                          }}
                         >
                           Assign roll number
                         </Button>

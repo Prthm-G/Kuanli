@@ -17,6 +17,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ModeToggle } from "@/components/layout/mode-toggle";
+import { GlobalSearch } from "@/components/layout/global-search";
 
 const pageTitles: Record<string, string> = {
   "/dashboard": "Dashboard",
@@ -67,6 +68,10 @@ export function Header({ onOpenSidebar }: HeaderProps) {
         <h1 className="truncate text-base font-semibold text-foreground sm:text-lg">
           {title}
         </h1>
+      </div>
+
+      <div className="flex flex-1 justify-center px-2">
+        <GlobalSearch />
       </div>
 
       <div className="flex items-center gap-1 sm:gap-2">

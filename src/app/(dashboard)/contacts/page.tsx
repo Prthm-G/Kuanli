@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { toast } from 'sonner';
 import type { Contact, Tag, ContactTag } from '@/types';
@@ -101,6 +102,26 @@ export default function ContactsPage() {
   // results. Without this, rapidly toggling tag filters could let a slower
   // earlier request resolve last and render stale rows.
   const fetchSeq = useRef(0);
+
+  // Deep link: /contacts?contact=<id> opens that contact's detail drawer.
+  // This is how EOD, the admission register, and the header search jump to a
+  // lead. ContactDetailView fetches by id, so the target need not be on the
+  // current page or match the active filters.
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const contactParam = searchParams.get('contact');
+  useEffect(() => {
+    if (!contactParam) return;
+    // setState in a callback, not synchronously in the effect body
+    // (react-hooks/set-state-in-effect) — same posture as the data effects.
+    const id = setTimeout(() => {
+      setDetailContactId(contactParam);
+      setDetailOpen(true);
+      // Consume the param so jumping to the same contact again re-fires this.
+      router.replace('/contacts');
+    }, 0);
+    return () => clearTimeout(id);
+  }, [contactParam, router]);
 
   const fetchTags = useCallback(async () => {
     const { data } = await supabase.from('tags').select('*');
