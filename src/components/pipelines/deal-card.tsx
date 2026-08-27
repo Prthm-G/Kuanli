@@ -3,6 +3,13 @@
 import type { Deal, PipelineStage } from "@/types";
 import type { QueueLead } from "@/lib/queue/types";
 import { Calendar, Check, X } from "lucide-react";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 interface DealCardProps {
   deal: Deal;
@@ -11,6 +18,10 @@ interface DealCardProps {
   isOverlay?: boolean;
   /** Queue insight for this contact (score / awaiting / interest), optional. */
   insight?: QueueLead;
+  /** All stages in this pipeline — powers the no-drag "Move to stage" picker. */
+  stages?: PipelineStage[];
+  /** Advance/move this deal to another stage without dragging. */
+  onMoveToStage?: (dealId: string, stageId: string) => void;
 }
 
 function formatDate(dateStr: string) {
@@ -38,21 +49,13 @@ function initials(name?: string, fallback?: string) {
   return source.charAt(0).toUpperCase();
 }
 
-export function DealCard({ deal, stage, onEdit, isOverlay, insight }: DealCardProps) {
+export function DealCard({ deal, stage, onEdit, isOverlay, insight, stages, onMoveToStage }: DealCardProps) {
   const contactLabel = deal.contact?.name || deal.contact?.phone || "No contact";
   const assigneeLabel = deal.assignee?.full_name || null;
 
   return (
-    <button
-      type="button"
-      onClick={(e) => {
-        // `onClick` still fires after a non-drag tap because the PointerSensor
-        // requires 5px movement before it counts as a drag.
-        if (isOverlay) return;
-        e.stopPropagation();
-        onEdit(deal);
-      }}
-      className={`group relative w-full cursor-pointer rounded-xl border border-border/50 bg-muted/70 pl-4 pr-3 py-3 text-left shadow-sm transition-all ${
+    <div
+      className={`group relative w-full rounded-xl border border-border/50 bg-muted/70 shadow-sm transition-all ${
         isOverlay
           ? "shadow-xl"
           : "hover:-translate-y-0.5 hover:border-border hover:bg-muted hover:shadow-lg"
@@ -65,6 +68,17 @@ export function DealCard({ deal, stage, onEdit, isOverlay, insight }: DealCardPr
         style={{ backgroundColor: stage?.color ?? "#94a3b8" }}
       />
 
+      <button
+        type="button"
+        onClick={(e) => {
+          // `onClick` still fires after a non-drag tap because the PointerSensor
+          // requires 5px movement before it counts as a drag.
+          if (isOverlay) return;
+          e.stopPropagation();
+          onEdit(deal);
+        }}
+        className="block w-full cursor-pointer rounded-xl py-3 pr-3 pl-4 text-left"
+      >
       <div className="flex items-start justify-between gap-2">
         <h4 className="flex-1 text-sm font-semibold leading-snug text-foreground break-words">
           {deal.title}
@@ -141,6 +155,42 @@ export function DealCard({ deal, stage, onEdit, isOverlay, insight }: DealCardPr
           </span>
         </div>
       )}
-    </button>
+      </button>
+
+      {!isOverlay && onMoveToStage && stages && stages.length > 0 && (
+        // The card is wrapped in dnd-kit drag listeners and an edit-on-click
+        // button; stop pointer/click here so the picker never starts a drag or
+        // opens the edit form.
+        <div
+          className="px-4 pb-3"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <Select
+            value={deal.stage_id}
+            onValueChange={(value) => {
+              const next = String(value);
+              if (next && next !== deal.stage_id) onMoveToStage(deal.id, next);
+            }}
+          >
+            <SelectTrigger
+              size="sm"
+              className="w-full bg-background/60"
+              aria-label="Move to stage"
+            >
+              <span className="mr-1 text-xs text-muted-foreground">Stage:</span>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {stages.map((s) => (
+                <SelectItem key={s.id} value={s.id}>
+                  {s.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
+    </div>
   );
 }

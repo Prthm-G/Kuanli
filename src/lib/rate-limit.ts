@@ -141,6 +141,12 @@ export const RATE_LIMITS = {
    *  while still bounding accidental abuse from a script run in a
    *  loop or a compromised admin session spamming role flips. */
   adminAction: { limit: 30, windowMs: 60_000 },
+  /** Password reveal for saved student-portal logins (migration 072).
+   *  Every reveal is audit-logged; this additionally bounds bulk
+   *  exfiltration from a compromised counsellor session while leaving
+   *  room for a normal working session (a counsellor rarely needs more
+   *  than a handful of portals in a minute). */
+  credentialReveal: { limit: 10, windowMs: 60_000 },
 } as const;
 
 /** Test-only helper. Clears the in-memory state so unit tests don't

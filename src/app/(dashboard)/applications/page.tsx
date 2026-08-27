@@ -1,13 +1,16 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { FileCheck, RefreshCw } from 'lucide-react';
+import { FileCheck, RefreshCw, Search } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
+import { formatCurrency } from '@/lib/currency';
 import { loadApplicationTracker } from '@/lib/applications/queries';
+import { loadLedger } from '@/lib/payments/queries';
+import type { LedgerRow } from '@/lib/payments/types';
 import { computeProgress } from '@/lib/applications/progress';
 import type {
   DocStatus,
@@ -30,13 +33,40 @@ export default function ApplicationsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  // Money state per contact, keyed by contact id. Documents and fees are the
+  // two halves of "is this application actually progressing", so they belong
+  // on the same row.
+  const [ledger, setLedger] = useState<Map<string, LedgerRow>>(new Map());
+  const [search, setSearch] = useState('');
+
+  // Each application is a tall card, so finding one student means a lot of
+  // scrolling. Filter on the identifiers a counsellor actually has to hand:
+  // name, phone, roll number, university, stage.
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return contacts;
+    return (contacts ?? []).filter((c) =>
+      [c.name, c.phone, c.rollNumber, c.university, c.stage].some((v) =>
+        (v ?? '').toLowerCase().includes(q)
+      )
+    );
+  }, [contacts, search]);
 
   const load = useCallback(async () => {
     if (!accountId) return;
     setLoading(true);
     setError(null);
     try {
-      setContacts(await loadApplicationTracker(createClient(), accountId));
+      const supabase = createClient();
+      setContacts(await loadApplicationTracker(supabase, accountId));
+      try {
+        const rows = await loadLedger(supabase, accountId);
+        setLedger(new Map(rows.map((r) => [r.contactId, r])));
+      } catch {
+        // The document tracker is this page's job; a failed ledger fetch
+        // hides the fee strip rather than taking the page down.
+        setLedger(new Map());
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not load applications');
     } finally {
@@ -110,7 +140,11 @@ export default function ApplicationsPage() {
           </h1>
           <p className="text-muted-foreground flex items-center gap-1.5 text-sm">
             <FileCheck className="h-3.5 w-3.5" />
-            {contacts ? `${contacts.length} in the application phase` : '…'}
+            {contacts
+              ? search.trim()
+                ? `${filtered?.length ?? 0} of ${contacts.length} in the application phase`
+                : `${contacts.length} in the application phase`
+              : '…'}
           </p>
         </div>
         <Button
@@ -121,6 +155,18 @@ export default function ApplicationsPage() {
           <RefreshCw className="mr-2 h-4 w-4" />
           Refresh
         </Button>
+      </div>
+
+      <div className="relative max-w-sm">
+        <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2" />
+        <input
+          type="search"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search name, phone, roll, stage…"
+          aria-label="Search applications"
+          className="border-input focus-visible:border-ring focus-visible:ring-ring/50 h-9 w-full rounded-lg border bg-transparent pr-2.5 pl-8 text-sm outline-none transition-colors focus-visible:ring-3 dark:bg-input/30"
+        />
       </div>
 
       {error && (
@@ -135,9 +181,15 @@ export default function ApplicationsPage() {
           number moves them to Application Started.
         </p>
       )}
+      {!loading && !error && (contacts?.length ?? 0) > 0 && filtered?.length === 0 && (
+        <p className="text-muted-foreground text-sm">
+          No applications match your search.
+        </p>
+      )}
 
-      {contacts?.map((c) => {
+      {filtered?.map((c) => {
         const progress = computeProgress(c.required);
+        const money = ledger.get(c.contactId);
         return (
           <div
             key={c.contactId}
@@ -157,6 +209,36 @@ export default function ApplicationsPage() {
                 )}
               </div>
               <div className="flex items-center gap-3">
+                {money && money.agreedTotal > 0 && (
+                  <span
+                    className={
+                      'text-sm ' +
+                      (money.outstanding > 0
+                        ? 'text-muted-foreground'
+                        : 'text-emerald-500')
+                    }
+                    title={
+                      money.reported > 0
+                        ? `${formatCurrency(money.reported, money.currency)} reported but not yet verified`
+                        : undefined
+                    }
+                  >
+                    {formatCurrency(money.received, money.currency)} /{' '}
+                    {formatCurrency(money.agreedTotal, money.currency)}
+                    {money.outstanding > 0 && (
+                      <span className="text-muted-foreground">
+                        {' '}
+                        · {formatCurrency(money.outstanding, money.currency)} due
+                      </span>
+                    )}
+                    {money.reported > 0 && (
+                      <span className="ml-1 text-amber-500">
+                        · {formatCurrency(money.reported, money.currency)}{' '}
+                        unverified
+                      </span>
+                    )}
+                  </span>
+                )}
                 <span className="text-muted-foreground text-sm">
                   {progress.verified}/{progress.total} verified
                 </span>

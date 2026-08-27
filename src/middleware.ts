@@ -52,8 +52,30 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(url)
   }
 
-  // Protected pages - redirect to login if not authenticated
-  const protectedPaths = ['/dashboard', '/inbox', '/contacts', '/pipelines', '/broadcasts', '/automations', '/settings']
+  // Protected pages - redirect to login if not authenticated.
+  //
+  // This list has to stay in step with the sidebar's navItems. It had drifted:
+  // /queue, /applications, /reports, /analytics and /flows all shipped after it
+  // was written and were never added, so a logged-out visitor got an empty
+  // client-rendered shell instead of the login page. No data was exposed (those
+  // pages fetch nothing without an accountId, and RLS grants anon no rows), but
+  // the intended behaviour is a redirect, and a page that renders for a signed-
+  // out visitor is one careless server component away from being a real leak.
+  const protectedPaths = [
+    '/dashboard',
+    '/inbox',
+    '/queue',
+    '/contacts',
+    '/follow-ups',
+    '/pipelines',
+    '/applications',
+    '/reports',
+    '/analytics',
+    '/broadcasts',
+    '/automations',
+    '/flows',
+    '/settings',
+  ]
   if (!user && protectedPaths.some(path => request.nextUrl.pathname.startsWith(path))) {
     const url = request.nextUrl.clone()
     url.pathname = '/login'
@@ -71,6 +93,10 @@ export async function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
-    '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+    // api/bot is excluded: it authenticates with its own shared secret, never
+    // a session, yet the old matcher ran a GoTrue round trip on every bot
+    // request and threw its result away - a network hop on the hot path and a
+    // shared fate with GoTrue the route was explicitly designed not to have.
+    '/((?!_next/static|_next/image|favicon.ico|api/bot|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
   ],
 }

@@ -13,7 +13,7 @@ export function renderEodEmail(
   rangeLabel: string,
   reportUrl: string | null,
 ): { subject: string; text: string; html: string } {
-  const { rows, summary } = report;
+  const { rows, summary, followups } = report;
   const subject = `Kuanli EOD · ${rangeLabel} · ${summary.total} new conversation${
     summary.total === 1 ? "" : "s"
   }`;
@@ -28,6 +28,8 @@ export function renderEodEmail(
     `University known  : ${summary.withUniversity}`,
     `Course known      : ${summary.withCourse}`,
     `Roll number issued: ${summary.enrolled}`,
+    `Follow-ups logged : ${followups.logged}`,
+    `Still overdue     : ${followups.overdue}`,
     "",
     ...rows.map(
       (r) =>
@@ -79,6 +81,9 @@ export function renderEodEmail(
       ${stat("University known", summary.withUniversity)}
       ${stat("Course known", summary.withCourse)}
       ${stat("Roll number issued", summary.enrolled)}
+    </tr><tr>
+      ${stat("Follow-ups logged", followups.logged)}
+      ${stat("Still overdue", followups.overdue)}
     </tr></table>
     <div style="height:16px"></div>
     ${body}

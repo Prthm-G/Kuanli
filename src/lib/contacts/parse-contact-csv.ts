@@ -3,11 +3,18 @@
  * tag-column handling stays aligned with phone/name/email/company.
  */
 
+import type { ContactSource } from '@/types';
+
+import { normalizeContactSource } from './source';
+
 export interface ParsedContactRow {
   phone: string;
   name?: string;
   email?: string;
   company?: string;
+  /** From the optional `source` column (migration 073). Unrecognised
+   *  values parse to undefined so the DB default ('organic') applies. */
+  source?: ContactSource;
   /** Tag names from the optional `tags` column (comma/semicolon separated). */
   tagNames: string[];
 }
@@ -37,12 +44,21 @@ export interface ParseContactCsvResult {
   hasTagsColumn: boolean;
   /** True when the CSV header includes a `company` column. */
   hasCompanyColumn: boolean;
+  /** True when the CSV header includes a `source` column. */
+  hasSourceColumn: boolean;
 }
+
+const EMPTY_RESULT: ParseContactCsvResult = {
+  rows: [],
+  hasTagsColumn: false,
+  hasCompanyColumn: false,
+  hasSourceColumn: false,
+};
 
 export function parseContactCsv(text: string): ParseContactCsvResult {
   const lines = text.trim().split(/\r?\n/);
   if (lines.length < 2) {
-    return { rows: [], hasTagsColumn: false, hasCompanyColumn: false };
+    return EMPTY_RESULT;
   }
 
   const headers = lines[0]
@@ -51,13 +67,14 @@ export function parseContactCsv(text: string): ParseContactCsvResult {
 
   const phoneIdx = headers.indexOf('phone');
   if (phoneIdx === -1) {
-    return { rows: [], hasTagsColumn: false, hasCompanyColumn: false };
+    return EMPTY_RESULT;
   }
 
   const nameIdx = headers.indexOf('name');
   const emailIdx = headers.indexOf('email');
   const companyIdx = headers.indexOf('company');
   const tagsIdx = headers.indexOf('tags');
+  const sourceIdx = headers.indexOf('source');
 
   const rows: ParsedContactRow[] = [];
 
@@ -83,6 +100,10 @@ export function parseContactCsv(text: string): ParseContactCsvResult {
         companyIdx >= 0
           ? values[companyIdx]?.replace(/["']/g, '').trim() || undefined
           : undefined,
+      source:
+        sourceIdx >= 0
+          ? normalizeContactSource(values[sourceIdx]?.replace(/["']/g, ''))
+          : undefined,
       tagNames:
         tagsIdx >= 0 ? parseTagCell(values[tagsIdx]?.replace(/["']/g, '')) : [],
     });
@@ -92,6 +113,7 @@ export function parseContactCsv(text: string): ParseContactCsvResult {
     rows,
     hasTagsColumn: tagsIdx >= 0,
     hasCompanyColumn: companyIdx >= 0,
+    hasSourceColumn: sourceIdx >= 0,
   };
 }
 

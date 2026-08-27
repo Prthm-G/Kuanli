@@ -1,10 +1,11 @@
-"use client";
+'use client';
 
-import { useState, useEffect, useCallback } from "react";
-import { createClient } from "@/lib/supabase/client";
-import { useAuth } from "@/hooks/use-auth";
-import type { Contact, Conversation, Deal, ContactNote, Tag } from "@/types";
-import { EnrollmentPanel } from "./enrollment-panel";
+import { useState, useEffect, useCallback } from 'react';
+import { createClient } from '@/lib/supabase/client';
+import { useAuth } from '@/hooks/use-auth';
+import type { Contact, Conversation, Deal, ContactNote, Tag } from '@/types';
+import { EnrollmentPanel } from './enrollment-panel';
+import { NextDueStrip } from '@/components/followups/next-due-strip';
 import {
   Phone,
   Mail,
@@ -14,10 +15,10 @@ import {
   DollarSign,
   StickyNote,
   Plus,
-} from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { format } from "date-fns";
+} from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { format } from 'date-fns';
 
 interface ContactSidebarProps {
   contact: Contact | null;
@@ -39,7 +40,7 @@ export function ContactSidebar({
   const [deals, setDeals] = useState<Deal[]>([]);
   const [notes, setNotes] = useState<ContactNote[]>([]);
   const [tags, setTags] = useState<(Tag & { contact_tag_id: string })[]>([]);
-  const [newNote, setNewNote] = useState("");
+  const [newNote, setNewNote] = useState('');
   const [addingNote, setAddingNote] = useState(false);
 
   const fetchContactData = useCallback(async () => {
@@ -50,19 +51,19 @@ export function ContactSidebar({
     // Fetch deals, notes, and tags in parallel
     const [dealsRes, notesRes, tagsRes] = await Promise.all([
       supabase
-        .from("deals")
-        .select("*, stage:pipeline_stages(*)")
-        .eq("contact_id", contact.id)
-        .order("created_at", { ascending: false }),
+        .from('deals')
+        .select('*, stage:pipeline_stages(*)')
+        .eq('contact_id', contact.id)
+        .order('created_at', { ascending: false }),
       supabase
-        .from("contact_notes")
-        .select("*")
-        .eq("contact_id", contact.id)
-        .order("created_at", { ascending: false }),
+        .from('contact_notes')
+        .select('*')
+        .eq('contact_id', contact.id)
+        .order('created_at', { ascending: false }),
       supabase
-        .from("contact_tags")
-        .select("id, tag_id, tags(*)")
-        .eq("contact_id", contact.id),
+        .from('contact_tags')
+        .select('id, tag_id, tags(*)')
+        .eq('contact_id', contact.id),
     ]);
 
     if (dealsRes.data) setDeals(dealsRes.data);
@@ -107,7 +108,7 @@ export function ContactSidebar({
     const user = session?.user;
 
     const { data, error } = await supabase
-      .from("contact_notes")
+      .from('contact_notes')
       .insert({
         contact_id: contact.id,
         account_id: accountId,
@@ -119,15 +120,15 @@ export function ContactSidebar({
 
     if (!error && data) {
       setNotes((prev) => [data, ...prev]);
-      setNewNote("");
+      setNewNote('');
     }
     setAddingNote(false);
   }, [contact, newNote, accountId]);
 
   if (!contact) {
     return (
-      <div className="flex h-full w-70 items-center justify-center border-l border-border bg-card">
-        <p className="text-sm text-muted-foreground">Select a conversation</p>
+      <div className="border-border bg-card flex h-full w-70 items-center justify-center border-l">
+        <p className="text-muted-foreground text-sm">Select a conversation</p>
       </div>
     );
   }
@@ -136,12 +137,12 @@ export function ContactSidebar({
   const initials = displayName.charAt(0).toUpperCase();
 
   return (
-    <div className="flex h-full w-70 flex-col border-l border-border bg-card">
+    <div className="border-border bg-card flex h-full w-70 flex-col border-l">
       <ScrollArea className="flex-1">
         <div className="p-4">
           {/* Contact Info */}
           <div className="flex flex-col items-center text-center">
-            <div className="flex h-16 w-16 items-center justify-center rounded-full bg-muted text-lg font-semibold text-foreground">
+            <div className="bg-muted text-foreground flex h-16 w-16 items-center justify-center rounded-full text-lg font-semibold">
               {contact.avatar_url ? (
                 // avatar_url is an arbitrary https URL pasted in the UI, so
                 // there is no finite remotePatterns list for the optimizer.
@@ -155,11 +156,12 @@ export function ContactSidebar({
                 initials
               )}
             </div>
-            <h3 className="mt-3 text-sm font-semibold text-foreground">
-              {displayName} {contact.roll_number ? ` — ${contact.roll_number}` : ""}
+            <h3 className="text-foreground mt-3 text-sm font-semibold">
+              {displayName}{' '}
+              {contact.roll_number ? ` — ${contact.roll_number}` : ''}
             </h3>
             {contact.company && (
-              <p className="text-xs text-muted-foreground">{contact.company}</p>
+              <p className="text-muted-foreground text-xs">{contact.company}</p>
             )}
           </div>
 
@@ -167,37 +169,37 @@ export function ContactSidebar({
           <div className="mt-4 space-y-2">
             <button
               onClick={handleCopyPhone}
-              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-muted"
+              className="text-muted-foreground hover:bg-muted flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm transition-colors"
             >
-              <Phone className="h-4 w-4 text-muted-foreground" />
+              <Phone className="text-muted-foreground h-4 w-4" />
               <span className="flex-1 text-left">{contact.phone}</span>
               {copied ? (
-                <Check className="h-3 w-3 text-primary" />
+                <Check className="text-primary h-3 w-3" />
               ) : (
-                <Copy className="h-3 w-3 text-muted-foreground" />
+                <Copy className="text-muted-foreground h-3 w-3" />
               )}
             </button>
 
             {contact.email && (
-              <div className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-muted-foreground">
-                <Mail className="h-4 w-4 text-muted-foreground" />
+              <div className="text-muted-foreground flex items-center gap-2 rounded-lg px-3 py-2 text-sm">
+                <Mail className="text-muted-foreground h-4 w-4" />
                 <span className="truncate">{contact.email}</span>
               </div>
             )}
           </div>
 
           {/* Divider */}
-          <div className="my-4 border-t border-border" />
+          <div className="border-border my-4 border-t" />
 
           {/* Tags */}
           <div>
-            <div className="flex items-center gap-2 px-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+            <div className="text-muted-foreground flex items-center gap-2 px-1 text-xs font-medium tracking-wider uppercase">
               <TagIcon className="h-3 w-3" />
               Tags
             </div>
             <div className="mt-2 flex flex-wrap gap-1">
               {tags.length === 0 ? (
-                <p className="px-1 text-xs text-muted-foreground">No tags</p>
+                <p className="text-muted-foreground px-1 text-xs">No tags</p>
               ) : (
                 tags.map((tag) => (
                   <span
@@ -216,12 +218,11 @@ export function ContactSidebar({
           </div>
 
           {/* Divider */}
-          <div className="my-4 border-t border-border" />
+          <div className="border-border my-4 border-t" />
 
           {/* Enrollment Setup */}
           <div>
-            <div className="flex items-center gap-2 px-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-              
+            <div className="text-muted-foreground flex items-center gap-2 px-1 text-xs font-medium tracking-wider uppercase">
               University Enrollment
             </div>
             {!contact.university ? (
@@ -229,42 +230,48 @@ export function ContactSidebar({
                  suggested university, without resetting the notes / deals /
                  tags state this sidebar also holds. */
               <EnrollmentPanel
-                key={conversation?.id ?? "none"}
+                key={conversation?.id ?? 'none'}
                 contact={contact}
                 interestUniversity={conversation?.interest_university}
                 onDone={onContactUpdated}
               />
             ) : (
-              <div className="mt-2 rounded-lg bg-primary/10 p-3 text-sm border border-primary/20">
-                <p className="font-bold text-primary tracking-wide text-lg">{contact.roll_number}</p>
-                <p className="text-xs text-muted-foreground mt-1">{contact.university} • 20{contact.intake_year} • Intake {contact.intake_session}</p>
+              <div className="bg-primary/10 border-primary/20 mt-2 rounded-lg border p-3 text-sm">
+                <p className="text-primary text-lg font-bold tracking-wide">
+                  {contact.roll_number}
+                </p>
+                <p className="text-muted-foreground mt-1 text-xs">
+                  {contact.university} • 20{contact.intake_year} • Intake{' '}
+                  {contact.intake_session}
+                </p>
+                {contact.university_roll_number && (
+                  <p className="text-muted-foreground mt-1 text-xs">
+                    Univ. Roll: {contact.university_roll_number}
+                  </p>
+                )}
               </div>
             )}
           </div>
 
           {/* Divider */}
-          <div className="my-4 border-t border-border" />
+          <div className="border-border my-4 border-t" />
 
           {/* Active Deals */}
           <div>
-            <div className="flex items-center gap-2 px-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+            <div className="text-muted-foreground flex items-center gap-2 px-1 text-xs font-medium tracking-wider uppercase">
               <DollarSign className="h-3 w-3" />
               Active Deals
             </div>
             <div className="mt-2 space-y-2">
               {deals.length === 0 ? (
-                <p className="px-1 text-xs text-muted-foreground">No deals</p>
+                <p className="text-muted-foreground px-1 text-xs">No deals</p>
               ) : (
                 deals.map((deal) => (
-                  <div
-                    key={deal.id}
-                    className="rounded-lg bg-muted px-3 py-2"
-                  >
-                    <p className="text-sm font-medium text-foreground">
+                  <div key={deal.id} className="bg-muted rounded-lg px-3 py-2">
+                    <p className="text-foreground text-sm font-medium">
                       {deal.title}
                     </p>
-                    <div className="mt-1 flex items-center justify-between text-xs text-muted-foreground">
-                      
+                    <div className="text-muted-foreground mt-1 flex items-center justify-between text-xs">
                       {deal.stage && (
                         <span
                           className="rounded-full px-1.5 py-0.5 text-[10px]"
@@ -284,11 +291,21 @@ export function ContactSidebar({
           </div>
 
           {/* Divider */}
-          <div className="my-4 border-t border-border" />
+          <div className="border-border my-4 border-t" />
+
+          {/* Follow-up (migration 054) */}
+          <NextDueStrip
+            contactId={contact.id}
+            contactName={contact.name}
+            conversationId={conversation?.id ?? null}
+          />
+
+          {/* Divider */}
+          <div className="border-border my-4 border-t" />
 
           {/* Notes */}
           <div>
-            <div className="flex items-center gap-2 px-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+            <div className="text-muted-foreground flex items-center gap-2 px-1 text-xs font-medium tracking-wider uppercase">
               <StickyNote className="h-3 w-3" />
               Notes
             </div>
@@ -299,11 +316,11 @@ export function ContactSidebar({
                   onChange={(e) => setNewNote(e.target.value)}
                   placeholder="Add a note..."
                   rows={2}
-                  className="flex-1 resize-none rounded-lg border border-border bg-muted px-3 py-2 text-xs text-foreground placeholder-muted-foreground outline-none focus:border-primary/50"
+                  className="border-border bg-muted text-foreground placeholder-muted-foreground focus:border-primary/50 flex-1 resize-none rounded-lg border px-3 py-2 text-xs outline-none"
                 />
                 <Button
                   size="sm"
-                  className="h-auto bg-primary px-2 hover:bg-primary/90"
+                  className="bg-primary hover:bg-primary/90 h-auto px-2"
                   onClick={handleAddNote}
                   disabled={!newNote.trim() || addingNote}
                 >
@@ -313,15 +330,12 @@ export function ContactSidebar({
 
               <div className="mt-2 space-y-2">
                 {notes.map((note) => (
-                  <div
-                    key={note.id}
-                    className="rounded-lg bg-muted px-3 py-2"
-                  >
-                    <p className="whitespace-pre-wrap text-xs text-muted-foreground">
+                  <div key={note.id} className="bg-muted rounded-lg px-3 py-2">
+                    <p className="text-muted-foreground text-xs whitespace-pre-wrap">
                       {note.note_text}
                     </p>
-                    <p className="mt-1 text-[10px] text-muted-foreground">
-                      {format(new Date(note.created_at), "MMM d, yyyy HH:mm")}
+                    <p className="text-muted-foreground mt-1 text-[10px]">
+                      {format(new Date(note.created_at), 'MMM d, yyyy HH:mm')}
                     </p>
                   </div>
                 ))}

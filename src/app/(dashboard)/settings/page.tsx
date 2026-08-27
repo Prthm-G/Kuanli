@@ -15,6 +15,8 @@ import { TemplateManager } from '@/components/settings/template-manager';
 import { FieldsAndTagsPanel } from '@/components/settings/fields-and-tags-panel';
 import { DealsSettings } from '@/components/settings/deals-settings';
 import { FollowupsPanel } from '@/components/settings/followups-panel';
+import { FeeTemplatesPanel } from '@/components/settings/fee-templates-panel';
+import { CourseContentPanel } from '@/components/settings/course-content-panel';
 import { MembersTab } from '@/components/settings/members-tab';
 import {
   resolveSection,
@@ -59,6 +61,8 @@ export default function SettingsPage() {
     templates: <TemplateManager />,
     fields: <FieldsAndTagsPanel />,
     deals: <DealsSettings />,
+    fees: <FeeTemplatesPanel />,
+    courses: <CourseContentPanel />,
     followups: <FollowupsPanel />,
     members: <MembersTab />,
   };

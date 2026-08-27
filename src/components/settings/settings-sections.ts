@@ -2,6 +2,7 @@ import {
   BellRing,
   Coins,
   FileText,
+  GraduationCap,
   LayoutGrid,
   Palette,
   PlugZap,
@@ -9,6 +10,7 @@ import {
   Tags,
   User,
   UsersRound,
+  Wallet,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -29,6 +31,8 @@ export const SETTINGS_SECTIONS = [
   'templates',
   'fields',
   'deals',
+  'fees',
+  'courses',
   'followups',
   'members',
 ] as const;
@@ -92,6 +96,18 @@ export const SECTION_META: Record<SettingsSection, SectionMeta> = {
     id: 'deals',
     label: 'Deals & currency',
     icon: Coins,
+    group: 'workspace',
+  },
+  fees: {
+    id: 'fees',
+    label: 'Fee plans',
+    icon: Wallet,
+    group: 'workspace',
+  },
+  courses: {
+    id: 'courses',
+    label: 'Course content',
+    icon: GraduationCap,
     group: 'workspace',
   },
   followups: {

@@ -8,6 +8,7 @@ import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
 import { loadLeadQueue } from '@/lib/queue/queries';
 import type { QueueLead } from '@/lib/queue/types';
+import { sourceLabel } from '@/lib/contacts/source';
 import { Button } from '@/components/ui/button';
 
 /**
@@ -194,7 +195,7 @@ export default function QueuePage() {
                   <Td>{l.customerMessages}</Td>
                   <Td>
                     <span title={l.adHeadline ?? l.adBody ?? undefined}>
-                      {l.adHeadline || l.adBody ? 'Ad' : 'Organic'}
+                      {sourceLabel(l.source)}
                     </span>
                   </Td>
                   <Td>

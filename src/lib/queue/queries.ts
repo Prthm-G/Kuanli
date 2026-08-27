@@ -1,7 +1,7 @@
-import type { SupabaseClient } from "@supabase/supabase-js";
+import type { SupabaseClient } from '@supabase/supabase-js';
 
-import { scoreLead, compareByScore } from "./score";
-import type { QueueLead } from "./types";
+import { scoreLead, compareByScore } from './score';
+import type { QueueLead } from './types';
 
 /**
  * Load the scored counsellor work queue via the `lead_queue` RPC
@@ -14,9 +14,9 @@ import type { QueueLead } from "./types";
 export async function loadLeadQueue(
   supabase: SupabaseClient,
   accountId: string,
-  now: Date = new Date(),
+  now: Date = new Date()
 ): Promise<QueueLead[]> {
-  const { data, error } = await supabase.rpc("lead_queue", {
+  const { data, error } = await supabase.rpc('lead_queue', {
     p_account_id: accountId,
   });
 
@@ -39,6 +39,7 @@ export async function loadLeadQueue(
     interest_specialization: string | null;
     ad_headline: string | null;
     ad_body: string | null;
+    source: string | null;
     customer_messages: number;
     last_customer_at: string | null;
     last_agent_at: string | null;
@@ -59,6 +60,7 @@ export async function loadLeadQueue(
     specialization: r.interest_specialization ?? null,
     adHeadline: r.ad_headline ?? null,
     adBody: r.ad_body ?? null,
+    source: (r.source as QueueLead['source']) ?? 'organic',
     customerMessages: Number(r.customer_messages ?? 0),
     lastCustomerAt: r.last_customer_at ?? null,
     lastAgentAt: r.last_agent_at ?? null,
@@ -68,10 +70,12 @@ export async function loadLeadQueue(
         hasUniversity: !!r.interest_university,
         hasCourse: !!r.interest_course,
         hasSpecialization: !!r.interest_specialization,
-        lastCustomerAt: r.last_customer_at ? new Date(r.last_customer_at) : null,
+        lastCustomerAt: r.last_customer_at
+          ? new Date(r.last_customer_at)
+          : null,
         lastAgentAt: r.last_agent_at ? new Date(r.last_agent_at) : null,
       },
-      now,
+      now
     ),
   }));
 
