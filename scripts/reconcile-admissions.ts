@@ -483,10 +483,11 @@ COMMIT;
 `);
 
 w('verify.sql', `
--- Read-only. Run after every stage.
-SELECT 'staged rows'            AS check, count(*)::text AS value FROM ${STAGING}
-UNION ALL SELECT 'unresolved contact_id', count(*)::text FROM ${STAGING} WHERE contact_id IS NULL
-UNION ALL SELECT 'contacts from excel',   count(*)::text FROM contacts WHERE source_detail = 'excel-migration'
+-- Read-only. Safe to run at ANY point, including before stage 0: it does not
+-- reference this pass's staging table, so it works as a baseline too. Stage 0
+-- and stage A report their own staged-row counts.
+SELECT 'contacts from excel'    AS check, count(*)::text AS value
+  FROM contacts WHERE source_detail = 'excel-migration'
 UNION ALL SELECT 'fee plans',             count(*)::text FROM student_fee_plans
 UNION ALL SELECT 'negative outstanding',  count(*)::text FROM (
   SELECT p.contact_id,
