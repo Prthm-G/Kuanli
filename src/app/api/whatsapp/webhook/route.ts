@@ -18,6 +18,18 @@ import {
   statusesOverwritableBy,
 } from '@/lib/whatsapp/message-status';
 
+// Business numbers whose AI replies are switched off, as a comma-separated list
+// of phone_number_ids in AI_DISABLED_PHONE_NUMBER_IDS. Read per call rather than
+// cached at module load so the value is whatever the running process was started
+// with, and an empty or unset variable disables nothing.
+function isPhoneNumberAiDisabled(phoneNumberId: string): boolean {
+  return (process.env.AI_DISABLED_PHONE_NUMBER_IDS ?? '')
+    .split(',')
+    .map((id) => id.trim())
+    .filter(Boolean)
+    .includes(phoneNumberId);
+}
+
 // ===== n8n WEBHOOK FORWARDING =====
 async function forwardToN8n(eventType: string, data: Record<string, unknown>) {
   const webhookUrl = process.env.N8N_WEBHOOK_URL;
@@ -838,7 +850,15 @@ async function processMessage(
   // Gating the forward is what disables the reply: this is the only n8n call
   // site, and the workflow it triggers exists solely to produce the AI answer.
   // Inbound is still stored, tagged and shown in the inbox as normal.
-  if (conversation.bot_active === false) {
+  //
+  // AI_DISABLED_PHONE_NUMBER_IDS silences a whole business number the same way,
+  // for when a number is being wound down or handed to humans. Comma-separated
+  // phone_number_ids; unset means nothing is silenced. It is checked here rather
+  // than per conversation so new threads on that number are covered too.
+  if (
+    conversation.bot_active === false ||
+    isPhoneNumberAiDisabled(phoneNumberId)
+  ) {
     console.log(
       '[webhook] AI replies disabled, skipping n8n forward for conversation',
       conversation.id
