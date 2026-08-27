@@ -44,7 +44,7 @@ export function normalizeIndianPhone(raw: string | undefined | null): PhoneResul
 /* -------------------------------------------------------------------- money */
 
 /**
- * `NO` → 0; a plain number → itself; anything else → null (unparseable).
+ * `NO` and `NIL` → 0; a plain number → itself; anything else → null (unparseable).
  *
  * Blank is column-dependent and the caller must say which it means: an empty
  * FEE DUE or DISC. genuinely means zero, but an empty TOTAL FEE means the
@@ -58,7 +58,7 @@ export function parseMoneyish(
   const { blankIsZero = true } = opts;
   const v = (raw ?? '').trim();
   if (!v) return blankIsZero ? 0 : null;
-  if (/^no$/i.test(v)) return 0;
+  if (/^(no|nil)$/i.test(v)) return 0;
   if (/^\d+(\.\d+)?$/.test(v)) return Number(v);
   return null;
 }

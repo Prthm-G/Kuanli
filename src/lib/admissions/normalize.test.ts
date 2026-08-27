@@ -46,6 +46,11 @@ describe('parseMoneyish', () => {
     expect(parseMoneyish('no ')).toBe(0);
   });
 
+  it('treats the office shorthand NIL as zero', () => {
+    expect(parseMoneyish('NIL')).toBe(0);
+    expect(parseMoneyish(' nil ')).toBe(0);
+  });
+
   it('treats blank as zero by default (FEE DUE / DISC. semantics)', () => {
     expect(parseMoneyish('')).toBe(0);
   });
