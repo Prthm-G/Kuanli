@@ -47,9 +47,10 @@ export function normalizeIndianPhone(raw: string | undefined | null): PhoneResul
  * `NO` and `NIL` → 0; a plain number → itself; anything else → null (unparseable).
  *
  * Blank is column-dependent and the caller must say which it means: an empty
- * FEE DUE or DISC. genuinely means zero, but an empty TOTAL FEE means the
- * office never recorded the price — booking that as 0 would invent a free
- * course and report the student as overpaid.
+ * DISC. genuinely means zero, but an empty TOTAL FEE or FEE DUE means the
+ * office never recorded that figure. Booking a blank TOTAL FEE as 0 would
+ * invent a free course; booking a blank FEE DUE as 0 would assert the student
+ * owes nothing and make every partly-paid row look like a mismatch.
  */
 export function parseMoneyish(
   raw: string | undefined | null,
@@ -147,7 +148,8 @@ const SPEC_ALIASES: Record<string, string> = {
   HIS: 'History', HIST: 'History', HISTORY: 'History',
   ENG: 'English', ENGLISH: 'English',
   PBI: 'Punjabi', PUNJABI: 'Punjabi',
-  POL: 'Polscience', POLSCI: 'Polscience', POLSCIENCE: 'Polscience',
+  POL: 'Polscience', POLSC: 'Polscience', POLSCI: 'Polscience',
+  POLSCIENCE: 'Polscience',
   POLITICALSCIENCE: 'Polscience',
   EDU: 'Education', EDUCATION: 'Education',
   ECO: 'Economics', ECONOMICS: 'Economics',

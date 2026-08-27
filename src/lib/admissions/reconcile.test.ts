@@ -37,6 +37,24 @@ describe('parseAdmissionSheet', () => {
     expect(rows[0].secondaryPhone).toBe('919000000002');
   });
 
+  it('reads a blank FEE DUE as unrecorded, not as zero', () => {
+    // Blank means the office never wrote a due figure. Booking it as 0 asserts
+    // the student owes nothing, and every partly-paid row then looks wrong.
+    const { rows } = parseAdmissionSheet('2026-1', sheet({
+      B: 'Student With No Due Recorded', J: '9000000001', L: '8100', M: '1000',
+    }));
+    expect(rows[0].feeDue).toBeNull();
+    expect(rows[0].unparseableMoney).toEqual([]);
+  });
+
+  it('still reports a FEE DUE that is written but unreadable', () => {
+    const { rows } = parseAdmissionSheet('2026-1', sheet({
+      B: 'Student With A Junk Due', J: '9000000001', L: '8100', M: '1000', N: 'ask sir',
+    }));
+    expect(rows[0].feeDue).toBeNull();
+    expect(rows[0].unparseableMoney).toEqual(['FEE DUE="ask sir"']);
+  });
+
   it('sums a multi-instalment fee cell', () => {
     const { rows } = parseAdmissionSheet('2025-2', sheet({
       B: 'A', J: '9000000001', L: '8100', M: '3600+3500', N: 'NO', O: '1000',
@@ -59,6 +77,25 @@ describe('parseAdmissionSheet', () => {
   it('carries mode and intake from the sheet name', () => {
     const { rows } = parseAdmissionSheet('2025-2 ONLINE', sheet({ B: 'A', J: '9000000001' }));
     expect(rows[0]).toMatchObject({ mode: 'online', intakeYear: '25', intakeSession: '2' });
+  });
+});
+
+describe('reconcile fee-mismatch gating', () => {
+  it('does not raise fee-mismatch when the sheet recorded no due at all', () => {
+    const { rows } = parseAdmissionSheet('2026-1', sheet({
+      B: 'Partly Paid No Due', J: '9000000001', L: '8100', M: '1000',
+    }));
+    const res = reconcile(rows);
+    expect(res.flags.filter((f) => f.code === 'fee-mismatch')).toEqual([]);
+    expect(res.importable[0].outstanding).toBe(7100);
+  });
+
+  it('still raises fee-mismatch when the sheet states a due that disagrees', () => {
+    const { rows } = parseAdmissionSheet('2026-1', sheet({
+      B: 'Partly Paid Wrong Due', J: '9000000001', L: '8100', M: '1000', N: '6500',
+    }));
+    const res = reconcile(rows);
+    expect(res.flags.map((f) => f.code)).toContain('fee-mismatch');
   });
 });
 

@@ -132,6 +132,7 @@ describe('normalizeCourse', () => {
     ['MA(ENG)', 'English'],
     ['MA PBI', 'Punjabi'],
     ['MA(pol sci)', 'Polscience'],
+    ['MA POL SC', 'Polscience'],
     ['MA(EDU)', 'Education'],
   ])('extracts the specialization from %s', (input, spec) => {
     const r = normalizeCourse(input);

@@ -152,7 +152,7 @@ export function parseAdmissionSheet(
 
     const totalFee = parseMoneyish(get(r, col.totalFee), { blankIsZero: false });
     const paidCell = parseFeeCell(get(r, col.feePaid));
-    const feeDue = parseMoneyish(get(r, col.feeDue));
+    const feeDue = parseMoneyish(get(r, col.feeDue), { blankIsZero: false });
     const discount = parseMoneyish(get(r, col.discount));
 
     const unparseableMoney: string[] = [];
@@ -161,7 +161,9 @@ export function parseAdmissionSheet(
       unparseableMoney.push(`TOTAL FEE="${get(r, col.totalFee)}"`);
     }
     if (paidCell === null) unparseableMoney.push(`FEE PAID="${get(r, col.feePaid)}"`);
-    if (feeDue === null) unparseableMoney.push(`FEE DUE="${get(r, col.feeDue)}"`);
+    if (feeDue === null && get(r, col.feeDue)) {
+      unparseableMoney.push(`FEE DUE="${get(r, col.feeDue)}"`);
+    }
     if (discount === null) unparseableMoney.push(`DISC="${get(r, col.discount)}"`);
 
     const rawPaymentDate = get(r, col.payDate);
