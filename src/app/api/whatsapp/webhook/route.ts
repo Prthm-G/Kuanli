@@ -639,6 +639,18 @@ async function handleStatusUpdate(status: WhatsAppStatus) {
   if (status.status === 'delivered') update.delivered_at = tsIso;
   if (status.status === 'read') update.read_at = tsIso;
 
+  // Same reason as on `messages`, but this is the table where it matters most:
+  // broadcasts send marketing templates, and the two failures that define them
+  // are 131049 (per-user marketing cap) and 131050 (recipient opted out of
+  // marketing). Both were previously recorded as a bare 'failed'. The column
+  // already existed and was only ever written by the client-side send path.
+  // Code is prefixed rather than given its own column because the existing
+  // column is free text and this needs no migration.
+  if (failure) {
+    update.error_message =
+      `${failure.code}: ${failure.error_data?.details ?? failure.title ?? ''}`.trim();
+  }
+
   await supabaseAdmin()
     .from('broadcast_recipients')
     .update(update)
