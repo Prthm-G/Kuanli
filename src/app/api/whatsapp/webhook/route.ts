@@ -17,6 +17,7 @@ import {
   normalizeMessageStatus,
   statusesOverwritableBy,
 } from '@/lib/whatsapp/message-status';
+import type { MessageStatus } from '@/types';
 
 // Business numbers whose AI replies are switched off, as a comma-separated list
 // of phone_number_ids in AI_DISABLED_PHONE_NUMBER_IDS. Read per call rather than
@@ -148,6 +149,25 @@ interface WhatsAppMessageEcho extends WhatsAppMessage {
   to: string;
 }
 
+// Outgoing message status. `errors` is present only on a send or delivery
+// failure, and it is the only thing that says WHY: without it a row reads
+// 'failed' with no cause. Branch on `code`; per Meta's error codes reference
+// `title` and `message` carry the same value and titles are on a deprecation
+// path, so `error_data.details` is the string worth keeping.
+interface WhatsAppStatus {
+  id: string;
+  status: string;
+  timestamp: string;
+  recipient_id: string;
+  errors?: Array<{
+    code: number;
+    title?: string;
+    message?: string;
+    error_data?: { details?: string };
+    href?: string;
+  }>;
+}
+
 interface WhatsAppWebhookEntry {
   id: string;
   changes: Array<{
@@ -163,12 +183,7 @@ interface WhatsAppWebhookEntry {
       }>;
       messages?: WhatsAppMessage[];
       message_echoes?: WhatsAppMessageEcho[];
-      statuses?: Array<{
-        id: string;
-        status: string;
-        timestamp: string;
-        recipient_id: string;
-      }>;
+      statuses?: WhatsAppStatus[];
     };
     field: string;
   }>;
@@ -557,13 +572,22 @@ function isValidStatusTransition(current: string, incoming: string): boolean {
   return ii > ci;
 }
 
-async function handleStatusUpdate(status: {
-  id: string;
-  status: string;
-  timestamp: string;
-  recipient_id: string;
-}) {
+async function handleStatusUpdate(status: WhatsAppStatus) {
   const nextStatus = normalizeMessageStatus(status.status);
+
+  // Meta explains a failure in errors[0] and nowhere else. Logged before the
+  // write so the cause is visible even when the row is not eligible for the
+  // update below (a late 'failed' after 'delivered', say).
+  const failure = status.errors?.[0];
+  if (failure) {
+    console.warn(
+      '[webhook] message %s failed: code=%s %s',
+      status.id,
+      failure.code,
+      failure.error_data?.details ?? failure.title ?? ''
+    );
+  }
+
   if (nextStatus === null) {
     console.warn(
       '[webhook] ignoring unrecognised message status:',
@@ -574,9 +598,23 @@ async function handleStatusUpdate(status: {
     // Empty means nothing may advance to `nextStatus` (it is already at or past
     // it, or terminal), so there is no row to touch.
     if (overwritable.length > 0) {
+      // One statement, so the reason lands atomically with the status it
+      // explains. A second UPDATE would race with concurrent webhooks for the
+      // same wamid, which is the reason the status predicate is inline too.
+      const patch: {
+        status: MessageStatus;
+        error_code?: number;
+        error_details?: string | null;
+      } = { status: nextStatus };
+
+      if (failure) {
+        patch.error_code = failure.code;
+        patch.error_details = failure.error_data?.details ?? failure.title ?? null;
+      }
+
       const { error: msgErr } = await supabaseAdmin()
         .from('messages')
-        .update({ status: nextStatus })
+        .update(patch)
         .eq('message_id', status.id)
         .in('status', overwritable);
 
