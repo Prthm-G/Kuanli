@@ -19,6 +19,35 @@ all hang off it.
 
 This runs in production against real applicant traffic.
 
+## Screenshots
+
+**Shared inbox.** The conversation is the record. Each thread carries the contact,
+a live countdown on the 24 hour service window, tags, the linked deal, and the
+follow-up log, so a counsellor never has to leave the thread to know where the
+applicant stands.
+
+![Kuanli shared inbox](public/screenshots/inbox.png)
+
+**Pipeline board.** One pipeline per intake. Deals group by stage with weighted
+value, and every card shows how long the applicant has been awaiting a reply.
+
+![Kuanli pipeline board](public/screenshots/pipelines.png)
+
+<table>
+<tr>
+<td width="50%"><b>Contacts</b><br><img src="public/screenshots/contacts.png" alt="Contact list"></td>
+<td width="50%"><b>Dashboard</b><br><img src="public/screenshots/dashboard.png" alt="Dashboard"></td>
+</tr>
+<tr>
+<td><b>Broadcasts</b><br><img src="public/screenshots/broadcasts.png" alt="Template broadcasts"></td>
+<td><b>Analytics</b><br><img src="public/screenshots/analytics.png" alt="Analytics"></td>
+</tr>
+</table>
+
+Every screenshot comes from a seeded development instance. The consultancy, the
+universities, and every contact name and phone number in them are invented. No
+applicant data appears in this repository.
+
 ## Architecture
 
 ```mermaid
