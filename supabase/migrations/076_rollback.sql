@@ -8,7 +8,7 @@
 BEGIN;
 SET LOCAL lock_timeout = '5s';
 
-ALTER TABLE messages DROP COLUMN IF EXISTS error_code;
-ALTER TABLE messages DROP COLUMN IF EXISTS error_details;
+ALTER TABLE public.messages DROP COLUMN IF EXISTS error_code;
+ALTER TABLE public.messages DROP COLUMN IF EXISTS error_details;
 
 COMMIT;

@@ -24,6 +24,11 @@
 -- catalogue-only change. No table rewrite and no long lock on what is the
 -- largest table in the schema.
 --
+-- Schema-qualified deliberately. A Supabase database also has realtime.messages,
+-- owned by a different role. An unqualified ALTER resolves by search_path, which
+-- happens to be right here and would be wrong for anyone whose search_path
+-- differs. Qualifying costs nothing and removes the ambiguity.
+--
 -- Verified against developers.facebook.com status webhook reference
 -- (updated 2026-05-21) and error codes reference (updated 2026-06-18) on
 -- 2026-08-31.
@@ -36,12 +41,12 @@
 BEGIN;
 SET LOCAL lock_timeout = '5s';
 
-ALTER TABLE messages ADD COLUMN IF NOT EXISTS error_code INTEGER;
-ALTER TABLE messages ADD COLUMN IF NOT EXISTS error_details TEXT;
+ALTER TABLE public.messages ADD COLUMN IF NOT EXISTS error_code INTEGER;
+ALTER TABLE public.messages ADD COLUMN IF NOT EXISTS error_details TEXT;
 
-COMMENT ON COLUMN messages.error_code IS
+COMMENT ON COLUMN public.messages.error_code IS
   'Meta error code from the status webhook errors[0].code. Branch on this, not on any title.';
-COMMENT ON COLUMN messages.error_details IS
+COMMENT ON COLUMN public.messages.error_details IS
   'Meta errors[0].error_data.details. Falls back to errors[0].title when details is absent.';
 
 COMMIT;
