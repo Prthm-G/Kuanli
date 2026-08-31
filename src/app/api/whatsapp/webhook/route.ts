@@ -609,7 +609,8 @@ async function handleStatusUpdate(status: WhatsAppStatus) {
 
       if (failure) {
         patch.error_code = failure.code;
-        patch.error_details = failure.error_data?.details ?? failure.title ?? null;
+        patch.error_details =
+          failure.error_data?.details ?? failure.title ?? null;
       }
 
       const { error: msgErr } = await supabaseAdmin()
