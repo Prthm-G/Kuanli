@@ -33,14 +33,23 @@ value, and every card shows how long the applicant has been awaiting a reply.
 
 ![Kuanli pipeline board](public/screenshots/pipelines.png)
 
+**Application tracker.** The per-university document checklist, with each file's
+verification state on the card. Different institutions require different papers,
+so the checklist is per university rather than one global list.
+
+![Kuanli application tracker](public/screenshots/documents.png)
+
 <table>
 <tr>
+<td width="50%"><b>Follow-ups</b><br><img src="public/screenshots/followups.png" alt="Follow-up call sheet"></td>
 <td width="50%"><b>Contacts</b><br><img src="public/screenshots/contacts.png" alt="Contact list"></td>
-<td width="50%"><b>Dashboard</b><br><img src="public/screenshots/dashboard.png" alt="Dashboard"></td>
 </tr>
 <tr>
-<td><b>Broadcasts</b><br><img src="public/screenshots/broadcasts.png" alt="Template broadcasts"></td>
+<td><b>Dashboard</b><br><img src="public/screenshots/dashboard.png" alt="Dashboard"></td>
 <td><b>Analytics</b><br><img src="public/screenshots/analytics.png" alt="Analytics"></td>
+</tr>
+<tr>
+<td colspan="2"><b>Broadcasts</b><br><img src="public/screenshots/broadcasts.png" alt="Template broadcasts"></td>
 </tr>
 </table>
 
