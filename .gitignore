@@ -53,3 +53,4 @@ NUL
 
 # daily-commit-and-push.sh's own log, never committed
 .auto-commit.log
+.auto-commit.log
