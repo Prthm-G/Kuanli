@@ -4,6 +4,10 @@ import { createHmac } from 'node:crypto';
 import { decrypt, encrypt, isLegacyFormat } from '@/lib/whatsapp/encryption';
 import { getMediaUrl } from '@/lib/whatsapp/meta-api';
 import { mirrorInboundMedia } from '@/lib/whatsapp/mirror-inbound-media';
+import {
+  classifyInboundMessage,
+  type ClassifiableInboundMessage,
+} from '@/lib/whatsapp/inbound-classification';
 import { normalizePhone } from '@/lib/whatsapp/phone-utils';
 import { findExistingContact, isUniqueViolation } from '@/lib/contacts/dedupe';
 import { verifyMetaWebhookSignature } from '@/lib/whatsapp/webhook-signature';
@@ -81,7 +85,7 @@ function supabaseAdmin() {
   return _adminClient;
 }
 
-interface WhatsAppMessage {
+interface WhatsAppMessage extends ClassifiableInboundMessage {
   id: string;
   from: string;
   timestamp: string;
@@ -803,12 +807,23 @@ async function processMessage(
     return;
   }
 
-  const { contentText, mediaUrl, mediaType, interactiveReplyId } =
-    await parseMessageContent(
-      message,
-      accessToken,
-      mirrorMedia ? { accountId } : null
-    );
+  // Types the content parser cannot read (unsupported, revoke, edit, button)
+  // used to land as a blank customer message. See inbound-classification.ts.
+  const special = classifyInboundMessage(message);
+  if (special && !special.store) return;
+
+  const { contentText, mediaUrl, mediaType, interactiveReplyId } = special
+    ? {
+        contentText: special.contentText,
+        mediaUrl: null,
+        mediaType: null,
+        interactiveReplyId: special.interactiveReplyId,
+      }
+    : await parseMessageContent(
+        message,
+        accessToken,
+        mirrorMedia ? { accountId } : null
+      );
 
   let replyToInternalId: string | null = null;
   if (message.context?.id) {
@@ -846,22 +861,26 @@ async function processMessage(
     .eq('sender_type', 'customer');
   const isFirstInboundMessage = (priorCustomerMsgCount ?? 0) === 0;
 
-  const { error: msgError } = await supabaseAdmin().from('messages').insert({
-    conversation_id: conversation.id,
-    sender_type: 'customer',
-    content_type: contentType,
-    content_text: contentText,
-    media_url: mediaUrl,
-    // Meta told us the MIME type; recording it means a download does not
-    // have to guess an extension from bytes it has not fetched yet
-    // (migration 051).
-    media_type: mediaType,
-    message_id: message.id,
-    status: 'delivered',
-    created_at: messageCreatedAt,
-    reply_to_message_id: replyToInternalId,
-    interactive_reply_id: interactiveReplyId,
-  });
+  const { error: msgError } = await supabaseAdmin()
+    .from('messages')
+    .insert({
+      conversation_id: conversation.id,
+      sender_type: 'customer',
+      content_type: contentType,
+      content_text: contentText,
+      media_url: mediaUrl,
+      // Meta told us the MIME type; recording it means a download does not
+      // have to guess an extension from bytes it has not fetched yet
+      // (migration 051).
+      media_type: mediaType,
+      message_id: message.id,
+      status: 'delivered',
+      created_at: messageCreatedAt,
+      reply_to_message_id: replyToInternalId,
+      interactive_reply_id: interactiveReplyId,
+      error_code: special?.errorCode ?? null,
+      error_details: special?.errorDetails ?? null,
+    });
 
   if (msgError) {
     if (isUniqueViolation(msgError)) {
@@ -914,6 +933,13 @@ async function processMessage(
       '[webhook] AI replies disabled, skipping n8n forward for conversation',
       conversation.id
     );
+  } else if (special && !special.forwardToBot) {
+    // A label or an edit is not something a customer asked; the bot would
+    // only answer our own placeholder text.
+    console.log(
+      `[webhook] ${message.type} message, skipping n8n forward for conversation`,
+      conversation.id
+    );
   } else {
     forwardToN8n('message.received', {
       raw_webhook: {
@@ -953,22 +979,29 @@ async function processMessage(
     userId: configOwnerUserId,
     contactId: contactRecord.id,
     conversationId: conversation.id,
-    message: interactiveReplyId
-      ? {
-          kind: 'interactive_reply',
-          reply_id: interactiveReplyId,
-          reply_title: contentText ?? '',
-          meta_message_id: message.id,
-        }
-      : {
-          kind: 'text',
-          text: contentText ?? message.text?.body ?? '',
-          meta_message_id: message.id,
-        },
+    // A template button reply carries a payload, not a flow node's reply id,
+    // so flows see it as the text the customer tapped.
+    message:
+      interactiveReplyId && !special
+        ? {
+            kind: 'interactive_reply',
+            reply_id: interactiveReplyId,
+            reply_title: contentText ?? '',
+            meta_message_id: message.id,
+          }
+        : {
+            kind: 'text',
+            text: special
+              ? special.automationText
+              : (contentText ?? message.text?.body ?? ''),
+            meta_message_id: message.id,
+          },
     isFirstInboundMessage,
   });
 
-  const inboundText = contentText ?? message.text?.body ?? '';
+  const inboundText = special
+    ? special.automationText
+    : (contentText ?? message.text?.body ?? '');
   const automationTriggers: (
     | 'new_contact_created'
     | 'first_inbound_message'
