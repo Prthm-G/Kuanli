@@ -7,6 +7,7 @@ import {
   canManageMembers,
   canSendMessages,
   canTransferOwnership,
+  canViewGrowth,
   canViewOnly,
   hasMinRole,
   isAccountRole,
@@ -126,5 +127,12 @@ describe("capability predicates", () => {
     expect(canTransferOwnership("admin")).toBe(false);
     expect(canTransferOwnership("agent")).toBe(false);
     expect(canTransferOwnership("viewer")).toBe(false);
+  });
+
+  it("canViewGrowth: owner only", () => {
+    expect(canViewGrowth("owner")).toBe(true);
+    expect(canViewGrowth("admin")).toBe(false);
+    expect(canViewGrowth("agent")).toBe(false);
+    expect(canViewGrowth("viewer")).toBe(false);
   });
 });

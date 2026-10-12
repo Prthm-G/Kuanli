@@ -22,6 +22,7 @@ import {
   Radio,
   Settings,
   Shield,
+  TrendingUp,
   User,
   UserCog,
   Users,
@@ -30,7 +31,7 @@ import {
   X,
   Zap,
 } from 'lucide-react';
-import type { AccountRole } from '@/lib/auth/roles';
+import { canViewGrowth, type AccountRole } from '@/lib/auth/roles';
 
 // Per-role chip metadata used in the sidebar's account strip + the
 // Members tab roster. Keeping this near both consumers in a single
@@ -83,6 +84,8 @@ interface NavItem {
    * Purely informational — doesn't affect routing or access.
    */
   beta?: boolean;
+  /** Shown only to the account owner (see `canViewGrowth`). */
+  ownerOnly?: boolean;
 }
 
 const navItems: NavItem[] = [
@@ -95,6 +98,7 @@ const navItems: NavItem[] = [
   { href: '/applications', label: 'Applications', icon: FileCheck },
   { href: '/reports', label: 'EOD Report', icon: ClipboardList },
   { href: '/analytics', label: 'Analytics', icon: BarChart3 },
+  { href: '/growth', label: 'Growth', icon: TrendingUp, ownerOnly: true },
   { href: '/broadcasts', label: 'Broadcasts', icon: Radio },
   { href: '/automations', label: 'Automations', icon: Zap },
   { href: '/flows', label: 'Flows', icon: Workflow, beta: true },
@@ -213,7 +217,13 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
         {/* Main navigation */}
         <nav className="flex-1 overflow-y-auto px-3 py-4">
           <ul className="flex flex-col gap-1">
-            {navItems.map((item) => {
+            {navItems
+              .filter(
+                (item) =>
+                  !item.ownerOnly ||
+                  (accountRole !== null && canViewGrowth(accountRole))
+              )
+              .map((item) => {
               const isActive =
                 pathname === item.href ||
                 (item.href !== '/dashboard' && pathname.startsWith(item.href));

@@ -107,3 +107,12 @@ export function canDeleteAccount(role: AccountRole): boolean {
 export function canTransferOwnership(role: AccountRole): boolean {
   return role === "owner";
 }
+
+/**
+ * Owner only: the /growth page (ad spend, cost per enrolment, budget
+ * proposals). Mirrors the owner-only RLS policy and RPC check in
+ * migration 078, which are the real gate.
+ */
+export function canViewGrowth(role: AccountRole): boolean {
+  return role === "owner";
+}
