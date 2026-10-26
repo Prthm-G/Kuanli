@@ -100,15 +100,16 @@ function label(contentText: string): InboundClassification {
 
 /**
  * Whether the bot gets this message, and whether it gets a stand-in greeting
- * rather than the message itself. `hasReply` is true once any bot or agent
- * message exists on the conversation.
+ * rather than the message itself. `pastFirstContact` is true once the
+ * conversation has an earlier customer message or any bot or agent message.
  */
 export function botForwardFor(
   special: InboundClassification | null,
-  hasReply: boolean
+  pastFirstContact: boolean
 ): { forward: boolean; greet: boolean } {
   if (!special || special.forwardToBot) return { forward: true, greet: false };
-  if (special.greetWhenFirst && !hasReply) return { forward: true, greet: true };
+  if (special.greetWhenFirst && !pastFirstContact)
+    return { forward: true, greet: true };
   return { forward: false, greet: false };
 }
 

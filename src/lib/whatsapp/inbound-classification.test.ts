@@ -186,7 +186,10 @@ describe('botForwardFor', () => {
 
   it('keeps edits away from the bot and buttons going to it', () => {
     expect(botForwardFor(edit, false).forward).toBe(false);
-    expect(botForwardFor(button, true)).toEqual({ forward: true, greet: false });
+    expect(botForwardFor(button, true)).toEqual({
+      forward: true,
+      greet: false,
+    });
   });
 });
 

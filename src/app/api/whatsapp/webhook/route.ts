@@ -705,16 +705,18 @@ async function lookupInternalIdByMetaId(
 // On a lookup error this answers "no reply yet": a second greeting is a small
 // cost next to a lead left in silence.
 async function hasBotOrAgentReply(conversationId: string): Promise<boolean> {
-  const { count, error } = await supabaseAdmin()
-    .from('messages')
-    .select('id', { count: 'exact', head: true })
-    .eq('conversation_id', conversationId)
-    .in('sender_type', ['bot', 'agent']);
-  if (error) {
+  try {
+    const { count, error } = await supabaseAdmin()
+      .from('messages')
+      .select('id', { count: 'exact', head: true })
+      .eq('conversation_id', conversationId)
+      .in('sender_type', ['bot', 'agent']);
+    if (error) throw error;
+    return (count ?? 0) > 0;
+  } catch (error) {
     console.error('[webhook] failed to check for an earlier reply:', error);
     return false;
   }
-  return (count ?? 0) > 0;
 }
 
 async function handleReaction(
@@ -942,13 +944,15 @@ async function processMessage(
   // for when a number is being wound down or handed to humans. Comma-separated
   // phone_number_ids; unset means nothing is silenced. It is checked here rather
   // than per conversation so new threads on that number are covered too.
-  // An unreadable message (Meta 131051/131060) on a chat nobody has answered
-  // is a lead's first contact. The bot is handed a plain greeting as a text
-  // message (n8n drops any other type) so they get the opening question.
-  const hasReply = special?.greetWhenFirst
-    ? await hasBotOrAgentReply(conversation.id)
+  // An unreadable message (Meta 131051/131060) as the first inbound of a chat
+  // nobody has answered is a lead's first contact. The bot is handed a plain
+  // greeting as a text message (n8n drops any other type) so they get the
+  // opening question. Requiring the first inbound keeps a burst of two
+  // unreadable messages from being greeted twice before the reply is stored.
+  const pastFirstContact = special?.greetWhenFirst
+    ? !isFirstInboundMessage || (await hasBotOrAgentReply(conversation.id))
     : false;
-  const botForward = botForwardFor(special, hasReply);
+  const botForward = botForwardFor(special, pastFirstContact);
 
   if (
     conversation.bot_active === false ||
