@@ -57,7 +57,17 @@ export interface InboundClassification {
   forwardToBot: boolean;
   /** Text handed to flows and automations. Empty for non-content events, as before. */
   automationText: string;
+  /**
+   * Meta could not hand us the content, but someone did write to us. Most
+   * first messages on 79019 arrive like this (9 of 10 in Oct 2026), and with
+   * forwardToBot false each of those leads got silence. When nobody has
+   * replied yet, the bot greets them instead (see botForwardFor).
+   */
+  greetWhenFirst: boolean;
 }
+
+/** What the bot is handed in place of an unreadable first message. */
+export const FIRST_CONTACT_GREETING = 'Hi';
 
 /** Written by migration 077 over the blanks stored before this classifier existed. */
 export const BACKFILL_LABEL =
@@ -84,7 +94,22 @@ function label(contentText: string): InboundClassification {
     errorDetails: null,
     forwardToBot: false,
     automationText: '',
+    greetWhenFirst: false,
   };
+}
+
+/**
+ * Whether the bot gets this message, and whether it gets a stand-in greeting
+ * rather than the message itself. `hasReply` is true once any bot or agent
+ * message exists on the conversation.
+ */
+export function botForwardFor(
+  special: InboundClassification | null,
+  hasReply: boolean
+): { forward: boolean; greet: boolean } {
+  if (!special || special.forwardToBot) return { forward: true, greet: false };
+  if (special.greetWhenFirst && !hasReply) return { forward: true, greet: true };
+  return { forward: false, greet: false };
 }
 
 export function classifyInboundMessage(
@@ -107,6 +132,7 @@ export function classifyInboundMessage(
         errorCode: code,
         errorDetails:
           error?.error_data?.details ?? error?.title ?? error?.message ?? null,
+        greetWhenFirst: true,
       };
     }
 

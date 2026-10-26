@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   BACKFILL_LABEL,
+  botForwardFor,
   classifyInboundMessage,
 } from './inbound-classification';
 
@@ -44,6 +45,7 @@ describe('classifyInboundMessage', () => {
       errorDetails: 'This message is currently unavailable.',
       forwardToBot: false,
       automationText: '',
+      greetWhenFirst: true,
     });
   });
 
@@ -59,6 +61,7 @@ describe('classifyInboundMessage', () => {
     expect(result?.errorCode).toBe(131051);
     expect(result?.errorDetails).toBe('Message type unknown');
     expect(result?.forwardToBot).toBe(false);
+    expect(result?.greetWhenFirst).toBe(true);
   });
 
   it('still labels an unsupported message that carries no errors array', () => {
@@ -129,6 +132,7 @@ describe('classifyInboundMessage', () => {
       errorDetails: null,
       forwardToBot: true,
       automationText: 'Yes, call me',
+      greetWhenFirst: false,
     });
   });
 
@@ -138,6 +142,51 @@ describe('classifyInboundMessage', () => {
       'Unsupported message type (poll_creation). Check the WhatsApp Business app.'
     );
     expect(result?.forwardToBot).toBe(false);
+  });
+
+  it('only marks Meta unsupported messages as worth a first-contact greeting', () => {
+    expect(
+      classifyInboundMessage({ ...base, type: 'unsupported' })?.greetWhenFirst
+    ).toBe(true);
+    for (const type of ['revoke', 'edit', 'button', 'poll_creation']) {
+      expect(classifyInboundMessage({ ...base, type })?.greetWhenFirst).toBe(
+        false
+      );
+    }
+  });
+});
+
+describe('botForwardFor', () => {
+  const unsupported = classifyInboundMessage({ ...base, type: 'unsupported' });
+  const edit = classifyInboundMessage({ ...base, type: 'edit' });
+  const button = classifyInboundMessage({
+    ...base,
+    type: 'button',
+    button: { text: 'Yes', payload: 'P' },
+  });
+
+  it('forwards a parsed message as itself', () => {
+    expect(botForwardFor(null, false)).toEqual({ forward: true, greet: false });
+    expect(botForwardFor(null, true)).toEqual({ forward: true, greet: false });
+  });
+
+  it('greets an unreadable message while nobody has replied yet', () => {
+    expect(botForwardFor(unsupported, false)).toEqual({
+      forward: true,
+      greet: true,
+    });
+  });
+
+  it('stays silent on an unreadable message once the chat has a reply', () => {
+    expect(botForwardFor(unsupported, true)).toEqual({
+      forward: false,
+      greet: false,
+    });
+  });
+
+  it('keeps edits away from the bot and buttons going to it', () => {
+    expect(botForwardFor(edit, false).forward).toBe(false);
+    expect(botForwardFor(button, true)).toEqual({ forward: true, greet: false });
   });
 });
 

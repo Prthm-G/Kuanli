@@ -5,7 +5,9 @@ import { decrypt, encrypt, isLegacyFormat } from '@/lib/whatsapp/encryption';
 import { getMediaUrl } from '@/lib/whatsapp/meta-api';
 import { mirrorInboundMedia } from '@/lib/whatsapp/mirror-inbound-media';
 import {
+  botForwardFor,
   classifyInboundMessage,
+  FIRST_CONTACT_GREETING,
   type ClassifiableInboundMessage,
 } from '@/lib/whatsapp/inbound-classification';
 import { normalizePhone } from '@/lib/whatsapp/phone-utils';
@@ -700,6 +702,21 @@ async function lookupInternalIdByMetaId(
   return data?.id ?? null;
 }
 
+// On a lookup error this answers "no reply yet": a second greeting is a small
+// cost next to a lead left in silence.
+async function hasBotOrAgentReply(conversationId: string): Promise<boolean> {
+  const { count, error } = await supabaseAdmin()
+    .from('messages')
+    .select('id', { count: 'exact', head: true })
+    .eq('conversation_id', conversationId)
+    .in('sender_type', ['bot', 'agent']);
+  if (error) {
+    console.error('[webhook] failed to check for an earlier reply:', error);
+    return false;
+  }
+  return (count ?? 0) > 0;
+}
+
 async function handleReaction(
   message: WhatsAppMessage,
   conversationId: string,
@@ -925,6 +942,14 @@ async function processMessage(
   // for when a number is being wound down or handed to humans. Comma-separated
   // phone_number_ids; unset means nothing is silenced. It is checked here rather
   // than per conversation so new threads on that number are covered too.
+  // An unreadable message (Meta 131051/131060) on a chat nobody has answered
+  // is a lead's first contact. The bot is handed a plain greeting as a text
+  // message (n8n drops any other type) so they get the opening question.
+  const hasReply = special?.greetWhenFirst
+    ? await hasBotOrAgentReply(conversation.id)
+    : false;
+  const botForward = botForwardFor(special, hasReply);
+
   if (
     conversation.bot_active === false ||
     isPhoneNumberAiDisabled(phoneNumberId)
@@ -933,7 +958,7 @@ async function processMessage(
       '[webhook] AI replies disabled, skipping n8n forward for conversation',
       conversation.id
     );
-  } else if (special && !special.forwardToBot) {
+  } else if (!botForward.forward) {
     // A label or an edit is not something a customer asked; the bot would
     // only answer our own placeholder text.
     console.log(
@@ -941,6 +966,12 @@ async function processMessage(
       conversation.id
     );
   } else {
+    if (botForward.greet) {
+      console.log(
+        `[webhook] ${message.type} first contact, greeting via n8n for conversation`,
+        conversation.id
+      );
+    }
     forwardToN8n('message.received', {
       raw_webhook: {
         entry: [
@@ -949,10 +980,18 @@ async function processMessage(
               {
                 value: {
                   messages: [
-                    {
-                      ...message,
-                      text: { body: contentText ?? message.text?.body ?? '' },
-                    },
+                    botForward.greet
+                      ? {
+                          ...message,
+                          type: 'text',
+                          text: { body: FIRST_CONTACT_GREETING },
+                        }
+                      : {
+                          ...message,
+                          text: {
+                            body: contentText ?? message.text?.body ?? '',
+                          },
+                        },
                   ],
                   contacts: [contact],
                   metadata: { phone_number_id: phoneNumberId },
