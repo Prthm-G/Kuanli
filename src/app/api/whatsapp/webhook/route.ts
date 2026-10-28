@@ -588,11 +588,19 @@ async function handleStatusUpdate(
   // logged and the status update below still runs.
   const priced = pricingRow(status, phoneNumberId);
   if (priced) {
-    const { error: pricingError } = await supabaseAdmin()
-      .from('wa_message_pricing')
-      .upsert(priced, { onConflict: 'message_id', ignoreDuplicates: true });
-    if (pricingError) {
-      console.error('[webhook] failed to store pricing for', status.id, pricingError);
+    try {
+      const { error: pricingError } = await supabaseAdmin()
+        .from('wa_message_pricing')
+        .upsert(priced, { onConflict: 'message_id', ignoreDuplicates: true });
+      if (pricingError) {
+        console.error(
+          '[webhook] failed to store pricing for',
+          status.id,
+          pricingError
+        );
+      }
+    } catch (e) {
+      console.error('[webhook] failed to store pricing for', status.id, e);
     }
   }
 

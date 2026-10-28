@@ -16,10 +16,12 @@ CREATE INDEX IF NOT EXISTS wa_message_pricing_number_time
   ON public.wa_message_pricing (phone_number_id, first_seen_at);
 ALTER TABLE public.wa_message_pricing ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.wa_message_pricing FROM anon, authenticated;
+GRANT SELECT, INSERT ON public.wa_message_pricing TO service_role;
 
 -- Calendar month in UTC. service_non_fep approximates the free-tier count:
 -- service messages outside a free entry point window.
-CREATE OR REPLACE VIEW public.wa_service_usage_monthly AS
+CREATE OR REPLACE VIEW public.wa_service_usage_monthly
+WITH (security_invoker = true) AS
 SELECT phone_number_id,
        date_trunc('month', first_seen_at AT TIME ZONE 'UTC') AS month,
        count(*)                                                AS api_messages,
@@ -29,3 +31,4 @@ SELECT phone_number_id,
 FROM public.wa_message_pricing
 GROUP BY 1, 2;
 REVOKE ALL ON public.wa_service_usage_monthly FROM anon, authenticated;
+GRANT SELECT ON public.wa_service_usage_monthly TO service_role;
