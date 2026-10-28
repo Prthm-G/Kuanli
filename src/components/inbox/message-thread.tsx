@@ -1193,16 +1193,25 @@ export function MessageThread({
         )}
       </div>
 
-      {/* Composer */}
-      <MessageComposer
-        conversationId={conversation.id}
-        sessionExpired={sessionInfo.expired}
-        onSend={handleSend}
-        onSendMedia={handleSendMedia}
-        onOpenTemplates={handleOpenTemplates}
-        replyTo={replyTo}
-        onClearReply={() => setReplyTo(null)}
-      />
+      {/* Composer: admins only (SP3b). Counsellors reply from the WhatsApp Business app. */}
+      <RequireRole
+        min="admin"
+        fallback={
+          <div className="border-t px-4 py-3 text-sm text-muted-foreground">
+            Read-only. Reply from your WhatsApp Business app.
+          </div>
+        }
+      >
+        <MessageComposer
+          conversationId={conversation.id}
+          sessionExpired={sessionInfo.expired}
+          onSend={handleSend}
+          onSendMedia={handleSendMedia}
+          onOpenTemplates={handleOpenTemplates}
+          replyTo={replyTo}
+          onClearReply={() => setReplyTo(null)}
+        />
+      </RequireRole>
 
       <TemplatePicker
         open={templateModalOpen}

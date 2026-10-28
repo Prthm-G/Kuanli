@@ -90,6 +90,17 @@ export function canSendMessages(role: AccountRole): boolean {
 }
 
 /**
+ * Sending through the WhatsApp Cloud API from Kuanli: owner / admin only.
+ * SP3b (2026-10-28): every API message counts against 79019's 1,000 free
+ * service messages a month, so counsellors reply from their own WhatsApp
+ * Business app (free) and Kuanli is their read-only record. Admins keep an
+ * emergency send.
+ */
+export function canSendWhatsApp(role: AccountRole): boolean {
+  return hasMinRole(role, "admin");
+}
+
+/**
  * Viewer: read-only across everything. Provided as a positive
  * predicate so UI gates read naturally (`if (canViewOnly(role))`
  * shows the "Read-only" tooltip without inverting `canSendMessages`).

@@ -6,6 +6,7 @@ import {
   canEditSettings,
   canManageMembers,
   canSendMessages,
+  canSendWhatsApp,
   canTransferOwnership,
   canViewGrowth,
   canViewOnly,
@@ -99,6 +100,13 @@ describe("capability predicates", () => {
     expect(canEditSettings("admin")).toBe(true);
     expect(canEditSettings("agent")).toBe(false);
     expect(canEditSettings("viewer")).toBe(false);
+  });
+
+  it("canSendWhatsApp: admin+ only (SP3b: humans reply from the WhatsApp Business app)", () => {
+    expect(canSendWhatsApp("owner")).toBe(true);
+    expect(canSendWhatsApp("admin")).toBe(true);
+    expect(canSendWhatsApp("agent")).toBe(false);
+    expect(canSendWhatsApp("viewer")).toBe(false);
   });
 
   it("canSendMessages: agent+ only", () => {

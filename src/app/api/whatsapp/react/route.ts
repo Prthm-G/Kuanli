@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
+import { canSendWhatsApp, isAccountRole } from '@/lib/auth/roles';
 import { sendReactionMessage } from '@/lib/whatsapp/meta-api';
 import { decrypt } from '@/lib/whatsapp/encryption';
 import { getConfigForConversation } from '@/lib/whatsapp/config-resolver';
@@ -41,13 +42,22 @@ export async function POST(request: Request) {
     // lookups work for teammates who didn't author the rows directly.
     const { data: profile } = await supabase
       .from('profiles')
-      .select('account_id')
+      .select('account_id, account_role')
       .eq('user_id', user.id)
       .maybeSingle();
     const accountId = profile?.account_id as string | undefined;
     if (!accountId) {
       return NextResponse.json(
         { error: 'Your profile is not linked to an account.' },
+        { status: 403 },
+      );
+    }
+
+    // SP3b: only admins send from Kuanli; counsellors use the Business app.
+    const role = profile?.account_role;
+    if (!isAccountRole(role) || !canSendWhatsApp(role)) {
+      return NextResponse.json(
+        { error: 'Sending from Kuanli is limited to admins. Reply from the WhatsApp Business app.' },
         { status: 403 },
       );
     }
