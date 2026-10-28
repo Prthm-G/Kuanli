@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { getCurrentAccount, toErrorResponse } from '@/lib/auth/account'
+import { canSendWhatsApp } from '@/lib/auth/roles'
 import { runAutomationsForTrigger } from '@/lib/automations/engine'
 import type { AutomationTriggerType } from '@/types'
 
@@ -12,6 +13,14 @@ export async function POST(request: Request) {
   let accountId: string
   try {
     const ctx = await getCurrentAccount()
+    // SP3b: automations send via the Cloud API, so this is a send path.
+    // ctx.role is already validated by getCurrentAccount (unknown role throws).
+    if (!canSendWhatsApp(ctx.role)) {
+      return NextResponse.json(
+        { error: 'Sending from Kuanli is limited to admins. Reply from the WhatsApp Business app.' },
+        { status: 403 },
+      )
+    }
     accountId = ctx.accountId
   } catch (err) {
     return toErrorResponse(err)
