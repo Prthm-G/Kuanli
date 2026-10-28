@@ -12,6 +12,7 @@ import {
 } from '@/lib/whatsapp/inbound-classification';
 import { normalizePhone } from '@/lib/whatsapp/phone-utils';
 import { findExistingContact, isUniqueViolation } from '@/lib/contacts/dedupe';
+import { pricingRow, type StatusPricing } from '@/lib/whatsapp/billable';
 import { verifyMetaWebhookSignature } from '@/lib/whatsapp/webhook-signature';
 import { runAutomationsForTrigger } from '@/lib/automations/engine';
 import { dispatchInboundToFlows } from '@/lib/flows/engine';
@@ -165,6 +166,7 @@ interface WhatsAppStatus {
   status: string;
   timestamp: string;
   recipient_id: string;
+  pricing?: StatusPricing;
   errors?: Array<{
     code: number;
     title?: string;
@@ -319,7 +321,7 @@ async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
 
       if (value.statuses) {
         for (const status of value.statuses) {
-          await handleStatusUpdate(status);
+          await handleStatusUpdate(status, value.metadata.phone_number_id);
         }
       }
 
@@ -578,7 +580,22 @@ function isValidStatusTransition(current: string, incoming: string): boolean {
   return ii > ci;
 }
 
-async function handleStatusUpdate(status: WhatsAppStatus) {
+async function handleStatusUpdate(
+  status: WhatsAppStatus,
+  phoneNumberId: string
+) {
+  // SP3b billable counter. Never blocks status handling: a failed insert is
+  // logged and the status update below still runs.
+  const priced = pricingRow(status, phoneNumberId);
+  if (priced) {
+    const { error: pricingError } = await supabaseAdmin()
+      .from('wa_message_pricing')
+      .upsert(priced, { onConflict: 'message_id', ignoreDuplicates: true });
+    if (pricingError) {
+      console.error('[webhook] failed to store pricing for', status.id, pricingError);
+    }
+  }
+
   const nextStatus = normalizeMessageStatus(status.status);
 
   // Meta explains a failure in errors[0] and nowhere else. Logged before the
