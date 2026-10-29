@@ -206,7 +206,6 @@ export async function loadStudentAccount(
         'id, contact_id, plan_id, installment_id, paid_at, amount, currency, ' +
           'method, reference, note, status, logged_by, verified_by, verified_at, ' +
           'decision_note, ' +
-          'logged:profiles!payments_logged_by_fkey(full_name), ' +
           'receipts:payment_receipts(id, storage_path, mime_type, created_at)'
       )
       .eq('contact_id', contactId)
@@ -233,41 +232,40 @@ export async function loadStudentAccount(
   }));
 
   type RawPay = Record<string, unknown>;
-  const payments: Payment[] = ((payRes.data ?? []) as unknown as RawPay[]).map(
-    (r) => {
-      // PostgREST types embedded to-one relations loosely; normalise the array
-      // case rather than trusting the shape (same as lib/reports/queries.ts).
-      const logged = Array.isArray(r.logged) ? r.logged[0] : r.logged;
-      return {
-        id: String(r.id),
-        contactId: String(r.contact_id),
-        planId: (r.plan_id as string) ?? null,
-        installmentId: (r.installment_id as string) ?? null,
-        paidAt: String(r.paid_at),
-        amount: n(r.amount),
-        currency: String(r.currency ?? 'INR'),
-        method: r.method as PaymentMethod,
-        reference: (r.reference as string) ?? null,
-        note: (r.note as string) ?? null,
-        status: r.status as PaymentStatus,
-        loggedBy: String(r.logged_by),
-        loggedByName:
-          (logged as { full_name?: string } | null)?.full_name ?? null,
-        verifiedBy: (r.verified_by as string) ?? null,
-        verifiedByName: null,
-        verifiedAt: (r.verified_at as string) ?? null,
-        decisionNote: (r.decision_note as string) ?? null,
-        receipts: (
-          (r.receipts ?? []) as unknown as Record<string, unknown>[]
-        ).map((x) => ({
-          id: String(x.id),
-          storagePath: String(x.storage_path),
-          mimeType: (x.mime_type as string) ?? null,
-          createdAt: String(x.created_at),
-        })),
-      };
-    }
+  const payRows = (payRes.data ?? []) as unknown as RawPay[];
+  const names = await namesByUserId(
+    supabase,
+    payRows.map((r) => String(r.logged_by))
   );
+  const payments: Payment[] = payRows.map((r) => {
+    return {
+      id: String(r.id),
+      contactId: String(r.contact_id),
+      planId: (r.plan_id as string) ?? null,
+      installmentId: (r.installment_id as string) ?? null,
+      paidAt: String(r.paid_at),
+      amount: n(r.amount),
+      currency: String(r.currency ?? 'INR'),
+      method: r.method as PaymentMethod,
+      reference: (r.reference as string) ?? null,
+      note: (r.note as string) ?? null,
+      status: r.status as PaymentStatus,
+      loggedBy: String(r.logged_by),
+      loggedByName: names.get(String(r.logged_by)) ?? null,
+      verifiedBy: (r.verified_by as string) ?? null,
+      verifiedByName: null,
+      verifiedAt: (r.verified_at as string) ?? null,
+      decisionNote: (r.decision_note as string) ?? null,
+      receipts: (
+        (r.receipts ?? []) as unknown as Record<string, unknown>[]
+      ).map((x) => ({
+        id: String(x.id),
+        storagePath: String(x.storage_path),
+        mimeType: (x.mime_type as string) ?? null,
+        createdAt: String(x.created_at),
+      })),
+    };
+  });
 
   return { plan, installments, payments };
 }
@@ -462,6 +460,30 @@ export async function recordHop(
   if (error) throw new Error(`Could not record the leg: ${error.message}`);
 }
 
+/**
+ * Display names for auth user ids. payments.logged_by and fee_discounts.proposed_by
+ * reference auth.users, which PostgREST cannot embed as profiles (PGRST200), so the
+ * names come from a second lookup on profiles.user_id. A name is display-only: a
+ * failed lookup leaves it null rather than failing the whole payments view.
+ */
+async function namesByUserId(
+  supabase: SupabaseClient,
+  ids: string[]
+): Promise<Map<string, string>> {
+  const unique = [...new Set(ids.filter(Boolean))];
+  if (unique.length === 0) return new Map();
+  const { data } = await supabase
+    .from('profiles')
+    .select('user_id, full_name')
+    .in('user_id', unique);
+  const rows = (data ?? []) as { user_id: string; full_name: string | null }[];
+  return new Map(
+    rows
+      .filter((p) => p.full_name)
+      .map((p) => [p.user_id, p.full_name as string])
+  );
+}
+
 /** Discounts for one student, newest first. */
 export async function loadDiscounts(
   supabase: SupabaseClient,
@@ -471,14 +493,13 @@ export async function loadDiscounts(
     .from('fee_discounts')
     .select(
       'id, contact_id, plan_id, installment_id, amount, reason, status, ' +
-        'proposed_by, decided_by, decided_at, decision_note, created_at, ' +
-        'proposer:profiles!fee_discounts_proposed_by_fkey(full_name)'
+        'proposed_by, decided_by, decided_at, decision_note, created_at'
     )
     .eq('contact_id', contactId)
     .order('created_at', { ascending: false });
 
   if (error) throw new Error(`Discounts query failed: ${error.message}`);
-  return mapDiscounts(data);
+  return mapDiscounts(data, await proposerNames(supabase, data));
 }
 
 /** Every discount still awaiting a decision, for the admin approvals queue. */
@@ -491,7 +512,6 @@ export async function loadPendingDiscounts(
     .select(
       'id, contact_id, plan_id, installment_id, amount, reason, status, ' +
         'proposed_by, decided_by, decided_at, decision_note, created_at, ' +
-        'proposer:profiles!fee_discounts_proposed_by_fkey(full_name), ' +
         'contact:contacts(name)'
     )
     .eq('account_id', accountId)
@@ -502,7 +522,7 @@ export async function loadPendingDiscounts(
     throw new Error(`Pending discounts query failed: ${error.message}`);
 
   const rows = (data ?? []) as unknown as Record<string, unknown>[];
-  return mapDiscounts(data).map((d, i) => {
+  return mapDiscounts(data, await proposerNames(supabase, data)).map((d, i) => {
     const c = rows[i]?.contact;
     const contact = Array.isArray(c) ? c[0] : c;
     return {
@@ -512,10 +532,21 @@ export async function loadPendingDiscounts(
   });
 }
 
-function mapDiscounts(data: unknown): FeeDiscount[] {
+function proposerNames(supabase: SupabaseClient, data: unknown) {
+  return namesByUserId(
+    supabase,
+    ((data ?? []) as unknown as Record<string, unknown>[]).map((r) =>
+      String(r.proposed_by)
+    )
+  );
+}
+
+function mapDiscounts(
+  data: unknown,
+  names: Map<string, string>
+): FeeDiscount[] {
   type Raw = Record<string, unknown>;
   return ((data ?? []) as unknown as Raw[]).map((r) => {
-    const proposer = Array.isArray(r.proposer) ? r.proposer[0] : r.proposer;
     return {
       id: String(r.id),
       contactId: String(r.contact_id),
@@ -525,8 +556,7 @@ function mapDiscounts(data: unknown): FeeDiscount[] {
       reason: String(r.reason ?? ''),
       status: r.status as DiscountStatus,
       proposedBy: String(r.proposed_by),
-      proposedByName:
-        (proposer as { full_name?: string } | null)?.full_name ?? null,
+      proposedByName: names.get(String(r.proposed_by)) ?? null,
       decidedBy: (r.decided_by as string) ?? null,
       decidedAt: (r.decided_at as string) ?? null,
       decisionNote: (r.decision_note as string) ?? null,
@@ -598,7 +628,6 @@ export async function loadPendingPayments(
       'id, contact_id, plan_id, installment_id, paid_at, amount, currency, ' +
         'method, reference, note, status, logged_by, verified_by, verified_at, ' +
         'decision_note, ' +
-        'logged:profiles!payments_logged_by_fkey(full_name), ' +
         'contact:contacts(name), ' +
         'receipts:payment_receipts(id, storage_path, mime_type, created_at)'
     )
@@ -609,8 +638,12 @@ export async function loadPendingPayments(
   if (error) throw new Error(`Pending payments query failed: ${error.message}`);
 
   type Raw = Record<string, unknown>;
-  return ((data ?? []) as unknown as Raw[]).map((r) => {
-    const logged = Array.isArray(r.logged) ? r.logged[0] : r.logged;
+  const rows = (data ?? []) as unknown as Raw[];
+  const names = await namesByUserId(
+    supabase,
+    rows.map((r) => String(r.logged_by))
+  );
+  return rows.map((r) => {
     const contact = Array.isArray(r.contact) ? r.contact[0] : r.contact;
     return {
       id: String(r.id),
@@ -625,8 +658,7 @@ export async function loadPendingPayments(
       note: (r.note as string) ?? null,
       status: r.status as PaymentStatus,
       loggedBy: String(r.logged_by),
-      loggedByName:
-        (logged as { full_name?: string } | null)?.full_name ?? null,
+      loggedByName: names.get(String(r.logged_by)) ?? null,
       verifiedBy: null,
       verifiedByName: null,
       verifiedAt: null,
