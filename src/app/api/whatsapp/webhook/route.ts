@@ -13,6 +13,7 @@ import {
 import { normalizePhone } from '@/lib/whatsapp/phone-utils';
 import { findExistingContact, isUniqueViolation } from '@/lib/contacts/dedupe';
 import { pricingRow, type StatusPricing } from '@/lib/whatsapp/billable';
+import { isPhoneNumberAiDisabled } from '@/lib/whatsapp/ai-disabled';
 import { verifyMetaWebhookSignature } from '@/lib/whatsapp/webhook-signature';
 import { runAutomationsForTrigger } from '@/lib/automations/engine';
 import { dispatchInboundToFlows } from '@/lib/flows/engine';
@@ -26,16 +27,35 @@ import {
 } from '@/lib/whatsapp/message-status';
 import type { MessageStatus } from '@/types';
 
-// Business numbers whose AI replies are switched off, as a comma-separated list
-// of phone_number_ids in AI_DISABLED_PHONE_NUMBER_IDS. Read per call rather than
-// cached at module load so the value is whatever the running process was started
-// with, and an empty or unset variable disables nothing.
-function isPhoneNumberAiDisabled(phoneNumberId: string): boolean {
-  return (process.env.AI_DISABLED_PHONE_NUMBER_IDS ?? '')
-    .split(',')
-    .map((id) => id.trim())
-    .filter(Boolean)
-    .includes(phoneNumberId);
+// SP3b: mark the lead's assignment reached and keep the bot quiet on their
+// 79019 chat. Never blocks the inbound (already stored): failures are logged.
+async function markCounsellorArrival(contactId: string, phoneNumberId: string) {
+  try {
+    const { data: reached, error } = await supabaseAdmin().rpc(
+      'mark_counsellor_reached',
+      { p_contact_id: contactId, p_phone_number_id: phoneNumberId }
+    );
+    if (error) {
+      console.error(
+        '[webhook] failed to mark counsellor arrival for contact',
+        contactId,
+        error
+      );
+    } else if (typeof reached === 'number' && reached > 0) {
+      console.log(
+        '[webhook] lead reached their counsellor; assignments marked:',
+        reached,
+        'contact',
+        contactId
+      );
+    }
+  } catch (err) {
+    console.error(
+      '[webhook] mark_counsellor_reached threw for contact',
+      contactId,
+      err
+    );
+  }
 }
 
 // ===== n8n WEBHOOK FORWARDING =====
@@ -953,6 +973,15 @@ async function processMessage(
       conversation.id,
       conversationError
     );
+  }
+
+  // SP3b: a lead messaged their counsellor's own number (the counsellor
+  // numbers are AI-disabled). Runs on every inbound there, not only the first:
+  // mark_counsellor_reached is idempotent, and a first message whose RPC
+  // failed (or whose webhook retry hit the duplicate guard) is caught by the
+  // next one.
+  if (isPhoneNumberAiDisabled(phoneNumberId)) {
+    await markCounsellorArrival(contactRecord.id, phoneNumberId);
   }
 
   await flagBroadcastReplyIfAny(accountId, contactRecord.id);
