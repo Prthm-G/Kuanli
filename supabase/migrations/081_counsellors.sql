@@ -23,6 +23,9 @@ CREATE TABLE IF NOT EXISTS public.counsellors (
   wa_number           text NOT NULL CHECK (wa_number ~ '^[0-9]{10,15}$'),
   phone_number_id     text UNIQUE,
   telegram_chat_id    bigint,
+  -- Who joined and when, so a join by the wrong person is visible (--links).
+  telegram_username   text,
+  telegram_joined_at  timestamptz,
   telegram_start_code text NOT NULL UNIQUE CHECK (telegram_start_code ~ '^[0-9a-f]{12}$'),
   active              boolean NOT NULL DEFAULT true,
   created_at          timestamptz NOT NULL DEFAULT now(),
