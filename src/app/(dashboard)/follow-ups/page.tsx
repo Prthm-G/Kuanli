@@ -5,6 +5,7 @@ import { ClipboardCheck, Printer, RefreshCw } from 'lucide-react';
 
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
+import { canViewMoney } from '@/lib/auth/roles';
 import { loadWorklist } from '@/lib/followups/queries';
 import { actionableCount, bucketWorklist } from '@/lib/followups/due';
 import { buildCallSheetHtml } from '@/lib/followups/call-sheet';
@@ -32,7 +33,10 @@ import {
 type View = 'followups' | 'payments';
 
 export default function FollowUpsPage() {
-  const { accountId } = useAuth();
+  const { accountId, accountRole } = useAuth();
+  // The ledger (money in, float, commission) is admin-only. Counsellors log a
+  // payment from the student's Payments tab instead (KB-SP3B-MONEY).
+  const showMoney = canViewMoney(accountRole);
   const [view, setView] = useState<View>('followups');
   const [rows, setRows] = useState<WorklistRow[] | null>(null);
   const [loading, setLoading] = useState(true);
@@ -93,10 +97,15 @@ export default function FollowUpsPage() {
 
   const tabs: { key: View; label: string }[] = [
     { key: 'followups', label: `Follow-ups (${due})` },
-    {
-      key: 'payments',
-      label: awaitingCheck > 0 ? `Payments (${awaitingCheck})` : 'Payments',
-    },
+    ...(showMoney
+      ? [
+          {
+            key: 'payments' as const,
+            label:
+              awaitingCheck > 0 ? `Payments (${awaitingCheck})` : 'Payments',
+          },
+        ]
+      : []),
   ];
 
   return (
@@ -142,22 +151,24 @@ export default function FollowUpsPage() {
         </div>
       </div>
 
-      <div className="border-border bg-muted/40 flex gap-1 rounded-lg border p-1">
-        {tabs.map((t) => (
-          <button
-            key={t.key}
-            onClick={() => setView(t.key)}
-            className={
-              'flex-1 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ' +
-              (view === t.key
-                ? 'bg-background text-foreground shadow-sm'
-                : 'text-muted-foreground hover:text-foreground')
-            }
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
+      {tabs.length > 1 && (
+        <div className="border-border bg-muted/40 flex gap-1 rounded-lg border p-1">
+          {tabs.map((t) => (
+            <button
+              key={t.key}
+              onClick={() => setView(t.key)}
+              className={
+                'flex-1 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ' +
+                (view === t.key
+                  ? 'bg-background text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground')
+              }
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {view === 'followups' && (
         <Worklist
@@ -168,14 +179,14 @@ export default function FollowUpsPage() {
         />
       )}
 
-      {view === 'payments' && (
+      {showMoney && view === 'payments' && (
         <ApprovalsQueue
           refreshKey={ledger?.length ?? 0}
           onDecided={() => void loadPayments()}
         />
       )}
 
-      {view === 'payments' && (
+      {showMoney && view === 'payments' && (
         <LedgerTable
           rows={ledger ?? []}
           loading={ledgerLoading}

@@ -9,6 +9,7 @@ import {
   canSendWhatsApp,
   canTransferOwnership,
   canViewGrowth,
+  canViewMoney,
   canViewOnly,
   hasMinRole,
   isAccountRole,
@@ -142,5 +143,13 @@ describe("capability predicates", () => {
     expect(canViewGrowth("admin")).toBe(false);
     expect(canViewGrowth("agent")).toBe(false);
     expect(canViewGrowth("viewer")).toBe(false);
+  });
+
+  it("canViewMoney: owner and admin; never counsellors, viewers or a missing role", () => {
+    expect(canViewMoney("owner")).toBe(true);
+    expect(canViewMoney("admin")).toBe(true);
+    expect(canViewMoney("agent")).toBe(false);
+    expect(canViewMoney("viewer")).toBe(false);
+    expect(canViewMoney(null)).toBe(false);
   });
 });

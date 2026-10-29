@@ -127,3 +127,13 @@ export function canTransferOwnership(role: AccountRole): boolean {
 export function canViewGrowth(role: AccountRole): boolean {
   return role === "owner";
 }
+
+/**
+ * Owner / admin: money in the CRM — totals received and outstanding, deal
+ * values, the payments ledger, payment routes and commission, discounts.
+ * Counsellors (agent) and viewers log a payment but never see amounts.
+ * UI gate only: RLS still lets an agent read those rows (KB-SP3B-MONEY).
+ */
+export function canViewMoney(role: AccountRole | null): boolean {
+  return role !== null && hasMinRole(role, "admin");
+}

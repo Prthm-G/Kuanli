@@ -18,6 +18,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useAuth } from "@/hooks/use-auth";
+import { canViewMoney } from "@/lib/auth/roles";
 import { formatCurrency } from "@/lib/currency";
 
 interface PipelineAnalyticsProps {
@@ -46,7 +47,9 @@ function computeStageProbability(
 }
 
 export function PipelineAnalytics({ stages, deals }: PipelineAnalyticsProps) {
-  const { defaultCurrency } = useAuth();
+  const { defaultCurrency, accountRole } = useAuth();
+  // Counsellors get the deal count only: no values, no won/lost tally (KB-SP3B-MONEY).
+  const showMoney = canViewMoney(accountRole);
   const sortedStages = useMemo(
     () => [...stages].sort((a, b) => a.position - b.position),
     [stages],
@@ -100,36 +103,40 @@ export function PipelineAnalytics({ stages, deals }: PipelineAnalyticsProps) {
           value={String(stats.totalCount)}
           tooltip="Count of every deal in this pipeline that isn't marked as Lost. Won deals are still included."
         />
-        <Metric
-          icon={<DollarSign className="h-4 w-4 text-primary" />}
-          label="Pipeline Value"
-          value={formatCurrency(stats.totalValue, defaultCurrency)}
-          tooltip="Sum of the dollar values of all deals in this pipeline, excluding deals marked as Lost."
-        />
-        <Metric
-          icon={<Target className="h-4 w-4 text-blue-400" />}
-          label="Avg Deal Size"
-          value={formatCurrency(stats.avgValue, defaultCurrency)}
-          tooltip="Pipeline Value divided by Total Deals — the average value of a single non-lost deal."
-        />
-        <Metric
-          icon={<TrendingUp className="h-4 w-4 text-purple-400" />}
-          label="Weighted Value"
-          value={formatCurrency(stats.weightedValue, defaultCurrency)}
-          tooltip="Expected revenue: each open deal's value × its stage probability. First stage ≈ 10%, stages progress up to 90%, Won = 100%. Lost deals are excluded."
-        />
-        <Metric
-          icon={<Trophy className="h-4 w-4 text-primary" />}
-          label="Won This Month"
-          value={String(stats.wonThisMonth)}
-          tooltip="Deals marked as Won since the first day of the current month."
-        />
-        <Metric
-          icon={<XCircle className="h-4 w-4 text-red-400" />}
-          label="Lost This Month"
-          value={String(stats.lostThisMonth)}
-          tooltip="Deals marked as Lost since the first day of the current month."
-        />
+        {showMoney && (
+          <>
+            <Metric
+              icon={<DollarSign className="h-4 w-4 text-primary" />}
+              label="Pipeline Value"
+              value={formatCurrency(stats.totalValue, defaultCurrency)}
+              tooltip="Sum of the dollar values of all deals in this pipeline, excluding deals marked as Lost."
+            />
+            <Metric
+              icon={<Target className="h-4 w-4 text-blue-400" />}
+              label="Avg Deal Size"
+              value={formatCurrency(stats.avgValue, defaultCurrency)}
+              tooltip="Pipeline Value divided by Total Deals — the average value of a single non-lost deal."
+            />
+            <Metric
+              icon={<TrendingUp className="h-4 w-4 text-purple-400" />}
+              label="Weighted Value"
+              value={formatCurrency(stats.weightedValue, defaultCurrency)}
+              tooltip="Expected revenue: each open deal's value × its stage probability. First stage ≈ 10%, stages progress up to 90%, Won = 100%. Lost deals are excluded."
+            />
+            <Metric
+              icon={<Trophy className="h-4 w-4 text-primary" />}
+              label="Won This Month"
+              value={String(stats.wonThisMonth)}
+              tooltip="Deals marked as Won since the first day of the current month."
+            />
+            <Metric
+              icon={<XCircle className="h-4 w-4 text-red-400" />}
+              label="Lost This Month"
+              value={String(stats.lostThisMonth)}
+              tooltip="Deals marked as Lost since the first day of the current month."
+            />
+          </>
+        )}
       </div>
     </TooltipProvider>
   );

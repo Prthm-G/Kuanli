@@ -4,10 +4,12 @@ import { useCallback, useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useAuth } from '@/hooks/use-auth'
 import { formatCurrency } from '@/lib/currency'
+import { canViewMoney } from '@/lib/auth/roles'
 import {
   MessageSquare,
   UserPlus,
   DollarSign,
+  GitBranch,
   Send,
 } from 'lucide-react'
 
@@ -37,7 +39,9 @@ import { ActivityFeed } from '@/components/dashboard/activity-feed'
 type RangeDays = 7 | 30 | 90
 
 export default function DashboardPage() {
-  const { defaultCurrency } = useAuth()
+  const { defaultCurrency, accountRole } = useAuth()
+  // Counsellors see deal counts, never values (KB-SP3B-MONEY).
+  const showMoney = canViewMoney(accountRole)
   const [metrics, setMetrics] = useState<MetricsBundle | null>(null)
   const [metricsLoading, setMetricsLoading] = useState(true)
 
@@ -130,7 +134,8 @@ export default function DashboardPage() {
 
       {/* Metric cards */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {metricsLoading || !metrics ? (
+        {/* Wait for the role too, so an admin never sees the counsellor cards first. */}
+        {metricsLoading || !metrics || accountRole === null ? (
           Array.from({ length: 4 }).map((_, i) => <SkeletonCard key={i} />)
         ) : (
           <>
@@ -156,12 +161,20 @@ export default function DashboardPage() {
                 ),
               }}
             />
-            <MetricCard
-              title="Open Deals Value"
-              value={formatCurrency(metrics.openDealsValue, defaultCurrency)}
-              icon={DollarSign}
-              subtitle={`${metrics.openDealsCount} open deal${metrics.openDealsCount === 1 ? '' : 's'}`}
-            />
+            {showMoney ? (
+              <MetricCard
+                title="Open Deals Value"
+                value={formatCurrency(metrics.openDealsValue, defaultCurrency)}
+                icon={DollarSign}
+                subtitle={`${metrics.openDealsCount} open deal${metrics.openDealsCount === 1 ? '' : 's'}`}
+              />
+            ) : (
+              <MetricCard
+                title="Open Deals"
+                value={metrics.openDealsCount.toLocaleString()}
+                icon={GitBranch}
+              />
+            )}
             <MetricCard
               title="Messages Sent Today"
               value={metrics.messagesSentToday.current.toLocaleString()}
@@ -190,7 +203,7 @@ export default function DashboardPage() {
           this, the pipeline card rendered at its natural (shorter)
           height while the line chart drove the row height. */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-5">
-        <div className="h-full lg:col-span-3">
+        <div className={showMoney ? 'h-full lg:col-span-3' : 'h-full lg:col-span-5'}>
           <ConversationsChart
             series={series}
             loading={seriesLoading}
@@ -198,13 +211,15 @@ export default function DashboardPage() {
             onRangeChange={handleRangeChange}
           />
         </div>
-        <div className="h-full lg:col-span-2">
-          <PipelineDonut
-            data={pipeline}
-            loading={pipelineLoading}
-            currency={defaultCurrency}
-          />
-        </div>
+        {showMoney && (
+          <div className="h-full lg:col-span-2">
+            <PipelineDonut
+              data={pipeline}
+              loading={pipelineLoading}
+              currency={defaultCurrency}
+            />
+          </div>
+        )}
       </div>
 
       {/* Response time */}

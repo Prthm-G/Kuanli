@@ -7,6 +7,7 @@ import { toast } from 'sonner';
 
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
+import { canViewMoney } from '@/lib/auth/roles';
 import { formatCurrency } from '@/lib/currency';
 import { loadApplicationTracker } from '@/lib/applications/queries';
 import { loadLedger } from '@/lib/payments/queries';
@@ -28,7 +29,9 @@ import { Badge } from '@/components/ui/badge';
  * storage) or reject.
  */
 export default function ApplicationsPage() {
-  const { accountId } = useAuth();
+  const { accountId, accountRole } = useAuth();
+  // Fee received / due is admin-only; counsellors see document progress (KB-SP3B-MONEY).
+  const showMoney = canViewMoney(accountRole);
   const [contacts, setContacts] = useState<TrackerContact[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -59,20 +62,25 @@ export default function ApplicationsPage() {
     try {
       const supabase = createClient();
       setContacts(await loadApplicationTracker(supabase, accountId));
-      try {
-        const rows = await loadLedger(supabase, accountId);
-        setLedger(new Map(rows.map((r) => [r.contactId, r])));
-      } catch {
-        // The document tracker is this page's job; a failed ledger fetch
-        // hides the fee strip rather than taking the page down.
+      // Counsellors don't get the fee strip, so don't fetch the ledger for them.
+      if (!showMoney) {
         setLedger(new Map());
+      } else {
+        try {
+          const rows = await loadLedger(supabase, accountId);
+          setLedger(new Map(rows.map((r) => [r.contactId, r])));
+        } catch {
+          // The document tracker is this page's job; a failed ledger fetch
+          // hides the fee strip rather than taking the page down.
+          setLedger(new Map());
+        }
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not load applications');
     } finally {
       setLoading(false);
     }
-  }, [accountId]);
+  }, [accountId, showMoney]);
 
   useEffect(() => {
     void load();
@@ -209,7 +217,7 @@ export default function ApplicationsPage() {
                 )}
               </div>
               <div className="flex items-center gap-3">
-                {money && money.agreedTotal > 0 && (
+                {showMoney && money && money.agreedTotal > 0 && (
                   <span
                     className={
                       'text-sm ' +

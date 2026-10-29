@@ -6,6 +6,7 @@ import { Check, FileText, Plus, X } from 'lucide-react';
 
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
+import { canViewMoney } from '@/lib/auth/roles';
 import { formatCurrency } from '@/lib/currency';
 import {
   applyFeeTemplate,
@@ -144,6 +145,11 @@ export function StudentPayments({
 
   const canRecord = accountRole !== null && accountRole !== 'viewer';
   const canVerify = accountRole === 'owner' || accountRole === 'admin';
+  // Counsellors log a payment and follow its status; what has been collected
+  // (totals, logged amounts, receipts, routes/commission, discounts) is
+  // admin-only. The fee schedule stays: it is what the student owes
+  // (KB-SP3B-MONEY).
+  const showMoney = canViewMoney(accountRole);
 
   useEffect(() => {
     if (!accountId || !contactId) return;
@@ -361,43 +367,47 @@ export function StudentPayments({
 
       {plan && (
         <>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <Stat
-              label="Agreed"
-              value={formatCurrency(plan.agreedTotal, currency)}
-            />
-            <Stat
-              label="Received"
-              value={formatCurrency(totals.received, currency)}
-            />
-            <Stat
-              label="Awaiting check"
-              value={formatCurrency(totals.pending, currency)}
-              tone={totals.pending > 0 ? 'amber' : undefined}
-            />
-            <Stat
-              label="Outstanding"
-              value={formatCurrency(outstanding, currency)}
-            />
-          </div>
+          {showMoney && (
+            <>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                <Stat
+                  label="Agreed"
+                  value={formatCurrency(plan.agreedTotal, currency)}
+                />
+                <Stat
+                  label="Received"
+                  value={formatCurrency(totals.received, currency)}
+                />
+                <Stat
+                  label="Awaiting check"
+                  value={formatCurrency(totals.pending, currency)}
+                  tone={totals.pending > 0 ? 'amber' : undefined}
+                />
+                <Stat
+                  label="Outstanding"
+                  value={formatCurrency(outstanding, currency)}
+                />
+              </div>
 
-          {liveDiscounts > 0 && (
-            <p className="text-muted-foreground text-xs">
-              {formatCurrency(liveDiscounts, currency)} discounted
-              {pendingDiscounts > 0 && (
-                <span className="text-amber-500">
-                  {' '}
-                  · {formatCurrency(pendingDiscounts, currency)} of that is
-                  awaiting approval and may be reversed
-                </span>
+              {liveDiscounts > 0 && (
+                <p className="text-muted-foreground text-xs">
+                  {formatCurrency(liveDiscounts, currency)} discounted
+                  {pendingDiscounts > 0 && (
+                    <span className="text-amber-500">
+                      {' '}
+                      · {formatCurrency(pendingDiscounts, currency)} of that is
+                      awaiting approval and may be reversed
+                    </span>
+                  )}
+                </p>
               )}
-            </p>
-          )}
 
-          {extra > 0 && (
-            <p className="text-xs text-emerald-500">
-              Overpaid by {formatCurrency(extra, currency)}.
-            </p>
+              {extra > 0 && (
+                <p className="text-xs text-emerald-500">
+                  Overpaid by {formatCurrency(extra, currency)}.
+                </p>
+              )}
+            </>
           )}
 
           <div className="text-muted-foreground text-xs">
@@ -460,21 +470,25 @@ export function StudentPayments({
           {canRecord && (
             <Button size="sm" onClick={() => setRecording(true)}>
               <Plus className="mr-1.5 h-3.5 w-3.5" />
-              Record payment
+              {showMoney ? 'Record payment' : 'Log fee received'}
             </Button>
           )}
         </div>
 
         {payments.length === 0 ? (
-          <p className="text-muted-foreground text-sm">Nothing received yet.</p>
+          <p className="text-muted-foreground text-sm">
+            {showMoney ? 'Nothing received yet.' : 'No fee logged yet.'}
+          </p>
         ) : (
           <div className="border-border divide-border divide-y rounded-lg border">
             {payments.map((p) => (
               <div key={p.id} className="space-y-1 px-3 py-2 text-sm">
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                  <span className="text-foreground font-medium">
-                    {formatCurrency(p.amount, p.currency)}
-                  </span>
+                  {showMoney && (
+                    <span className="text-foreground font-medium">
+                      {formatCurrency(p.amount, p.currency)}
+                    </span>
+                  )}
                   <span className="text-muted-foreground text-xs">
                     {METHOD_LABEL[p.method]} · {formatDate(p.paidAt)}
                   </span>
@@ -502,16 +516,17 @@ export function StudentPayments({
                   </p>
                 )}
                 <div className="flex flex-wrap items-center gap-2">
-                  {p.receipts.map((r) => (
-                    <button
-                      key={r.id}
-                      onClick={() => void openReceipt(r.storagePath)}
-                      className="border-border text-foreground hover:bg-muted/50 inline-flex items-center rounded-md border px-2 py-0.5 text-xs"
-                    >
-                      <FileText className="mr-1 h-3 w-3" />
-                      Receipt
-                    </button>
-                  ))}
+                  {showMoney &&
+                    p.receipts.map((r) => (
+                      <button
+                        key={r.id}
+                        onClick={() => void openReceipt(r.storagePath)}
+                        className="border-border text-foreground hover:bg-muted/50 inline-flex items-center rounded-md border px-2 py-0.5 text-xs"
+                      >
+                        <FileText className="mr-1 h-3 w-3" />
+                        Receipt
+                      </button>
+                    ))}
                   {canVerify && p.status === 'reported' && (
                     <>
                       <button
@@ -535,7 +550,7 @@ export function StudentPayments({
                 </div>
                 {/* Where this money actually went. Only meaningful once it is
                     real money, so hidden for a rejected payment. */}
-                {p.status !== 'rejected' && (
+                {showMoney && p.status !== 'rejected' && (
                   <RouteEditor
                     paymentId={p.id}
                     paymentAmount={p.amount}
@@ -551,126 +566,128 @@ export function StudentPayments({
         )}
       </section>
 
-      <section>
-        <div className="mb-2 flex items-center justify-between">
-          <h3 className="text-muted-foreground text-xs font-semibold tracking-wider uppercase">
-            Discounts
-          </h3>
-          {canRecord && plan && !proposing && (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => setProposing(true)}
-            >
-              <Plus className="mr-1.5 h-3.5 w-3.5" />
-              Add discount
-            </Button>
-          )}
-        </div>
-
-        {proposing && (
-          <div className="border-border mb-2 space-y-2 rounded-lg border p-3">
-            <p className="text-muted-foreground text-xs">
-              This reduces the balance straight away. An admin reviews it after,
-              and if it is rejected the balance goes back up — so agree it
-              before quoting a lower number.
-            </p>
-            <div className="grid grid-cols-3 gap-2">
-              <Input
-                type="number"
-                min="1"
-                step="0.01"
-                placeholder="Amount"
-                value={discountAmount}
-                onChange={(e) => setDiscountAmount(e.target.value)}
-              />
-              <div className="col-span-2">
-                <Input
-                  placeholder="Why (an admin decides on this)"
-                  value={discountReason}
-                  onChange={(e) => setDiscountReason(e.target.value)}
-                />
-              </div>
-            </div>
-            <div className="flex justify-end gap-2">
+      {showMoney && (
+        <section>
+          <div className="mb-2 flex items-center justify-between">
+            <h3 className="text-muted-foreground text-xs font-semibold tracking-wider uppercase">
+              Discounts
+            </h3>
+            {canRecord && plan && !proposing && (
               <Button
                 size="sm"
                 variant="outline"
-                onClick={() => setProposing(false)}
-                disabled={busy === 'discount'}
+                onClick={() => setProposing(true)}
               >
-                Cancel
+                <Plus className="mr-1.5 h-3.5 w-3.5" />
+                Add discount
               </Button>
-              <Button
-                size="sm"
-                onClick={() => void submitDiscount()}
-                disabled={busy === 'discount'}
-              >
-                Apply discount
-              </Button>
-            </div>
+            )}
           </div>
-        )}
 
-        {discounts.length === 0 ? (
-          <p className="text-muted-foreground text-sm">None.</p>
-        ) : (
-          <div className="border-border divide-border divide-y rounded-lg border">
-            {discounts.map((d) => (
-              <div key={d.id} className="space-y-1 px-3 py-2 text-sm">
-                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                  <span className="text-foreground font-medium">
-                    {formatCurrency(d.amount, currency)}
-                  </span>
-                  <span
-                    className={
-                      'rounded-full px-2 py-0.5 text-xs font-medium ' +
-                      (d.status === 'approved'
-                        ? 'bg-emerald-500/15 text-emerald-500'
-                        : d.status === 'rejected'
-                          ? 'bg-red-500/15 text-red-400'
-                          : 'bg-amber-500/15 text-amber-500')
-                    }
-                  >
-                    {DISCOUNT_STATUS_LABEL[d.status]}
-                  </span>
-                  {d.proposedByName && (
-                    <span className="text-muted-foreground text-xs">
-                      by {d.proposedByName}
+          {proposing && (
+            <div className="border-border mb-2 space-y-2 rounded-lg border p-3">
+              <p className="text-muted-foreground text-xs">
+                This reduces the balance straight away. An admin reviews it after,
+                and if it is rejected the balance goes back up — so agree it
+                before quoting a lower number.
+              </p>
+              <div className="grid grid-cols-3 gap-2">
+                <Input
+                  type="number"
+                  min="1"
+                  step="0.01"
+                  placeholder="Amount"
+                  value={discountAmount}
+                  onChange={(e) => setDiscountAmount(e.target.value)}
+                />
+                <div className="col-span-2">
+                  <Input
+                    placeholder="Why (an admin decides on this)"
+                    value={discountReason}
+                    onChange={(e) => setDiscountReason(e.target.value)}
+                  />
+                </div>
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setProposing(false)}
+                  disabled={busy === 'discount'}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={() => void submitDiscount()}
+                  disabled={busy === 'discount'}
+                >
+                  Apply discount
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {discounts.length === 0 ? (
+            <p className="text-muted-foreground text-sm">None.</p>
+          ) : (
+            <div className="border-border divide-border divide-y rounded-lg border">
+              {discounts.map((d) => (
+                <div key={d.id} className="space-y-1 px-3 py-2 text-sm">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                    <span className="text-foreground font-medium">
+                      {formatCurrency(d.amount, currency)}
                     </span>
+                    <span
+                      className={
+                        'rounded-full px-2 py-0.5 text-xs font-medium ' +
+                        (d.status === 'approved'
+                          ? 'bg-emerald-500/15 text-emerald-500'
+                          : d.status === 'rejected'
+                            ? 'bg-red-500/15 text-red-400'
+                            : 'bg-amber-500/15 text-amber-500')
+                      }
+                    >
+                      {DISCOUNT_STATUS_LABEL[d.status]}
+                    </span>
+                    {d.proposedByName && (
+                      <span className="text-muted-foreground text-xs">
+                        by {d.proposedByName}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-muted-foreground text-xs">{d.reason}</p>
+                  {d.decisionNote && (
+                    <p className="text-muted-foreground text-xs">
+                      Decision: {d.decisionNote}
+                    </p>
+                  )}
+                  {canVerify && d.status === 'pending' && (
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => void onDiscountDecision(d, 'approved')}
+                        disabled={busy === d.id}
+                        className="inline-flex items-center rounded-md border border-emerald-500/40 px-2 py-0.5 text-xs font-medium text-emerald-500 hover:bg-emerald-500/10"
+                      >
+                        <Check className="mr-1 h-3 w-3" />
+                        Approve
+                      </button>
+                      <button
+                        onClick={() => void onDiscountDecision(d, 'rejected')}
+                        disabled={busy === d.id}
+                        className="inline-flex items-center rounded-md border border-red-500/40 px-2 py-0.5 text-xs font-medium text-red-400 hover:bg-red-500/10"
+                      >
+                        <X className="mr-1 h-3 w-3" />
+                        Reject
+                      </button>
+                    </div>
                   )}
                 </div>
-                <p className="text-muted-foreground text-xs">{d.reason}</p>
-                {d.decisionNote && (
-                  <p className="text-muted-foreground text-xs">
-                    Decision: {d.decisionNote}
-                  </p>
-                )}
-                {canVerify && d.status === 'pending' && (
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => void onDiscountDecision(d, 'approved')}
-                      disabled={busy === d.id}
-                      className="inline-flex items-center rounded-md border border-emerald-500/40 px-2 py-0.5 text-xs font-medium text-emerald-500 hover:bg-emerald-500/10"
-                    >
-                      <Check className="mr-1 h-3 w-3" />
-                      Approve
-                    </button>
-                    <button
-                      onClick={() => void onDiscountDecision(d, 'rejected')}
-                      disabled={busy === d.id}
-                      className="inline-flex items-center rounded-md border border-red-500/40 px-2 py-0.5 text-xs font-medium text-red-400 hover:bg-red-500/10"
-                    >
-                      <X className="mr-1 h-3 w-3" />
-                      Reject
-                    </button>
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
 
       <PaymentDialog
         open={recording}

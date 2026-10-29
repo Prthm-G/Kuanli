@@ -20,6 +20,7 @@ import { DealCard } from "./deal-card";
 import { Button } from "@/components/ui/button";
 import { Plus } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
+import { canViewMoney } from "@/lib/auth/roles";
 import { formatCurrency } from "@/lib/currency";
 
 interface PipelineBoardProps {
@@ -40,7 +41,8 @@ export function PipelineBoard({
   onAddDeal,
   onEditDeal,
 }: PipelineBoardProps) {
-  const { defaultCurrency } = useAuth();
+  const { defaultCurrency, accountRole } = useAuth();
+  const showMoney = canViewMoney(accountRole);
   const [activeDealId, setActiveDealId] = useState<string | null>(null);
 
   const sortedStages = useMemo(
@@ -119,7 +121,7 @@ export function PipelineBoard({
               stage={stage}
               stages={sortedStages}
               deals={stageDeals}
-              totalValue={totalValue}
+              totalValue={showMoney ? totalValue : null}
               currency={defaultCurrency}
               onAddDeal={onAddDeal}
               onEditDeal={onEditDeal}
@@ -206,7 +208,8 @@ function StageColumn({
   stage: PipelineStage;
   stages: PipelineStage[];
   deals: Deal[];
-  totalValue: number;
+  /** null hides the column total (counsellors, KB-SP3B-MONEY). */
+  totalValue: number | null;
   currency: string;
   onAddDeal: (stageId: string) => void;
   onEditDeal: (deal: Deal) => void;
@@ -236,9 +239,11 @@ function StageColumn({
           {deals.length}
         </span>
       </div>
-      <p className="text-xs text-muted-foreground">
-        {formatCurrency(totalValue, currency)}
-      </p>
+      {totalValue !== null && (
+        <p className="text-xs text-muted-foreground">
+          {formatCurrency(totalValue, currency)}
+        </p>
+      )}
 
       <div
         ref={setNodeRef}

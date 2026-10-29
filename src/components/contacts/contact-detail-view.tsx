@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
+import { canViewMoney } from '@/lib/auth/roles';
 import { formatCurrency } from '@/lib/currency';
 import { toast } from 'sonner';
 import type {
@@ -57,7 +58,9 @@ export function ContactDetailView({
   onUpdated,
 }: ContactDetailViewProps) {
   const supabase = createClient();
-  const { accountId, defaultCurrency } = useAuth();
+  const { accountId, defaultCurrency, accountRole } = useAuth();
+  // Deal values are admin-only: counsellors don't get the Deals tab (KB-SP3B-MONEY).
+  const showMoney = canViewMoney(accountRole);
 
   const [contact, setContact] = useState<Contact | null>(null);
   const [loading, setLoading] = useState(false);
@@ -443,12 +446,14 @@ export function ContactDetailView({
                 >
                   Custom Fields
                 </TabsTrigger>
-                <TabsTrigger
-                  value="deals"
-                  className="data-active:bg-muted data-active:text-primary text-muted-foreground"
-                >
-                  Deals
-                </TabsTrigger>
+                {showMoney && (
+                  <TabsTrigger
+                    value="deals"
+                    className="data-active:bg-muted data-active:text-primary text-muted-foreground"
+                  >
+                    Deals
+                  </TabsTrigger>
+                )}
                 <TabsTrigger
                   value="followups"
                   className="data-active:bg-muted data-active:text-primary text-muted-foreground"
@@ -739,64 +744,66 @@ export function ContactDetailView({
               </TabsContent>
 
               {/* Deals Tab */}
-              <TabsContent
-                value="deals"
-                className="flex-1 overflow-y-auto px-4 py-3"
-              >
-                {loadingDeals ? (
-                  <div className="flex items-center justify-center py-8">
-                    <Loader2 className="text-primary size-5 animate-spin" />
-                  </div>
-                ) : deals.length === 0 ? (
-                  <p className="text-muted-foreground text-xs">No deals yet</p>
-                ) : (
-                  <div className="space-y-2">
-                    {deals.map((deal) => (
-                      <div
-                        key={deal.id}
-                        className="border-border bg-muted/50 rounded-lg border p-3"
-                      >
-                        <div className="flex items-start justify-between gap-2">
-                          <p className="text-foreground text-sm font-medium">
-                            {deal.title}
-                          </p>
-                          {deal.stage && (
-                            <span
-                              className="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium"
-                              style={{
-                                backgroundColor: `${deal.stage.color}20`,
-                                color: deal.stage.color,
-                              }}
-                            >
-                              {deal.stage.name}
-                            </span>
-                          )}
-                        </div>
-                        <div className="text-muted-foreground mt-1.5 flex items-center justify-between text-xs">
-                          <span className="flex items-center gap-1">
-                            <DollarSign className="size-3" />
-                            {formatCurrency(
-                              deal.value ?? 0,
-                              deal.currency || defaultCurrency
+              {showMoney && (
+                <TabsContent
+                  value="deals"
+                  className="flex-1 overflow-y-auto px-4 py-3"
+                >
+                  {loadingDeals ? (
+                    <div className="flex items-center justify-center py-8">
+                      <Loader2 className="text-primary size-5 animate-spin" />
+                    </div>
+                  ) : deals.length === 0 ? (
+                    <p className="text-muted-foreground text-xs">No deals yet</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {deals.map((deal) => (
+                        <div
+                          key={deal.id}
+                          className="border-border bg-muted/50 rounded-lg border p-3"
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <p className="text-foreground text-sm font-medium">
+                              {deal.title}
+                            </p>
+                            {deal.stage && (
+                              <span
+                                className="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium"
+                                style={{
+                                  backgroundColor: `${deal.stage.color}20`,
+                                  color: deal.stage.color,
+                                }}
+                              >
+                                {deal.stage.name}
+                              </span>
                             )}
-                          </span>
-                          {deal.status && deal.status !== 'open' && (
-                            <span
-                              className={
-                                deal.status === 'won'
-                                  ? 'text-primary'
-                                  : 'text-red-400'
-                              }
-                            >
-                              {deal.status}
+                          </div>
+                          <div className="text-muted-foreground mt-1.5 flex items-center justify-between text-xs">
+                            <span className="flex items-center gap-1">
+                              <DollarSign className="size-3" />
+                              {formatCurrency(
+                                deal.value ?? 0,
+                                deal.currency || defaultCurrency
+                              )}
                             </span>
-                          )}
+                            {deal.status && deal.status !== 'open' && (
+                              <span
+                                className={
+                                  deal.status === 'won'
+                                    ? 'text-primary'
+                                    : 'text-red-400'
+                                }
+                              >
+                                {deal.status}
+                              </span>
+                            )}
+                          </div>
                         </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </TabsContent>
+                      ))}
+                    </div>
+                  )}
+                </TabsContent>
+              )}
 
               {/* Follow-ups Tab (migration 054) — manual log merged with the
                   automated ladder's sends. */}
