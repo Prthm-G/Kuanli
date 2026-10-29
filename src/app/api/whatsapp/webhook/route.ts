@@ -308,11 +308,93 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
   }
 
-  processWebhook(body).catch((error) => {
-    console.error('Error processing webhook:', error);
-  });
+  // KB-WEBHOOK-INBOX-084: store the payload before the 200, so a crash or a
+  // redeploy mid-processing can no longer lose it (Meta does not resend after
+  // a 200). If the store itself fails we still process, as before.
+  const inboxId = await saveToInbox(body);
+  processWebhook(body)
+    .then(() => settleInbox(inboxId))
+    .catch((error) => {
+      console.error('Error processing webhook:', error);
+      return settleInbox(inboxId, error);
+    });
+  maybeReplayInbox();
 
   return NextResponse.json({ status: 'received' }, { status: 200 });
+}
+
+// ---- webhook inbox (migration 084) ----------------------------------------
+// Replay is safe: inbound messages are deduplicated on the wamid, statuses and
+// echoes are upserts. Rows left unprocessed (crash, redeploy, thrown error) are
+// replayed by the next webhook after the module loads, then at most every 2 min.
+const INBOX_REPLAY_EVERY_MS = 2 * 60 * 1000;
+let lastInboxReplay = 0;
+
+async function saveToInbox(body: unknown): Promise<number | null> {
+  try {
+    const { data, error } = await supabaseAdmin()
+      .from('webhook_inbox')
+      .insert({ body })
+      .select('id')
+      .single();
+    if (error) {
+      console.error('[webhook] inbox insert failed:', error.message);
+      return null;
+    }
+    return (data as { id: number }).id;
+  } catch (error) {
+    console.error('[webhook] inbox insert failed:', error);
+    return null;
+  }
+}
+
+async function settleInbox(id: number | null, failure?: unknown) {
+  if (id == null) return;
+  const patch = failure
+    ? {
+        last_error: String(
+          failure instanceof Error ? failure.message : failure
+        ).slice(0, 500),
+      }
+    : { processed_at: new Date().toISOString() };
+  const { error } = await supabaseAdmin()
+    .from('webhook_inbox')
+    .update(patch)
+    .eq('id', id);
+  if (error) console.error('[webhook] inbox update failed:', error.message);
+}
+
+async function replayInbox() {
+  const { data, error } = await supabaseAdmin().rpc('claim_webhook_inbox', {
+    p_limit: 20,
+    p_min_age_seconds: 120,
+  });
+  if (error) {
+    console.error('[webhook] inbox claim failed:', error.message);
+    return;
+  }
+  for (const row of (data ?? []) as {
+    id: number;
+    body: { entry?: WhatsAppWebhookEntry[] };
+  }[]) {
+    try {
+      await processWebhook(row.body);
+      await settleInbox(row.id);
+      console.log('[webhook] replayed inbox row', row.id);
+    } catch (err) {
+      console.error('[webhook] inbox replay failed for row', row.id, err);
+      await settleInbox(row.id, err);
+    }
+  }
+}
+
+function maybeReplayInbox() {
+  const now = Date.now();
+  if (now - lastInboxReplay < INBOX_REPLAY_EVERY_MS) return;
+  lastInboxReplay = now;
+  replayInbox().catch((error) =>
+    console.error('[webhook] inbox replay failed:', error)
+  );
 }
 
 async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
