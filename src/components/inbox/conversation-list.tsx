@@ -15,6 +15,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { sortConversationsByActivity } from "@/lib/inbox/conversation-order";
+import { filterConversations, type InboxFilter } from "@/lib/inbox/filter";
+import { useAuth } from "@/hooks/use-auth";
 
 interface ConversationListProps {
   activeConversationId: string | null;
@@ -42,10 +44,9 @@ const STATUS_COLORS: Record<ConversationStatus, string> = {
   closed: "bg-muted-foreground",
 };
 
-type InboxFilter = ConversationStatus | "all" | "unread";
-
 const FILTER_OPTIONS: { label: string; value: InboxFilter }[] = [
   { label: "All", value: "all" },
+  { label: "My leads", value: "mine" },
   { label: "Unread", value: "unread" },
   { label: "Open", value: "open" },
   { label: "Pending", value: "pending" },
@@ -62,6 +63,8 @@ export function ConversationList({
 }: ConversationListProps) {
   // Only worth badging when the account actually has more than one number.
   const showNumberBadges = !!numberLabels && Object.keys(numberLabels).length > 1;
+  const { profile } = useAuth();
+  const profileId = profile?.id;
   const [search, setSearch] = useState("");
   // Closed conversations are archived. They remain available through
   // the Closed/All filters, but should disappear from the working inbox.
@@ -124,13 +127,7 @@ export function ConversationList({
   }, [resyncToken]);
 
   const filtered = useMemo(() => {
-    let result = conversations;
-
-    if (filter === "unread") {
-      result = result.filter((c) => c.unread_count > 0);
-    } else if (filter !== "all") {
-      result = result.filter((c) => c.status === filter);
-    }
+    let result = filterConversations(conversations, filter, profileId);
 
     if (search.trim()) {
       const q = search.toLowerCase();
@@ -143,7 +140,7 @@ export function ConversationList({
     }
 
     return sortConversationsByActivity(result);
-  }, [conversations, filter, search]);
+  }, [conversations, filter, search, profileId]);
 
   const handleSearchChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {

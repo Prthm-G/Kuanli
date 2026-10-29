@@ -15,10 +15,12 @@ import {
   DollarSign,
   StickyNote,
   Plus,
+  MessageCircle,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { format } from 'date-fns';
+import { whatsappChatUrl } from '@/lib/inbox/wa-link';
 
 interface ContactSidebarProps {
   contact: Contact | null;
@@ -134,6 +136,7 @@ export function ContactSidebar({
   }
 
   const displayName = contact.name || contact.phone;
+  const waUrl = whatsappChatUrl(contact.phone);
   const initials = displayName.charAt(0).toUpperCase();
 
   return (
@@ -179,6 +182,23 @@ export function ContactSidebar({
                 <Copy className="text-muted-foreground h-3 w-3" />
               )}
             </button>
+
+            {/* SP3b: counsellors reply from their WhatsApp Business app. */}
+            {waUrl && (
+              <a
+                href={waUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-muted-foreground hover:bg-muted flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm transition-colors"
+              >
+                <MessageCircle
+                  className="text-muted-foreground h-4 w-4"
+                  aria-hidden="true"
+                />
+                <span className="flex-1 text-left">Open in WhatsApp</span>
+                <span className="sr-only">(opens in a new tab)</span>
+              </a>
+            )}
 
             {contact.email && (
               <div className="text-muted-foreground flex items-center gap-2 rounded-lg px-3 py-2 text-sm">
