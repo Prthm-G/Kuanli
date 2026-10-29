@@ -148,6 +148,13 @@ BEGIN
    WHERE c.id = a.counsellor_id AND c.phone_number_id = p_phone_number_id
      AND a.contact_id = p_contact_id AND a.reached_at IS NULL;
   GET DIAGNOSTICS n = ROW_COUNT;
+  -- Their chat on the counsellor's number belongs to that counsellor's login
+  -- (Kuanli "My leads"), unless someone already owns it.
+  UPDATE public.conversations cv SET assigned_agent_id = c.profile_id
+    FROM public.counsellors c
+   WHERE c.phone_number_id = p_phone_number_id AND c.profile_id IS NOT NULL
+     AND cv.contact_id = p_contact_id AND cv.phone_number_id = p_phone_number_id
+     AND cv.assigned_agent_id IS NULL;
   -- The lead is talking to their counsellor now: keep the bot quiet on 79019.
   UPDATE public.conversations SET bot_active = false, updated_at = now()
    WHERE contact_id = p_contact_id AND phone_number_id IS DISTINCT FROM p_phone_number_id AND bot_active;
