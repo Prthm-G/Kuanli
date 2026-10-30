@@ -70,7 +70,8 @@ import { decrypt } from '@/lib/whatsapp/encryption';
  * stage cannot be reported as a guess.
  */
 export type ConversionEventName =
-  | 'LeadSubmitted' // CRM 'Qualified'
+  | 'LeadSubmitted' // lead tapped a specific course (migration 085; was CRM 'Qualified')
+  | 'QualifiedLead' // lead reached their assigned counsellor (migration 085)
   | 'InitiateCheckout' // CRM 'Application Started' (migration 075)
   | 'Purchase'; // CRM 'Enrolled'
 
@@ -102,7 +103,7 @@ export interface ReportConversionParams {
   accountId: string;
   conversationId: string;
   eventName: ConversionEventName;
-  /** Money value. Omitted for non-monetary events such as Lead. */
+  /** Money value. Omitted for non-monetary events (LeadSubmitted, QualifiedLead). */
   value?: number;
   currency?: string;
   /** The conversion's own time. Defaults to now. */

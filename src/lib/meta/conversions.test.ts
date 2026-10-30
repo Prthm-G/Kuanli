@@ -121,6 +121,11 @@ describe('buildEventId', () => {
       buildEventId(CONV, 'Purchase')
     );
   });
+
+  it('matches the id migration 085 queues for the lead-quality events', () => {
+    expect(buildEventId(CONV, 'LeadSubmitted')).toBe(`${CONV}:LeadSubmitted`);
+    expect(buildEventId(CONV, 'QualifiedLead')).toBe(`${CONV}:QualifiedLead`);
+  });
 });
 
 describe('isWithinEventWindow', () => {
