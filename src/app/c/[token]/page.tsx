@@ -73,7 +73,12 @@ export default async function ChatLinkPage({ params }: { params: Promise<{ token
           return (
             <li key={i} className={`flex flex-col ${mine ? 'items-end' : 'items-start'}`}>
               {line.ad && <div className="mb-1 rounded-md bg-amber-50 px-2 py-1 text-xs text-amber-800">Ad clicked: {line.ad}</div>}
-              {line.text && (
+              {line.note && (
+                <div className="max-w-[85%] rounded-xl border border-dashed border-slate-300 bg-slate-50 px-3 py-2 text-xs italic text-slate-600">
+                  {line.text}
+                </div>
+              )}
+              {line.text && !line.note && (
                 <div className={`max-w-[85%] whitespace-pre-wrap break-words rounded-2xl px-3 py-2 text-sm shadow-sm ${mine ? 'bg-emerald-100' : 'bg-white'}`}>
                   {line.text}
                 </div>

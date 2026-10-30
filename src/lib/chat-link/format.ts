@@ -5,7 +5,13 @@ export function isChatToken(token: string): boolean {
   return /^[A-Za-z0-9_-]{24}$/.test(token);
 }
 
-export type ChatLine = { who: 'lead' | 'bot' | 'counsellor' | 'other'; text: string; ad: string | null };
+export type ChatLine = { who: 'lead' | 'bot' | 'counsellor' | 'other'; text: string; ad: string | null; note?: boolean };
+
+// Kuanli's placeholders for an inbound WhatsApp would not hand us (Meta 131051 / 131060, edited or deleted). They
+// say "check the WhatsApp Business app", which a counsellor does not have: show what to do instead.
+const UNREADABLE = /^(?:Unsupported message type|Message unavailable \(Meta 131060\)|Message content not available in Kuanli)/;
+export const UNREADABLE_NOTE =
+  'The lead sent something WhatsApp does not pass on to us (for example a view-once photo, a poll or a message they later deleted). We cannot see it here. Ask them on WhatsApp to send it again as text.';
 
 const BANNER = /^\s*🚀 \*Ad Clicked:\* ([^\n]*)\n[\s\S]*?(?:\n🔗[^\n]*)?(?:\n\n|$)/;
 
@@ -20,6 +26,7 @@ export function toChatLine(senderType: string, contentType: string, text: string
   let ad: string | null = null;
   const m = who === 'lead' ? body.match(BANNER) : null;
   if (m) { ad = m[1].trim(); body = body.slice(m[0].length).trim(); }
+  if (who === 'lead' && UNREADABLE.test(body)) return { who, text: UNREADABLE_NOTE, ad, note: true };
   if (!body) body = contentType === 'text' ? '' : `[${contentType}]`;
   return { who, text: body, ad };
 }
