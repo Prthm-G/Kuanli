@@ -275,12 +275,28 @@ export async function reportConversion(
 
   // Strict resolution: by the conversation's own number only. See the header
   // note on why the primary-config fallback is deliberately absent.
-  const { data: cfg } = await db
+  const { data: cfg, error: cfgError } = await db
     .from('whatsapp_config')
     .select('waba_id, access_token, capi_dataset_id')
     .eq('account_id', p.accountId)
     .eq('phone_number_id', conv.phone_number_id)
     .maybeSingle();
+  // FAILED, not skipped: a transient read error must stay retryable. Read as
+  // "no config" it would become a permanent skipped:no_waba_id.
+  if (cfgError) {
+    console.error(
+      '[capi] whatsapp_config lookup failed',
+      p.conversationId,
+      cfgError
+    );
+    await audit('failed', { reason: 'config_lookup_failed' });
+    return {
+      reported: false,
+      failed: true,
+      error: 'config_lookup_failed',
+      fbtraceId: null,
+    };
+  }
 
   const config = cfg as ConfigRow | null;
   if (!config?.waba_id) {
@@ -371,6 +387,23 @@ export async function reportConversion(
       fbtrace_id: fbtraceId,
     });
     return { reported: false, failed: true, error, fbtraceId };
+  }
+
+  // A 200 is not proof of delivery: Meta reports how many events it took. One
+  // event goes per request, so anything below 1 (or an unreadable body) failed.
+  if ((body?.events_received ?? 0) < 1) {
+    await audit('failed', {
+      reason: 'events_received_0',
+      waba_id: config.waba_id,
+      dataset_id: datasetId,
+      fbtrace_id: fbtraceId,
+    });
+    return {
+      reported: false,
+      failed: true,
+      error: 'events_received_0',
+      fbtraceId,
+    };
   }
 
   await audit('sent', {

@@ -25,7 +25,10 @@ vi.mock('@/lib/whatsapp/encryption', () => ({
  * handed. Writes are captured so the audit trail can be asserted on, because
  * "an unsent conversion leaves a row" is the actual requirement, not a detail.
  */
-function fakeSupabase(tables: Record<string, Record<string, unknown>[]>) {
+function fakeSupabase(
+  tables: Record<string, Record<string, unknown>[]>,
+  readErrors: Record<string, { message: string }> = {}
+) {
   const writes: { table: string; op: string; row: Record<string, unknown> }[] =
     [];
   const db = {
@@ -46,7 +49,11 @@ function fakeSupabase(tables: Record<string, Record<string, unknown>[]>) {
           return builder;
         },
         maybeSingle: () =>
-          Promise.resolve({ data: rows[0] ?? null, error: null }),
+          Promise.resolve(
+            readErrors[table]
+              ? { data: null, error: readErrors[table] }
+              : { data: rows[0] ?? null, error: null }
+          ),
       };
       return builder;
     },
@@ -389,6 +396,78 @@ describe('reportConversion - failures are recorded and retryable', () => {
     expect(result).toMatchObject({ failed: true });
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(auditRows(writes)[0].row).toMatchObject({ status: 'failed' });
+  });
+});
+
+describe('reportConversion - a send is only "sent" when Meta took it', () => {
+  it('records a 200 that received no events as failed, not sent', async () => {
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ events_received: 0, fbtrace_id: 'Z0' }),
+    });
+    const { db, writes } = fakeSupabase({
+      conversations: [CONV_FROM_AD],
+      whatsapp_config: [CONFIG_LIVE],
+    });
+    const result = await reportConversion(db, {
+      accountId: ACCOUNT,
+      conversationId: CONV,
+      eventName: 'LeadSubmitted',
+    });
+    expect(result).toMatchObject({
+      failed: true,
+      error: 'events_received_0',
+      fbtraceId: 'Z0',
+    });
+    expect(auditRows(writes)[0].row).toMatchObject({
+      status: 'failed',
+      reason: 'events_received_0',
+    });
+  });
+
+  it('records an unreadable 200 body as failed, not sent', async () => {
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => {
+        throw new Error('not json');
+      },
+    });
+    const { db, writes } = fakeSupabase({
+      conversations: [CONV_FROM_AD],
+      whatsapp_config: [CONFIG_LIVE],
+    });
+    const result = await reportConversion(db, {
+      accountId: ACCOUNT,
+      conversationId: CONV,
+      eventName: 'LeadSubmitted',
+    });
+    expect(result).toMatchObject({ failed: true });
+    expect(auditRows(writes)[0].row).toMatchObject({ status: 'failed' });
+  });
+});
+
+describe('reportConversion - a config read error is retryable', () => {
+  it('records a whatsapp_config read error as failed, not skipped:no_waba_id', async () => {
+    const { db, writes } = fakeSupabase(
+      { conversations: [CONV_FROM_AD], whatsapp_config: [CONFIG_LIVE] },
+      { whatsapp_config: { message: 'connection reset' } }
+    );
+    const result = await reportConversion(db, {
+      accountId: ACCOUNT,
+      conversationId: CONV,
+      eventName: 'LeadSubmitted',
+    });
+    expect(result).toMatchObject({
+      failed: true,
+      error: 'config_lookup_failed',
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(auditRows(writes)[0].row).toMatchObject({
+      status: 'failed',
+      reason: 'config_lookup_failed',
+    });
   });
 });
 

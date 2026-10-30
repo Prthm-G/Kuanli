@@ -77,18 +77,25 @@ export async function POST(request: Request) {
   const db = supabaseAdmin();
 
   // Expire what can never be delivered, so the queue does not grow a tail of
-  // rows that would fail every batch they join.
+  // rows that would fail every batch they join. Only 'pending' rows: a 'failed'
+  // row keeps its real reason (Meta's error) as the record of why it never
+  // landed; the due query below already stops selecting it once it is stale.
   const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-  const { data: expired } = await db
+  const { data: expired, error: expiryError } = await db
     .from('meta_conversion_events')
     .update({
       status: 'skipped',
       reason: 'event_too_old',
       updated_at: new Date().toISOString(),
     })
-    .in('status', ['pending', 'failed'])
+    .eq('status', 'pending')
     .lte('event_time', cutoff)
     .select('id');
+  // Housekeeping only: the due query below filters stale rows itself, so a
+  // failed expiry must not stop delivery. Reported in the response instead.
+  if (expiryError) {
+    console.error('[capi] expiry update failed', expiryError);
+  }
 
   const { data: due, error: dueError } = await db
     .from('meta_conversion_events')
@@ -132,6 +139,7 @@ export async function POST(request: Request) {
   return NextResponse.json({
     due: due?.length ?? 0,
     expired: expired?.length ?? 0,
+    ...(expiryError ? { expiry_error: expiryError.message } : {}),
     tally,
   });
 }
