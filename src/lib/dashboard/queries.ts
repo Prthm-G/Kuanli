@@ -40,6 +40,22 @@ async function counsellorNumberList(db: DB): Promise<string | null> {
   return `(${(data as string[]).map((id) => `"${id}"`).join(',')})`
 }
 
+// Messages carry no number of their own; the tiles that promise "only messages
+// sent from Kuanli" filter through the chat, so counsellor-phone replies stored
+// on those numbers (echoes, history) are left out for owner and admins too.
+function kuanliMessages(
+  db: DB,
+  counsellorNumbers: string | null,
+  columns: string,
+  options?: { count: 'exact'; head: true },
+) {
+  if (!counsellorNumbers) return db.from('messages').select(columns, options)
+  return db
+    .from('messages')
+    .select(`${columns}, conversations!inner(phone_number_id)`, options)
+    .not('conversations.phone_number_id', 'in', counsellorNumbers)
+}
+
 export async function loadMetrics(db: DB): Promise<MetricsBundle> {
   const todayStart = startOfLocalDay().toISOString()
   const yesterdayStart = daysAgoStart(1).toISOString()
@@ -80,14 +96,10 @@ export async function loadMetrics(db: DB): Promise<MetricsBundle> {
       .lt('created_at', todayStart),
     // Lost and Not Interested deals keep status 'open'; their stage closes them.
     db.from('deals').select('value, status, stage:pipeline_stages(name)').eq('status', 'open'),
-    db
-      .from('messages')
-      .select('id', { count: 'exact', head: true })
+    kuanliMessages(db, counsellorNumbers, 'id', { count: 'exact', head: true })
       .eq('sender_type', 'agent')
       .gte('created_at', todayStart),
-    db
-      .from('messages')
-      .select('id', { count: 'exact', head: true })
+    kuanliMessages(db, counsellorNumbers, 'id', { count: 'exact', head: true })
       .eq('sender_type', 'agent')
       .gte('created_at', yesterdayStart)
       .lt('created_at', todayStart),
@@ -195,15 +207,14 @@ export async function loadResponseTime(db: DB): Promise<ResponseTimeSummary> {
   // with enough overlap if the user opens the dashboard late on a
   // Monday.
   const fourteenDaysAgo = daysAgoStart(13).toISOString()
-  const { data, error } = await db
-    .from('messages')
-    .select('conversation_id, sender_type, created_at')
+  const counsellorNumbers = await counsellorNumberList(db)
+  const { data, error } = await kuanliMessages(db, counsellorNumbers, 'conversation_id, sender_type, created_at')
     .gte('created_at', fourteenDaysAgo)
     .order('conversation_id', { ascending: true })
     .order('created_at', { ascending: true })
   if (error) throw error
 
-  const rows = (data ?? []) as {
+  const rows = (data ?? []) as unknown as {
     conversation_id: string
     sender_type: string
     created_at: string
