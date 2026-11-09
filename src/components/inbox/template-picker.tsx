@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { useAuth } from "@/hooks/use-auth";
 import type { MessageTemplate } from "@/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -78,6 +79,7 @@ export function TemplatePicker({
   onOpenChange,
   onSelect,
 }: TemplatePickerProps) {
+  const { accountId } = useAuth();
   const [templates, setTemplates] = useState<MessageTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<MessageTemplate | null>(null);
@@ -92,11 +94,8 @@ export function TemplatePicker({
     (async () => {
       setLoading(true);
       const supabase = createClient();
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
 
-      if (!user) {
+      if (!accountId) {
         if (!cancelled) {
           setTemplates([]);
           setLoading(false);
@@ -104,10 +103,12 @@ export function TemplatePicker({
         return;
       }
 
+      // By account, not by author: every counsellor sends the team's
+      // approved templates (RLS lets any member read them).
       const { data, error } = await supabase
         .from("message_templates")
         .select("*")
-        .eq("user_id", user.id)
+        .eq("account_id", accountId)
         .eq("status", "APPROVED")
         .order("created_at", { ascending: false });
 
@@ -124,7 +125,7 @@ export function TemplatePicker({
     return () => {
       cancelled = true;
     };
-  }, [open]);
+  }, [open, accountId]);
 
   function resetSelection() {
     setSelected(null);

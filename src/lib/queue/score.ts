@@ -37,6 +37,8 @@ export interface QueueSignals {
   lastCustomerAt: Date | null;
   /** Newest human agent message across all the contact's conversations. */
   lastAgentAt: Date | null;
+  /** Newest logged follow-up (call, visit, ...) for the contact (093). */
+  lastFollowUpAt?: Date | null;
 }
 
 export interface QueueScore {
@@ -45,7 +47,7 @@ export interface QueueScore {
   interest: number;
   awaitingReply: number;
   recency: number;
-  /** True when the lead spoke last and no human has replied since. */
+  /** True when the lead spoke last and no human has replied or logged a follow-up since. */
   isAwaitingReply: boolean;
 }
 
@@ -71,9 +73,15 @@ export function scoreLead(signals: QueueSignals, now: Date = new Date()): QueueS
     (signals.hasSpecialization ? SPECIALIZATION_POINTS : 0);
 
   // A lead who never wrote (broadcast-only thread) is not "awaiting" anything.
+  // A follow-up logged after their last message (a call, say) answers them
+  // as much as a WhatsApp reply does.
+  const lastHuman = [signals.lastAgentAt, signals.lastFollowUpAt ?? null].reduce<Date | null>(
+    (a, b) => (b !== null && (a === null || b > a) ? b : a),
+    null,
+  );
   const isAwaitingReply =
     signals.lastCustomerAt !== null &&
-    (signals.lastAgentAt === null || signals.lastCustomerAt > signals.lastAgentAt);
+    (lastHuman === null || signals.lastCustomerAt > lastHuman);
   const awaitingReply = isAwaitingReply ? AWAITING_REPLY_POINTS : 0;
 
   let recency = 0;

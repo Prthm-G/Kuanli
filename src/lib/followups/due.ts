@@ -84,6 +84,23 @@ export function actionableCount(
   }).length;
 }
 
+/**
+ * The Follow-ups page numbers, each named for what it counts: `open` is every
+ * commitment the tab lists, `dueNow` is overdue + today (the sidebar badge),
+ * `overdue` is the past-due subset.
+ */
+export function worklistCounts(
+  rows: WorklistRow[],
+  now: Date = new Date()
+): { open: number; dueNow: number; overdue: number } {
+  const b = bucketWorklist(rows, now);
+  return {
+    open: rows.length,
+    dueNow: b.overdue.length + b.today.length,
+    overdue: b.overdue.length,
+  };
+}
+
 /** Human phrasing for a due date, e.g. "3 days overdue", "due today". */
 export function describeDue(dueAt: string, now: Date = new Date()): string {
   const n = daysOverdue(dueAt, now);

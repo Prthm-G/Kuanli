@@ -12,6 +12,13 @@ import { PipelineFunnel } from '@/components/pipelines/pipeline-funnel';
 import { PipelineActivity } from '@/components/pipelines/pipeline-activity';
 import { loadLeadQueue } from '@/lib/queue/queries';
 import type { QueueLead } from '@/lib/queue/types';
+import {
+  LOST_STAGE,
+  WON_STAGE,
+  startOfMonth,
+  type StageEvent,
+} from '@/lib/pipelines/closed-this-month';
+import { loadCloseEvents } from '@/lib/pipelines/queries';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -59,6 +66,16 @@ export default function PipelinesPage() {
   const [selectedPipelineId, setSelectedPipelineId] = useState<string>('');
   const [stages, setStages] = useState<PipelineStage[]>([]);
   const [deals, setDeals] = useState<Deal[]>([]);
+  // This month's moves into Enrolled/Lost, for the header's won/lost tally,
+  // tagged with the pipeline they were read for. Null until loaded, or after
+  // a failed read (which also raises a toast), so the tiles never show a
+  // silent 0.
+  const [stageEvents, setStageEvents] = useState<{
+    pipelineId: string;
+    events: StageEvent[];
+  } | null>(null);
+  // Only the newest stage-events read may land (pipeline switch, board move).
+  const eventsSeq = useRef(0);
   const [loading, setLoading] = useState(true);
 
   // Dialog / sheet state
@@ -81,8 +98,8 @@ export default function PipelinesPage() {
   const [view, setView] = useState<'board' | 'funnel' | 'activity'>('board');
 
   // Board filters + per-card insight (score / awaiting-reply / interest),
-  // keyed by contact_id from the lead_queue RPC. Enrolled/Lost contacts are
-  // outside the queue's scope and simply have no insight row.
+  // keyed by contact_id from the lead_queue RPC. Enrolled, Lost and Not
+  // Interested contacts are outside the queue's scope and have no insight row.
   const [insights, setInsights] = useState<Map<string, QueueLead>>(new Map());
   const [search, setSearch] = useState('');
   const [awaitingOnly, setAwaitingOnly] = useState(false);
@@ -153,7 +170,7 @@ export default function PipelinesPage() {
       const { data } = await supabase
         .from('deals')
         .select(
-          '*, contact:contacts(*), assignee:profiles!deals_assigned_to_fkey(*)'
+          '*, contact:contacts(*, conversations(interest_university, interest_course, interest_specialization, interest_updated_at)), assignee:profiles!deals_assigned_to_fkey(*)'
         )
         .eq('pipeline_id', pipelineId)
         .order('created_at', { ascending: false });
@@ -161,6 +178,38 @@ export default function PipelinesPage() {
     },
     [supabase]
   );
+
+  const reloadStageEvents = useCallback(
+    async (pipelineStages: PipelineStage[]) => {
+      if (!accountId || pipelineStages.length === 0) return;
+      const seq = ++eventsSeq.current;
+      const pipelineId = pipelineStages[0].pipeline_id;
+      const ids = pipelineStages
+        .filter((s) => s.name === WON_STAGE || s.name === LOST_STAGE)
+        .map((s) => s.id);
+      try {
+        const events = await loadCloseEvents(
+          supabase,
+          accountId,
+          ids,
+          startOfMonth()
+        );
+        if (seq === eventsSeq.current) setStageEvents({ pipelineId, events });
+      } catch {
+        if (seq !== eventsSeq.current) return;
+        setStageEvents(null);
+        toast.error("Could not load this month's won and lost counts");
+      }
+    },
+    [supabase, accountId]
+  );
+
+  // Re-read whenever this pipeline's stages load or change. The setters run
+  // after the awaited read, not synchronously in the effect body.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void reloadStageEvents(stages);
+  }, [stages, reloadStageEvents]);
 
   const seedDefaultPipeline =
     useCallback(async (): Promise<Pipeline | null> => {
@@ -268,8 +317,12 @@ export default function PipelinesPage() {
 
   const refreshDeals = useCallback(async () => {
     if (!selectedPipelineId) return;
-    setDeals(await loadDeals(selectedPipelineId));
-  }, [loadDeals, selectedPipelineId]);
+    const [d] = await Promise.all([
+      loadDeals(selectedPipelineId),
+      reloadStageEvents(stages),
+    ]);
+    setDeals(d);
+  }, [loadDeals, reloadStageEvents, selectedPipelineId, stages]);
 
   const handleDealMoved = useCallback(
     async (dealId: string, newStageId: string) => {
@@ -284,9 +337,11 @@ export default function PipelinesPage() {
       if (error) {
         toast.error('Failed to move deal');
         refreshDeals();
+        return;
       }
+      await reloadStageEvents(stages);
     },
-    [supabase, refreshDeals]
+    [supabase, refreshDeals, reloadStageEvents, stages]
   );
 
   const handleAddDeal = useCallback(
@@ -530,7 +585,15 @@ export default function PipelinesPage() {
                   </span>
                 )}
               </div>
-              <PipelineAnalytics stages={stages} deals={filteredDeals} />
+              <PipelineAnalytics
+                stages={stages}
+                deals={filteredDeals}
+                stageEvents={
+                  stageEvents?.pipelineId === selectedPipelineId
+                    ? stageEvents.events
+                    : null
+                }
+              />
               <PipelineBoard
                 stages={stages}
                 deals={filteredDeals}

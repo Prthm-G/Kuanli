@@ -204,7 +204,7 @@ export function AdmissionRegister() {
                   colSpan={9}
                   className="text-muted-foreground p-6 text-center"
                 >
-                  No enrolled students match these filters.
+                  No students match these filters.
                 </td>
               </tr>
             )}

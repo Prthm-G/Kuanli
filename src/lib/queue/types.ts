@@ -23,5 +23,7 @@ export interface QueueLead {
   customerMessages: number;
   lastCustomerAt: string | null;
   lastAgentAt: string | null;
+  /** Newest logged follow-up's occurred_at (093); clears awaiting when later. */
+  lastFollowUpAt: string | null;
   score: QueueScore;
 }

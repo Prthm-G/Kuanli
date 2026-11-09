@@ -26,7 +26,7 @@ async function load(token: string) {
     .maybeSingle();
   if (!link) return null;
   const [{ data: conv }, { data: msgs }] = await Promise.all([
-    db.from('conversations').select('id, contacts(name, phone)').eq('id', link.conversation_id).maybeSingle(),
+    db.from('conversations').select('id, phone_number_id, contacts(name, phone)').eq('id', link.conversation_id).maybeSingle(),
     db.from('messages')
       .select('sender_type, content_type, content_text, created_at')
       .eq('conversation_id', link.conversation_id)
@@ -34,6 +34,17 @@ async function load(token: string) {
       .limit(400),
   ]);
   if (!conv) return null;
+  // Migration 094: a chat on a counsellor's own number is for the owner and admins only. create_chat_link mints no link
+  // for one; this holds even for a link minted before the number was linked, and after it is unlinked (the history of
+  // every number ever linked). A failed check shows nothing.
+  if (conv.phone_number_id) {
+    const { data: own, error: ownError } = await db
+      .from('counsellor_number_history')
+      .select('phone_number_id')
+      .eq('phone_number_id', conv.phone_number_id)
+      .limit(1);
+    if (ownError || (own?.length ?? 0) > 0) return null;
+  }
   const contact = (Array.isArray(conv.contacts) ? conv.contacts[0] : conv.contacts) as { name?: string; phone?: string } | null;
   return { name: contact?.name || 'Lead', phone: contact?.phone || '', expires: link.expires_at as string, msgs: (msgs ?? []) as Msg[] };
 }

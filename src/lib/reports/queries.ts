@@ -4,6 +4,7 @@ import { loadOverdueCount } from "../followups/queries";
 import { resolveRange, type EodPeriod } from "./period";
 import {
   summarise,
+  withoutCounsellorNumbers,
   type EodReport,
   type EodRow,
   type FollowUpActivity,
@@ -61,7 +62,7 @@ export async function loadEodReport(
       | null;
   };
 
-  const rows: EodRow[] = ((data ?? []) as unknown as Raw[]).map((r) => {
+  const allRows: EodRow[] = ((data ?? []) as unknown as Raw[]).map((r) => {
     // PostgREST returns an embedded to-one relation as an object, but types it
     // loosely; normalise the array case rather than trusting the shape.
     const c = Array.isArray(r.contact) ? r.contact[0] : r.contact;
@@ -79,6 +80,19 @@ export async function loadEodReport(
       createdAt: r.created_at,
     };
   });
+
+  // Not leads (094). The list is not secret; if it cannot be read, the report
+  // keeps every row rather than fail.
+  const { data: counsellorNumbers, error: numbersError } = await supabase.rpc(
+    "counsellor_phone_number_ids",
+  );
+  if (numbersError) {
+    console.error("[eod] counsellor numbers not read:", numbersError.message);
+  }
+  const rows = withoutCounsellorNumbers(
+    allRows,
+    Array.isArray(counsellorNumbers) ? (counsellorNumbers as string[]) : [],
+  );
 
   return {
     rows,

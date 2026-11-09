@@ -7,9 +7,9 @@ import type { QueueLead } from './types';
  * Load the scored counsellor work queue via the `lead_queue` RPC
  * (migration 041). The RPC authorizes the caller against the account
  * (is_account_member) and returns one row per workable deal — every stage
- * except Enrolled and Lost — with per-contact message aggregates PostgREST
- * cannot express. Scoring and ordering happen here so the weights stay in
- * tested TypeScript.
+ * except Enrolled, Lost and Not Interested (093) — with per-contact message
+ * aggregates and the newest follow-up time, which PostgREST cannot express.
+ * Scoring and ordering happen here so the weights stay in tested TypeScript.
  */
 export async function loadLeadQueue(
   supabase: SupabaseClient,
@@ -43,6 +43,8 @@ export async function loadLeadQueue(
     customer_messages: number;
     last_customer_at: string | null;
     last_agent_at: string | null;
+    /** 093; absent before it is applied, which reads as no follow-up. */
+    last_follow_up_at?: string | null;
   };
 
   const leads: QueueLead[] = ((data ?? []) as unknown as Raw[]).map((r) => ({
@@ -64,6 +66,7 @@ export async function loadLeadQueue(
     customerMessages: Number(r.customer_messages ?? 0),
     lastCustomerAt: r.last_customer_at ?? null,
     lastAgentAt: r.last_agent_at ?? null,
+    lastFollowUpAt: r.last_follow_up_at ?? null,
     score: scoreLead(
       {
         customerMessages: Number(r.customer_messages ?? 0),
@@ -74,6 +77,9 @@ export async function loadLeadQueue(
           ? new Date(r.last_customer_at)
           : null,
         lastAgentAt: r.last_agent_at ? new Date(r.last_agent_at) : null,
+        lastFollowUpAt: r.last_follow_up_at
+          ? new Date(r.last_follow_up_at)
+          : null,
       },
       now
     ),

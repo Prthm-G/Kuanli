@@ -6,11 +6,13 @@ import { toast } from 'sonner';
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
 import { logFollowUp } from '@/lib/followups/queries';
+import { announceFollowUpsChanged } from '@/lib/followups/events';
 import {
   FOLLOWUP_METHODS,
   FOLLOWUP_OUTCOMES,
   METHOD_LABEL,
   OUTCOME_LABEL,
+  nextStepCopy,
   type FollowUpMethod,
   type FollowUpOutcome,
 } from '@/lib/followups/types';
@@ -96,6 +98,10 @@ export function LogDialog({
     setNextMethod('call');
   }, [open]);
 
+  // Not interested: the database moves the lead (migration 093); the form
+  // only says so. It must not move the deal itself, or the trail gets two.
+  const nextStep = nextStepCopy(outcome);
+
   async function save() {
     if (!accountId || !user?.id) return;
     if (!summary.trim()) {
@@ -118,9 +124,15 @@ export function LogDialog({
         nextDueAt: nextDue ? new Date(`${nextDue}T09:00`).toISOString() : null,
         nextMethod: nextDue ? nextMethod : null,
       });
-      toast.success('Follow-up logged');
+      toast.success(
+        outcome === 'not_interested'
+          ? 'Follow-up logged. Moved to Not interested.'
+          : 'Follow-up logged'
+      );
       onOpenChange(false);
       onLogged();
+      // The sidebar badge and My leads refresh now, not on their next poll.
+      announceFollowUpsChanged();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Could not log follow-up');
     } finally {
@@ -143,7 +155,8 @@ export function LogDialog({
         </DialogHeader>
 
         <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-3">
+          {/* Stacked on phones: half a phone's width cuts off the time. */}
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label htmlFor="fu-when">When</Label>
               <Input
@@ -194,6 +207,14 @@ export function LogDialog({
                 ))}
               </SelectContent>
             </Select>
+            {nextStep.notice && (
+              <p
+                role="status"
+                className="rounded-md border border-border bg-muted/60 px-2.5 py-2 text-xs text-foreground"
+              >
+                {nextStep.notice}
+              </p>
+            )}
           </div>
 
           <div className="space-y-1.5">
@@ -209,11 +230,8 @@ export function LogDialog({
 
           <div className="border-border space-y-3 rounded-lg border p-3">
             <div className="space-y-1.5">
-              <Label htmlFor="fu-next">Next follow-up</Label>
-              <p className="text-muted-foreground text-xs">
-                Leave empty if nothing is owed. Setting a date puts this student
-                on the worklist and closes any earlier commitment.
-              </p>
+              <Label htmlFor="fu-next">{nextStep.label}</Label>
+              <p className="text-muted-foreground text-xs">{nextStep.help}</p>
               <div className="grid grid-cols-2 gap-3">
                 <Input
                   id="fu-next"

@@ -22,6 +22,12 @@
  * left alone: `rollback.sql` for the 2026-08-26 migration keys on it, and
  * truncating it would strand that migration with no way back.
  *
+ * The staging table holds student PII and encrypted portal passwords. Stage 0
+ * creates it with RLS on and no access for the API roles (anon, authenticated);
+ * stage E drops it. Run stage E once the pass is verified and its rollback is
+ * no longer wanted (rollback.sql needs the table, and drops it too). Export it
+ * to the backup folder first if a record is wanted.
+ *
  *   node --experimental-strip-types --import ./scripts/ts-loader.mjs \
  *     scripts/reconcile-admissions.ts --out <dir> --workbook <path> \
  *     --account <uuid> --owner <uuid>
@@ -234,6 +240,9 @@ CREATE TABLE IF NOT EXISTS ${STAGING} (
   note                   TEXT,
   contact_id             UUID
 );
+-- Student PII and encrypted portal passwords: never through the API.
+ALTER TABLE ${STAGING} ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON ${STAGING} FROM PUBLIC, anon, authenticated;
 TRUNCATE ${STAGING};
 INSERT INTO ${STAGING} (
   source_key, account_id, sheet, row_number, name, phone, email, university, mode,
@@ -452,6 +461,16 @@ WHERE c.id = s.contact_id AND s.source_key = ${q(key(r))}
 COMMIT;
 `);
 
+w('stage-e-drop-staging.sql', `
+-- Stage E: the last step, always. Drop this pass's staging table (student PII,
+-- encrypted portal passwords). After this, rollback.sql can no longer find
+-- this pass's rows: run it only once the pass is verified.
+BEGIN;
+DROP TABLE IF EXISTS ${STAGING};
+COMMIT;
+SELECT 'staging table gone' AS check, (to_regclass('public.${STAGING}') IS NULL)::text AS value;
+`);
+
 w('rollback.sql', `
 -- Rollback for the 2026-08-27 reconciliation pass ONLY.
 -- It removes the rows THIS pass created and drops THIS pass's staging table.
@@ -555,5 +574,6 @@ console.log(`staged            ${rows.length}`);
 console.log(`released by merge ${released.length}`);
 console.log(`decided from data ${decided.length}`);
 console.log(`still for office  ${stillFlagged.length}`);
-console.log(`\nwrote ${OUT}/{stage-0..d, rollback, verify}.sql and report.md`);
+console.log(`\nwrote ${OUT}/{stage-0..e, rollback, verify}.sql and report.md`);
+console.log('Stage E (drop the staging table, which holds student PII) is the last step, always.');
 console.log('Nothing was written to the database.');

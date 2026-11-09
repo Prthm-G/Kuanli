@@ -33,6 +33,8 @@ interface ApprovalsQueueProps {
   /** Bumped by the parent to refetch. */
   refreshKey?: number;
   onDecided: () => void;
+  /** Told how many items are waiting, so a tab badge can match this box. */
+  onCountChange?: (count: number) => void;
 }
 
 /**
@@ -48,6 +50,7 @@ interface ApprovalsQueueProps {
 export function ApprovalsQueue({
   refreshKey = 0,
   onDecided,
+  onCountChange,
 }: ApprovalsQueueProps) {
   const { accountId, accountRole, defaultCurrency } = useAuth();
   const [payments, setPayments] = useState<PendingPayment[]>([]);
@@ -85,6 +88,11 @@ export function ApprovalsQueue({
       cancelled = true;
     };
   }, [accountId, canDecide, refreshKey, reload]);
+
+  const waiting = canDecide ? payments.length + discounts.length : 0;
+  useEffect(() => {
+    onCountChange?.(waiting);
+  }, [waiting, onCountChange]);
 
   function refresh() {
     setReload((k) => k + 1);

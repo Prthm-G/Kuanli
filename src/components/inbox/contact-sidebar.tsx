@@ -3,7 +3,14 @@
 import { useState, useEffect, useCallback } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
-import type { Contact, Conversation, Deal, ContactNote, Tag } from '@/types';
+import type {
+  Contact,
+  Conversation,
+  Deal,
+  ContactNote,
+  PipelineStage,
+  Tag,
+} from '@/types';
 import { EnrollmentPanel } from './enrollment-panel';
 import { NextDueStrip } from '@/components/followups/next-due-strip';
 import {
@@ -12,13 +19,22 @@ import {
   Copy,
   Check,
   Tag as TagIcon,
-  DollarSign,
+  GitBranch,
   StickyNote,
   Plus,
   MessageCircle,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { cn } from '@/lib/utils';
+import { toast } from 'sonner';
 import { format } from 'date-fns';
 import { whatsappChatUrl } from '@/lib/inbox/wa-link';
 
@@ -30,16 +46,21 @@ interface ContactSidebarProps {
   /** Called after enrollment succeeds so the parent can refetch instead of
    *  the component reloading the whole page. */
   onContactUpdated?: () => void;
+  /** Overrides the desktop width, for the phone sheet. */
+  className?: string;
 }
 
 export function ContactSidebar({
   contact,
   conversation,
   onContactUpdated,
+  className,
 }: ContactSidebarProps) {
-  const { accountId } = useAuth();
+  const { accountId, accountRole } = useAuth();
+  const canEditStage = accountRole !== null && accountRole !== 'viewer';
   const [copied, setCopied] = useState(false);
   const [deals, setDeals] = useState<Deal[]>([]);
+  const [stages, setStages] = useState<PipelineStage[]>([]);
   const [notes, setNotes] = useState<ContactNote[]>([]);
   const [tags, setTags] = useState<(Tag & { contact_tag_id: string })[]>([]);
   const [newNote, setNewNote] = useState('');
@@ -68,7 +89,27 @@ export function ContactSidebar({
         .eq('contact_id', contact.id),
     ]);
 
-    if (dealsRes.data) setDeals(dealsRes.data);
+    if (dealsRes.data) {
+      setDeals(dealsRes.data);
+      const pipelineIds = [
+        ...new Set((dealsRes.data as Deal[]).map((d) => d.pipeline_id)),
+      ];
+      if (pipelineIds.length > 0) {
+        const { data: stageRows, error: stageError } = await supabase
+          .from('pipeline_stages')
+          .select('*')
+          .in('pipeline_id', pipelineIds)
+          .order('position');
+        if (stageError) {
+          // Without stages the picker falls back to a read-only badge: say why.
+          console.error('Failed to load stages:', stageError.message);
+          toast.error('Could not load stages. Refresh to change the stage.');
+        }
+        setStages((stageRows as PipelineStage[]) ?? []);
+      } else {
+        setStages([]);
+      }
+    }
     if (notesRes.data) setNotes(notesRes.data);
     if (tagsRes.data) {
       const mapped = tagsRes.data
@@ -97,6 +138,35 @@ export function ContactSidebar({
     // React Compiler's inference agrees with the manual dep list —
     // fixes the `preserve-manual-memoization` lint error.
   }, [contact]);
+
+  // A move made by a person also protects the lead from the Lost sweep for the
+  // next 14 days (migration 091).
+  const handleStageChange = useCallback(
+    async (dealId: string, stageId: string) => {
+      const { data, error } = await createClient()
+        .from('deals')
+        .update({ stage_id: stageId })
+        .eq('id', dealId)
+        .select('id');
+      if (error || !data?.length) {
+        console.error('Failed to change stage:', error?.message ?? 'no row');
+        toast.error('Could not change the stage');
+        return;
+      }
+      setDeals((prev) =>
+        prev.map((d) =>
+          d.id === dealId
+            ? {
+                ...d,
+                stage_id: stageId,
+                stage: stages.find((s) => s.id === stageId) ?? d.stage,
+              }
+            : d
+        )
+      );
+    },
+    [stages]
+  );
 
   const handleAddNote = useCallback(async () => {
     if (!contact || !newNote.trim()) return;
@@ -140,8 +210,16 @@ export function ContactSidebar({
   const initials = displayName.charAt(0).toUpperCase();
 
   return (
-    <div className="border-border bg-card flex h-full w-70 flex-col border-l">
-      <ScrollArea className="flex-1">
+    <div
+      className={cn(
+        'border-border bg-card flex h-full w-70 flex-col border-l',
+        className
+      )}
+    >
+      {/* `min-h-0` is load-bearing: without it this grows to fit its content
+          instead of scrolling, and everything below the fold is unreachable
+          (same bug as the conversation list, issue #229). */}
+      <ScrollArea className="min-h-0 flex-1">
         <div className="p-4">
           {/* Contact Info */}
           <div className="flex flex-col items-center text-center">
@@ -211,6 +289,86 @@ export function ContactSidebar({
           {/* Divider */}
           <div className="border-border my-4 border-t" />
 
+          {/* Stage: the first thing a counsellor needs after the contact. */}
+          <div>
+            <div className="text-muted-foreground flex items-center gap-2 px-1 text-xs font-medium tracking-wider uppercase">
+              <GitBranch className="h-3 w-3" />
+              Stage
+            </div>
+            <div className="mt-2 space-y-2">
+              {deals.length === 0 ? (
+                <p className="text-muted-foreground px-1 text-xs">No deals</p>
+              ) : (
+                deals.map((deal) => {
+                  const options = stages.filter(
+                    (s) => s.pipeline_id === deal.pipeline_id
+                  );
+                  return (
+                    <div
+                      key={deal.id}
+                      className="bg-muted rounded-lg px-3 py-2"
+                    >
+                      <p className="text-foreground truncate text-sm font-medium">
+                        {deal.title}
+                      </p>
+                      {canEditStage && options.length > 0 ? (
+                        <Select
+                          value={deal.stage_id}
+                          onValueChange={(value) => {
+                            const next = String(value);
+                            if (next && next !== deal.stage_id) {
+                              void handleStageChange(deal.id, next);
+                            }
+                          }}
+                        >
+                          <SelectTrigger
+                            size="sm"
+                            className="bg-background/60 mt-2 w-full"
+                            aria-label="Change stage"
+                          >
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {options.map((s) => (
+                              <SelectItem key={s.id} value={s.id}>
+                                {s.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        deal.stage && (
+                          <span
+                            className="mt-1 inline-block rounded-full px-1.5 py-0.5 text-[10px]"
+                            style={{
+                              backgroundColor: `${deal.stage.color}20`,
+                              color: deal.stage.color,
+                            }}
+                          >
+                            {deal.stage.name}
+                          </span>
+                        )
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+
+          {/* Divider */}
+          <div className="border-border my-4 border-t" />
+
+          {/* Follow-up (migration 054) */}
+          <NextDueStrip
+            contactId={contact.id}
+            contactName={contact.name}
+            conversationId={conversation?.id ?? null}
+          />
+
+          {/* Divider */}
+          <div className="border-border my-4 border-t" />
+
           {/* Tags */}
           <div>
             <div className="text-muted-foreground flex items-center gap-2 px-1 text-xs font-medium tracking-wider uppercase">
@@ -272,53 +430,6 @@ export function ContactSidebar({
               </div>
             )}
           </div>
-
-          {/* Divider */}
-          <div className="border-border my-4 border-t" />
-
-          {/* Active Deals */}
-          <div>
-            <div className="text-muted-foreground flex items-center gap-2 px-1 text-xs font-medium tracking-wider uppercase">
-              <DollarSign className="h-3 w-3" />
-              Active Deals
-            </div>
-            <div className="mt-2 space-y-2">
-              {deals.length === 0 ? (
-                <p className="text-muted-foreground px-1 text-xs">No deals</p>
-              ) : (
-                deals.map((deal) => (
-                  <div key={deal.id} className="bg-muted rounded-lg px-3 py-2">
-                    <p className="text-foreground text-sm font-medium">
-                      {deal.title}
-                    </p>
-                    <div className="text-muted-foreground mt-1 flex items-center justify-between text-xs">
-                      {deal.stage && (
-                        <span
-                          className="rounded-full px-1.5 py-0.5 text-[10px]"
-                          style={{
-                            backgroundColor: `${deal.stage.color}20`,
-                            color: deal.stage.color,
-                          }}
-                        >
-                          {deal.stage.name}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-
-          {/* Divider */}
-          <div className="border-border my-4 border-t" />
-
-          {/* Follow-up (migration 054) */}
-          <NextDueStrip
-            contactId={contact.id}
-            contactName={contact.name}
-            conversationId={conversation?.id ?? null}
-          />
 
           {/* Divider */}
           <div className="border-border my-4 border-t" />

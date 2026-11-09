@@ -2,6 +2,7 @@
 
 import type { Deal, PipelineStage } from "@/types";
 import type { QueueLead } from "@/lib/queue/types";
+import { courseLine } from "@/lib/pipelines/course-line";
 import { Calendar, Check, X } from "lucide-react";
 import {
   Select,
@@ -52,6 +53,7 @@ function initials(name?: string, fallback?: string) {
 export function DealCard({ deal, stage, onEdit, isOverlay, insight, stages, onMoveToStage }: DealCardProps) {
   const contactLabel = deal.contact?.name || deal.contact?.phone || "No contact";
   const assigneeLabel = deal.assignee?.full_name || null;
+  const course = courseLine(deal.contact, insight);
 
   return (
     <div
@@ -95,6 +97,13 @@ export function DealCard({ deal, stage, onEdit, isOverlay, insight, stages, onMo
             Lost
           </span>
         )}
+        {/* Closed by stage (093): status stays open, so say it on the card. */}
+        {deal.status !== "lost" && stage?.name === "Not Interested" && (
+          <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-muted-foreground/15 px-2 py-0.5 text-[10px] font-semibold text-muted-foreground">
+            <X className="h-3 w-3" />
+            Not interested
+          </span>
+        )}
       </div>
 
       {/* Contact row */}
@@ -111,7 +120,7 @@ export function DealCard({ deal, stage, onEdit, isOverlay, insight, stages, onMo
             {deal.contact?.roll_number || "No DCId"}
           </span>
           <span className="text-xs text-muted-foreground font-medium">
-            {deal.contact?.university ? `${deal.contact.university} • 20${deal.contact.intake_year}${deal.contact.intake_session}` : "Course Pending"}
+            {course}
           </span>
         </div>
         {deal.expected_close_date && (
@@ -135,7 +144,9 @@ export function DealCard({ deal, stage, onEdit, isOverlay, insight, stages, onMo
               awaiting {waitLabel(insight.lastCustomerAt)}
             </span>
           )}
-          {(insight.course || insight.specialization) && (
+          {/* The course line above already shows the interest until a
+              university is set; after that, keep the course visible here. */}
+          {deal.contact?.university && (insight.course || insight.specialization) && (
             <span className="truncate text-[10px] text-muted-foreground">
               {[insight.course, insight.specialization]
                 .filter(Boolean)

@@ -6,6 +6,7 @@ import {
   bucketWorklist,
   daysOverdue,
   describeDue,
+  worklistCounts,
 } from './due';
 import type { WorklistRow } from './types';
 
@@ -106,6 +107,24 @@ describe('actionableCount', () => {
 
   it('is zero when everything is scheduled ahead', () => {
     expect(actionableCount([row(at(21)), row(at(30))], NOW)).toBe(0);
+  });
+});
+
+describe('worklistCounts', () => {
+  it('counts every open commitment, and the due-now and overdue subsets', () => {
+    const rows = [
+      row(at(17), 'a'), // overdue
+      row(at(19, 8), 'b'), // today
+      row(at(21), 'c'), // this week
+      row(at(30), 'd'), // later
+    ];
+    // `open` is what the Follow-ups tab lists; `dueNow` is what the sidebar
+    // badge counts (overdue + today).
+    expect(worklistCounts(rows, NOW)).toEqual({
+      open: 4,
+      dueNow: 2,
+      overdue: 1,
+    });
   });
 });
 

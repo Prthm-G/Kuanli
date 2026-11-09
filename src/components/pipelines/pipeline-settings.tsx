@@ -337,7 +337,7 @@ export function PipelineSettings({
               <Button
                 variant="destructive"
                 onClick={() => setShowDeleteConfirm(true)}
-                className="mr-auto bg-red-600 hover:bg-red-700"
+                className="mr-auto bg-red-600 text-white hover:bg-red-700"
               >
                 Delete Pipeline
               </Button>

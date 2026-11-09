@@ -54,6 +54,10 @@ export function ResponseTimeChart({
             Minutes to reply to a customer&apos;s first unreplied message, by
             weekday
           </p>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            Only replies sent from Kuanli. Replies from counsellors&apos; own
+            phones are not counted.
+          </p>
         </div>
         <div className="flex items-center gap-3 text-right text-xs">
           {thresholdMinutes > 0 && (

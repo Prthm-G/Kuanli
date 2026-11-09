@@ -96,7 +96,7 @@ const L = {
     careers: 'Careers',
     plusOneTime: 'Plus one-time',
     application: 'application',
-    studyMaterial: 'study material',
+    studyMaterialOptional: (fee: string) => `Printed study material (optional): ${fee} per semester.`,
     askMore: 'What would you like to know more about?',
     mFees: 'Fee details & EMI',
     mEligibility: 'Eligibility & documents',
@@ -120,7 +120,7 @@ const L = {
     careers: 'करियर',
     plusOneTime: 'इसके अतिरिक्त एक बार',
     application: 'आवेदन शुल्क',
-    studyMaterial: 'अध्ययन सामग्री',
+    studyMaterialOptional: (fee: string) => `मुद्रित अध्ययन सामग्री (वैकल्पिक): ${fee} प्रति सेमेस्टर।`,
     askMore: 'आप और क्या जानना चाहेंगे?',
     mFees: 'फीस और EMI',
     mEligibility: 'योग्यता और दस्तावेज़',
@@ -234,11 +234,15 @@ function feeBlockLines(
     extras.push(
       `${formatCurrency(Number(first.applicationFee), first.currency)} ${t.application}`
     );
-  if (first.studyMaterialFee)
-    extras.push(
-      `${formatCurrency(Number(first.studyMaterialFee), first.currency)} ${t.studyMaterial}`
-    );
   if (extras.length) lines.push(`${t.plusOneTime}: ${extras.join(', ')}.`);
+  // LPU Distance brochures: printed material is optional and charged per semester. Listing it under
+  // "one-time" understated it (a 6-semester BA is 6 x the figure) (KB-SEND-RECOVERY-20261107).
+  if (first.studyMaterialFee)
+    lines.push(
+      t.studyMaterialOptional(
+        formatCurrency(Number(first.studyMaterialFee), first.currency)
+      )
+    );
   return lines;
 }
 

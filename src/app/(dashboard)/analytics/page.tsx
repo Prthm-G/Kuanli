@@ -41,6 +41,10 @@ export default function AnalyticsPage() {
   }, [load]);
 
   const t = report?.totals;
+  // Not Interested has no totals key (093); its funnel row carries the count.
+  const notInterested = report?.funnel
+    .filter((f) => f.stage === 'Not Interested')
+    .reduce((sum, f) => sum + f.current, 0);
 
   return (
     <div className="space-y-4 p-4 md:p-6">
@@ -69,11 +73,12 @@ export default function AnalyticsPage() {
       )}
 
       {t && (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
           <Stat label="Leads" value={t.leads} />
           <Stat label="Reached application" value={t.reachedApplication} />
           <Stat label="Enrolled" value={t.enrolled} />
           <Stat label="Lost" value={t.lost} />
+          <Stat label="Not interested" value={notInterested ?? 0} />
         </div>
       )}
 

@@ -420,7 +420,16 @@ export interface Deal {
   status?: DealStatus;
   created_at: string;
   updated_at?: string;
-  contact?: Contact;
+  /** The pipeline board also embeds the contact's conversations' interest
+   *  columns (migrations 038/040) for the card's course line. */
+  contact?: Contact & {
+    conversations?: {
+      interest_university?: string | null;
+      interest_course?: string | null;
+      interest_specialization?: string | null;
+      interest_updated_at?: string | null;
+    }[];
+  };
   stage?: PipelineStage;
   assignee?: Profile;
 }

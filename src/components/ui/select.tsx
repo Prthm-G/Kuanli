@@ -6,7 +6,44 @@ import { Select as SelectPrimitive } from "@base-ui/react/select"
 import { cn } from "@/lib/utils"
 import { ChevronDownIcon, CheckIcon, ChevronUpIcon } from "lucide-react"
 
-const Select = SelectPrimitive.Root
+/**
+ * Value and label of every SelectItem in a tree. Base UI shows the raw value in
+ * the closed control (an id, `__none__`, `connected`) unless it is told the
+ * labels, so the wrapper below reads them from the options themselves.
+ */
+export function collectSelectItems(
+  node: React.ReactNode,
+  found: { value: unknown; label: React.ReactNode }[] = []
+) {
+  React.Children.forEach(node, (child) => {
+    if (!React.isValidElement(child)) return
+    const props = child.props as {
+      value?: unknown
+      children?: React.ReactNode
+    }
+    if (child.type === SelectItem) {
+      found.push({ value: props.value, label: props.children })
+    } else {
+      collectSelectItems(props.children, found)
+    }
+  })
+  return found
+}
+
+function Select<Value, Multiple extends boolean | undefined = false>({
+  items,
+  children,
+  ...props
+}: SelectPrimitive.Root.Props<Value, Multiple>) {
+  return (
+    <SelectPrimitive.Root
+      items={items ?? collectSelectItems(children)}
+      {...props}
+    >
+      {children}
+    </SelectPrimitive.Root>
+  )
+}
 
 function SelectGroup({ className, ...props }: SelectPrimitive.Group.Props) {
   return (

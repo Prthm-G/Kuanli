@@ -7,7 +7,7 @@ import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
 import { canViewMoney } from '@/lib/auth/roles';
 import { loadWorklist } from '@/lib/followups/queries';
-import { actionableCount, bucketWorklist } from '@/lib/followups/due';
+import { worklistCounts } from '@/lib/followups/due';
 import { buildCallSheetHtml } from '@/lib/followups/call-sheet';
 import type { WorklistRow } from '@/lib/followups/types';
 import { loadLedger } from '@/lib/payments/queries';
@@ -87,22 +87,19 @@ export default function FollowUpsPage() {
     if (view === 'payments') void loadPayments();
   }, [view, loadPayments]);
 
-  const due = useMemo(() => actionableCount(rows ?? []), [rows]);
-  const overdue = useMemo(
-    () => bucketWorklist(rows ?? []).overdue.length,
-    [rows]
-  );
-
-  const awaitingCheck = ledger?.filter((r) => r.reported > 0).length ?? 0;
+  const counts = useMemo(() => worklistCounts(rows ?? []), [rows]);
+  // Reported by "Needs your decision" (payments to check + discounts to
+  // approve), so the tab and that box always agree.
+  const [toDecide, setToDecide] = useState(0);
 
   const tabs: { key: View; label: string }[] = [
-    { key: 'followups', label: `Follow-ups (${due})` },
+    // The tab lists every open commitment, so it counts every one.
+    { key: 'followups', label: `Follow-ups (${counts.open})` },
     ...(showMoney
       ? [
           {
             key: 'payments' as const,
-            label:
-              awaitingCheck > 0 ? `Payments (${awaitingCheck})` : 'Payments',
+            label: toDecide > 0 ? `Payments (${toDecide})` : 'Payments',
           },
         ]
       : []),
@@ -116,7 +113,7 @@ export default function FollowUpsPage() {
           <p className="text-muted-foreground flex items-center gap-1.5 text-sm">
             <ClipboardCheck className="h-3.5 w-3.5" />
             {rows
-              ? `${rows.length} open commitments · ${overdue} overdue`
+              ? `${counts.open} open commitments · ${counts.dueNow} due today or overdue (${counts.overdue} overdue)`
               : '…'}
           </p>
         </div>
@@ -183,6 +180,7 @@ export default function FollowUpsPage() {
         <ApprovalsQueue
           refreshKey={ledger?.length ?? 0}
           onDecided={() => void loadPayments()}
+          onCountChange={setToDecide}
         />
       )}
 

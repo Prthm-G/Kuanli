@@ -8,6 +8,7 @@ import type { Contact, ContactSource, Tag, ContactTag } from '@/types';
 import { CONTACT_SOURCES, MANUAL_CONTACT_SOURCES } from '@/lib/contacts/source';
 import {
   findExistingContact,
+  HIDDEN_DUPLICATE_MESSAGE,
   isExactMatch,
   isUniqueViolation,
   type ExistingContact,
@@ -218,16 +219,24 @@ export function ContactForm({
       // slipped past the on-blur check (race, or a format that
       // normalizes equal). Surface it as the friendly duplicate notice
       // and, for new contacts, point the user at the existing record.
+      // No match to point at means the holder is a contact this user may
+      // not see (migration 094): say only that the number is taken.
       if (isUniqueViolation(err)) {
-        toast.error('A contact with this phone number already exists');
         if (!isEdit && accountId) {
           const existing = await findExistingContact(
             supabase,
             accountId,
             phone.trim()
           );
-          if (existing) setDupMatch({ contact: existing, exact: true });
+          if (existing) {
+            toast.error('A contact with this phone number already exists');
+            setDupMatch({ contact: existing, exact: true });
+          } else {
+            toast.error(HIDDEN_DUPLICATE_MESSAGE);
+          }
+          return;
         }
+        toast.error('A contact with this phone number already exists');
         return;
       }
       const message =

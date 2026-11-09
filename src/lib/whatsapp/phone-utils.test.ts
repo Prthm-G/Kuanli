@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   isRecipientNotAllowedError,
   isValidE164,
+  maskDigitsInText,
+  maskPhone,
   normalizePhone,
   phoneVariants,
   phonesMatch,
@@ -160,5 +162,26 @@ describe("isRecipientNotAllowedError", () => {
       false,
     );
     expect(isRecipientNotAllowedError("")).toBe(false);
+  });
+});
+
+describe('maskPhone', () => {
+  it('keeps the last 4 digits only', () => {
+    expect(maskPhone('+91 00000 01234')).toBe('***1234');
+    expect(maskPhone('910000001234')).toBe('***1234');
+  });
+  it('a short or missing value shows nothing', () => {
+    expect(maskPhone('123')).toBe('***');
+    expect(maskPhone('')).toBe('***');
+    expect(maskPhone(undefined)).toBe('***');
+  });
+});
+
+describe('maskDigitsInText', () => {
+  it('cuts every run of 6+ digits to its last 4', () => {
+    expect(
+      maskDigitsInText('Key (account_id, phone_normalized)=(acc, 910000001234) already exists')
+    ).toBe('Key (account_id, phone_normalized)=(acc, ***1234) already exists');
+    expect(maskDigitsInText('code 23505, 12345 rows')).toBe('code 23505, 12345 rows');
   });
 });

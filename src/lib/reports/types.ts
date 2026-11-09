@@ -54,6 +54,20 @@ export function isPlaceholderRoll(roll: string | null): boolean {
   return !roll || roll.startsWith("LD-");
 }
 
+/**
+ * Chats on counsellors' own numbers (094) are not new leads: the lead is the
+ * chat with the bot. History brings every past chat on those numbers in at
+ * once, so the report leaves them out.
+ */
+export function withoutCounsellorNumbers(
+  rows: EodRow[],
+  counsellorNumberIds: readonly string[]
+): EodRow[] {
+  if (counsellorNumberIds.length === 0) return rows;
+  const skip = new Set(counsellorNumberIds);
+  return rows.filter((r) => !r.phoneNumberId || !skip.has(r.phoneNumberId));
+}
+
 export function summarise(rows: EodRow[]): EodSummary {
   return {
     total: rows.length,

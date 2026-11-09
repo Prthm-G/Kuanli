@@ -19,7 +19,6 @@ import {
   ListOrdered,
   LogOut,
   MessageSquare,
-  Radio,
   Settings,
   Shield,
   TrendingUp,
@@ -27,9 +26,7 @@ import {
   UserCog,
   Users,
   UsersRound,
-  Workflow,
   X,
-  Zap,
 } from 'lucide-react';
 import { canViewGrowth, type AccountRole } from '@/lib/auth/roles';
 
@@ -99,9 +96,8 @@ const navItems: NavItem[] = [
   { href: '/reports', label: 'EOD Report', icon: ClipboardList },
   { href: '/analytics', label: 'Analytics', icon: BarChart3 },
   { href: '/growth', label: 'Growth', icon: TrendingUp, ownerOnly: true },
-  { href: '/broadcasts', label: 'Broadcasts', icon: Radio },
-  { href: '/automations', label: 'Automations', icon: Zap },
-  { href: '/flows', label: 'Flows', icon: Workflow, beta: true },
+  // Broadcasts, Automations and Flows are hidden: none has ever held a row. The
+  // routes still work by URL until the code is removed.
 ];
 
 const bottomNavItems = [

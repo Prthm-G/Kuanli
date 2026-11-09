@@ -107,3 +107,28 @@ export interface NewFollowUp {
   nextDueAt?: string | null;
   nextMethod?: FollowUpMethod | null;
 }
+
+/**
+ * Wording for the log form's next-step box. Logging Not interested moves the
+ * lead to the Not interested list in the database (migration 093 trigger), so
+ * the date becomes an optional day to try again rather than a commitment.
+ */
+export function nextStepCopy(outcome: FollowUpOutcome | ''): {
+  label: string;
+  help: string;
+  notice: string | null;
+} {
+  if (outcome === 'not_interested') {
+    return {
+      label: 'Contact again on (optional)',
+      help: 'Pick a day to try this student again. On that day they show in Follow-ups.',
+      notice:
+        'Saving moves this lead to the Not interested list. It leaves My leads and the Work Queue, and comes back if the student writes again.',
+    };
+  }
+  return {
+    label: 'Next follow-up',
+    help: 'Leave empty if nothing is owed. Setting a date puts this student on the worklist and closes any earlier commitment.',
+    notice: null,
+  };
+}

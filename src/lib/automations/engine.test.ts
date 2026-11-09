@@ -11,6 +11,8 @@ const h = vi.hoisted(() => ({
     fromCalls: [] as string[],
     updateCalls: [] as { table: string; filters: [string, string, unknown][] }[],
     upsertCalls: [] as { table: string; payload: unknown }[],
+    profiles: [] as { id: string; user_id: string; account_id: string }[],
+    convUpdates: [] as { payload: unknown; filters: [string, string, unknown][] }[],
   },
 }));
 
@@ -22,6 +24,7 @@ vi.mock("./admin-client", () => {
     type: string;
     payload?: unknown;
     filters: [string, string, unknown][];
+    single?: boolean;
   }) {
     const { table, type } = ops;
     if (table === "contacts") {
@@ -50,6 +53,16 @@ vi.mock("./admin-client", () => {
       return { data: { steps_executed: [], status: "success" }, error: null };
     }
     if (table === "automation_steps") return { data: state.steps, error: null };
+    if (table === "profiles") {
+      const hits = state.profiles.filter((p) =>
+        ops.filters.every(([, k, v]) => p[k as keyof typeof p] === v),
+      );
+      return { data: ops.single ? (hits[0] ?? null) : hits, error: null };
+    }
+    if (table === "conversations" && type === "update") {
+      state.convUpdates.push({ payload: ops.payload, filters: ops.filters });
+      return { data: null, error: null };
+    }
     return { data: null, error: null };
   }
 
@@ -59,6 +72,7 @@ vi.mock("./admin-client", () => {
       type: "select",
       payload: undefined as unknown,
       filters: [] as [string, string, unknown][],
+      single: false,
     };
     const b: Record<string, unknown> = {
       select: () => b,
@@ -71,8 +85,8 @@ vi.mock("./admin-client", () => {
       is: () => b,
       order: () => b,
       limit: () => b,
-      single: () => Promise.resolve(resolve(ops)),
-      maybeSingle: () => Promise.resolve(resolve(ops)),
+      single: () => ((ops.single = true), Promise.resolve(resolve(ops))),
+      maybeSingle: () => ((ops.single = true), Promise.resolve(resolve(ops))),
       then: (onF: (v: unknown) => unknown, onR?: (e: unknown) => unknown) =>
         Promise.resolve(resolve(ops)).then(onF, onR),
     };
@@ -107,6 +121,8 @@ beforeEach(() => {
   h.state.fromCalls = [];
   h.state.updateCalls = [];
   h.state.upsertCalls = [];
+  h.state.profiles = [];
+  h.state.convUpdates = [];
 });
 
 describe("runAutomationsForTrigger — tenant isolation", () => {
@@ -312,5 +328,56 @@ describe("send_webhook — SSRF guard (GHSA-8jqh-598v-rfxc)", () => {
     const [, init] = fetchSpy.mock.calls[0] as unknown as [string, RequestInit];
     expect(init.redirect).toBe("manual");
     vi.unstubAllGlobals();
+  });
+});
+
+describe("assign_conversation writes a profiles.id (093 owner rule)", () => {
+  beforeEach(() => {
+    h.state.owned = { id: "c1" };
+    h.state.automations = [automationWithUpdateStep()];
+    h.state.profiles = [
+      { id: "prof-1", user_id: "user-1", account_id: ACCOUNT },
+      { id: "prof-x", user_id: "user-x", account_id: "acct-other" },
+    ];
+  });
+
+  function assignStep(cfg: Record<string, unknown>) {
+    return {
+      id: "s1",
+      automation_id: "a1",
+      step_type: "assign_conversation",
+      position: 0,
+      parent_step_id: null,
+      step_config: cfg,
+    };
+  }
+
+  async function run() {
+    await runAutomationsForTrigger({
+      accountId: ACCOUNT,
+      triggerType: "new_message_received",
+      contactId: "c1",
+      context: {},
+    });
+  }
+
+  it("specific counsellor picked by user id is stored as the profile id", async () => {
+    h.state.steps = [assignStep({ mode: "specific", agent_id: "user-1" })];
+    await run();
+    expect(h.state.convUpdates).toHaveLength(1);
+    expect(h.state.convUpdates[0].payload).toEqual({ assigned_agent_id: "prof-1" });
+    expect(h.state.convUpdates[0].filters).toContainEqual(["eq", "account_id", ACCOUNT]);
+  });
+
+  it("round-robin stores a profile id, not a user id", async () => {
+    h.state.steps = [assignStep({ mode: "round_robin" })];
+    await run();
+    expect(h.state.convUpdates[0]?.payload).toEqual({ assigned_agent_id: "prof-1" });
+  });
+
+  it("an agent from another account is not written", async () => {
+    h.state.steps = [assignStep({ mode: "specific", agent_id: "user-x" })];
+    await run();
+    expect(h.state.convUpdates).toHaveLength(0);
   });
 });

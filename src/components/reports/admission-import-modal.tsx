@@ -29,7 +29,37 @@ interface Summary {
   heldBack: Array<{ student: string; row: number; reason: string }>;
   flags: Flag[];
   unmappedHeaders: string[];
+  warnings?: string[];
+  exitCards?: ExitCard[];
   written?: Record<string, number>;
+}
+
+interface ExitCard {
+  student: string;
+  row: number;
+  card: string;
+  sheetStage: string;
+  ldNumber: string | null;
+  rollNumber: string | null;
+}
+
+/** Students the import leaves alone because their card is Lost or Not Interested: a person moves each. */
+function ExitCardList({ cards }: { cards: ExitCard[] }) {
+  if (!cards.length) return null;
+  return (
+    <div className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-3">
+      <p className="text-sm font-medium text-amber-500">Move these by hand</p>
+      <ul className="mt-2 max-h-48 space-y-1 overflow-y-auto text-xs text-muted-foreground">
+        {cards.map((c) => (
+          <li key={`${c.row}-${c.student}`}>
+            row {c.row} · <span className="text-foreground">{c.student}</span>
+            {c.ldNumber ? ` · ${c.ldNumber}` : ''}
+            {c.rollNumber ? ` · roll ${c.rollNumber}` : ''} · {c.card}, sheet says {c.sheetStage}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
 }
 
 /**
@@ -160,6 +190,13 @@ export function AdmissionImportModal({
                 </div>
               ))}
             </dl>
+            {(done.warnings ?? []).map((w) => (
+              <p key={w} className="flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-sm text-amber-500">
+                <AlertTriangle className="h-4 w-4 shrink-0" />
+                {w}
+              </p>
+            ))}
+            <ExitCardList cards={done.exitCards ?? []} />
           </div>
         ) : (
           <div className="flex flex-col gap-4">
@@ -234,12 +271,20 @@ export function AdmissionImportModal({
                   ))}
                 </dl>
 
+                {(preview.warnings ?? []).map((w) => (
+                  <p key={w} className="flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-sm text-amber-500">
+                    <AlertTriangle className="h-4 w-4 shrink-0" />
+                    {w}
+                  </p>
+                ))}
+
+                <ExitCardList cards={preview.exitCards ?? []} />
+
                 {preview.heldBack.length > 0 && (
                   <div className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-3">
                     <p className="flex items-center gap-2 text-sm font-medium text-amber-500">
                       <AlertTriangle className="h-4 w-4" />
-                      {preview.heldBack.length} row(s) held back — these share a phone
-                      number and need a human decision
+                      {preview.heldBack.length} row(s) held back and need a human decision
                     </p>
                     <ul className="mt-2 space-y-1 text-xs text-muted-foreground">
                       {preview.heldBack.slice(0, 8).map((h) => (

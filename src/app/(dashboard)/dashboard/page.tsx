@@ -128,7 +128,7 @@ export default function DashboardPage() {
       <div>
         <h1 className="text-2xl font-bold text-foreground">Dashboard</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Live analytics across conversations, contacts, deals, broadcasts, and automations.
+          Live analytics across conversations, contacts and deals.
         </p>
       </div>
 
@@ -179,6 +179,7 @@ export default function DashboardPage() {
               title="Messages Sent Today"
               value={metrics.messagesSentToday.current.toLocaleString()}
               icon={Send}
+              note="Only messages sent from Kuanli. Replies from counsellors' own phones are not counted."
               delta={{
                 sign:
                   metrics.messagesSentToday.current - metrics.messagesSentToday.previous,

@@ -8,9 +8,16 @@ import { useRealtime } from "@/hooks/use-realtime";
 import { ConversationList } from "@/components/inbox/conversation-list";
 import { MessageThread } from "@/components/inbox/message-thread";
 import { ContactSidebar } from "@/components/inbox/contact-sidebar";
+import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { WifiOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { sortConversationsByActivity } from "@/lib/inbox/conversation-order";
+import {
+  numberLabelsFor,
+  type CounsellorNumberRow,
+  type NumberConfigRow,
+} from "@/lib/inbox/numbers";
+import { useAuth } from "@/hooks/use-auth";
 
 // Remembers the agent's show/hide choice for the desktop contact panel
 // across reloads and sessions (device-scoped, like the theme prefs).
@@ -29,8 +36,14 @@ export default function InboxPage() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   // Multi-number (034/035): phone_number_id -> human number label, used to badge
   // each conversation with the business number it belongs to. Only surfaced when
-  // the account owns more than one number.
+  // the account owns more than one number. Since 094 for the owner and admins
+  // only, with counsellor numbers named after the counsellor: counsellors see
+  // bot chats only, so they keep the inbox they had.
+  const { canManageMembers } = useAuth();
   const [numberLabels, setNumberLabels] = useState<Record<string, string>>({});
+  const [counsellorNumbers, setCounsellorNumbers] = useState<
+    CounsellorNumberRow[]
+  >([]);
   const [activeConversation, setActiveConversation] =
     useState<Conversation | null>(null);
   const [activeContact, setActiveContact] = useState<Contact | null>(null);
@@ -56,6 +69,8 @@ export default function InboxPage() {
    * below reconciles to the stored value right after mount instead.
    */
   const [contactPanelOpen, setContactPanelOpen] = useState(true);
+  // Phones have no room for the panel, so it opens as a sheet from the header.
+  const [mobileDetailsOpen, setMobileDetailsOpen] = useState(false);
   useEffect(() => {
     try {
       const stored = localStorage.getItem(CONTACT_PANEL_STORAGE_KEY);
@@ -208,8 +223,7 @@ export default function InboxPage() {
       }
 
       // Multi-number (034/035): an account may own several numbers. Consider the
-      // account connected if any is connected, and build the phone_number_id ->
-      // display-number map for the inbox source badge.
+      // account connected if any is connected.
       const { data } = await supabase
         .from("whatsapp_config")
         .select("phone_number_id, display_phone_number, status")
@@ -217,19 +231,43 @@ export default function InboxPage() {
 
       const rows = Array.isArray(data) ? data : [];
       setWhatsappConnected(rows.some((c) => c.status === "connected"));
-
-      const labels: Record<string, string> = {};
-      for (const r of rows) {
-        if (r.phone_number_id) {
-          labels[r.phone_number_id] =
-            r.display_phone_number || r.phone_number_id;
-        }
-      }
-      setNumberLabels(labels);
     };
 
     checkConnection();
   }, []);
+
+  // The number badge and the number filter (094), for the owner and admins.
+  // counsellors is admin-only under RLS, so this read is theirs alone.
+  useEffect(() => {
+    if (!canManageMembers) {
+      setNumberLabels({});
+      setCounsellorNumbers([]);
+      return;
+    }
+    let cancelled = false;
+    const supabase = createClient();
+    void Promise.all([
+      supabase
+        .from("whatsapp_config")
+        .select("phone_number_id, display_phone_number, is_primary"),
+      supabase.from("counsellors").select("phone_number_id, display_name"),
+    ]).then(([configs, counsellors]) => {
+      if (cancelled) return;
+      if (configs.error || counsellors.error) {
+        console.error("Failed to load the inbox number labels:", {
+          message: (configs.error ?? counsellors.error)?.message,
+        });
+      }
+      const team = (counsellors.data ?? []) as CounsellorNumberRow[];
+      setNumberLabels(
+        numberLabelsFor((configs.data ?? []) as NumberConfigRow[], team),
+      );
+      setCounsellorNumbers(team);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [canManageMembers]);
 
   // Handle realtime message events
   const handleMessageEvent = useCallback(
@@ -620,6 +658,7 @@ export default function InboxPage() {
             onConversationsLoaded={handleConversationsLoaded}
             resyncToken={resyncToken}
             numberLabels={numberLabels}
+            counsellorNumbers={counsellorNumbers}
           />
         </div>
 
@@ -654,16 +693,21 @@ export default function InboxPage() {
             onRefresh={handleManualRefresh}
             contactPanelOpen={contactPanelOpen}
             onToggleContactPanel={handleToggleContactPanel}
+            onOpenDetails={() => setMobileDetailsOpen(true)}
           />
         </div>
 
         {/* Right panel: Contact sidebar — desktop only, and only when the
             agent hasn't collapsed it via the thread-header toggle (#258).
             On mobile it's always hidden (the `lg:block` below), so the
-            toggle — which is itself desktop-only — never affects it. */}
+            toggle — which is itself desktop-only — never affects it.
+            `h-full` gives the panel a height to scroll inside. */}
         {contactPanelOpen && (
-          <div className="hidden lg:block">
+          <div className="hidden h-full lg:block">
+            {/* Keyed on the contact so a thread switch can never show, or
+                write to, the previous student's deal while the new one loads. */}
             <ContactSidebar
+              key={activeContact?.id ?? "none"}
               contact={activeContact}
               conversation={activeConversation}
               /* Refetch just this thread instead of the old
@@ -677,6 +721,26 @@ export default function InboxPage() {
           </div>
         )}
       </div>
+
+      {/* The same panel on a phone. */}
+      <Sheet open={mobileDetailsOpen} onOpenChange={setMobileDetailsOpen}>
+        <SheetContent side="right" className="w-full gap-0 p-0 lg:hidden">
+          <SheetTitle className="sr-only">Student details</SheetTitle>
+          <div className="min-h-0 flex-1">
+            {/* Keyed on the contact so a thread switch can never show, or
+                write to, the previous student's deal while the new one loads. */}
+            <ContactSidebar
+              key={activeContact?.id ?? "none"}
+              contact={activeContact}
+              conversation={activeConversation}
+              onContactUpdated={() =>
+                activeConversation && hydrateConversation(activeConversation.id)
+              }
+              className="w-full border-l-0"
+            />
+          </div>
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }

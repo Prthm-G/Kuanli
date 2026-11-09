@@ -33,6 +33,7 @@
  */
 
 import { supabaseAdmin } from "./admin-client";
+import { resolveAgentProfileId } from "@/lib/auth/agent-profile";
 import {
   engineSendInteractiveButtons,
   engineSendInteractiveList,
@@ -440,7 +441,10 @@ async function executeHandoff(
     status: "pending",
     updated_at: new Date().toISOString(),
   };
-  if (cfg.assign_to) convUpdate.assigned_agent_id = cfg.assign_to;
+  // assigned_agent_id holds a profiles.id; resolve a user id given instead,
+  // and write nothing for someone outside the flow's account.
+  const agentId = await resolveAgentProfileId(db, run.account_id, cfg.assign_to);
+  if (agentId) convUpdate.assigned_agent_id = agentId;
   if (run.conversation_id) {
     await db
       .from("conversations")

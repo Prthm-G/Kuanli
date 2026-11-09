@@ -49,6 +49,22 @@ export async function GET(
       )
     }
 
+    // Only media of a message this person can see (RLS, with their own session):
+    // since 094 that leaves out chats on a counsellor's own number for anyone
+    // below admin. Every proxied attachment is stored on its message as
+    // /api/whatsapp/media/<id>, so an id that no visible message points at is
+    // not theirs to fetch.
+    const { data: visible, error: visibleError } = await supabase
+      .from('messages')
+      .select('id')
+      .eq('media_url', `/api/whatsapp/media/${mediaId}`)
+      // The predicate of the partial index messages_proxied_media_url (094).
+      .like('media_url', '/api/whatsapp/media/%')
+      .limit(1)
+    if (visibleError || !visible || visible.length === 0) {
+      return NextResponse.json({ error: 'Media not found' }, { status: 404 })
+    }
+
     // Fetch and decrypt WhatsApp config. Multi-number (034): media lives on the
     // shared WABA, so any of the account's numbers can fetch it — use the
     // primary config's token.
@@ -77,7 +93,8 @@ export async function GET(
       status: 200,
       headers: {
         'Content-Type': contentType || mediaInfo.mimeType || 'application/octet-stream',
-        'Cache-Control': 'public, max-age=86400',
+        // private: a shared cache must not hand one member's media to another.
+        'Cache-Control': 'private, max-age=86400',
       },
     })
   } catch (error) {

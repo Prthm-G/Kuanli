@@ -156,6 +156,14 @@ describe('composeCourseSheet', () => {
     expect(sheetText).toContain('one-time');
   });
 
+  it('quotes study material as optional and per semester, never one-time', () => {
+    const { sheetText } = composeCourseSheet(baInput);
+    expect(sheetText).toContain(
+      'Printed study material (optional): ₹1,200 per semester.'
+    );
+    expect(sheetText).not.toMatch(/one-time[^\n]*study material/i);
+  });
+
   it('never emits a URL or a double asterisk', () => {
     // Both would make `Deterministic Stage Guard` discard the ENTIRE reply and
     // send the canned fallback instead, silently losing the sheet.

@@ -3,6 +3,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   dedupeByPhone,
   findExistingContact,
+  HIDDEN_DUPLICATE_MESSAGE,
+  hiddenDuplicatesNotice,
   isExactMatch,
   isUniqueViolation,
   normalizeKey,
@@ -93,5 +95,20 @@ describe("findExistingContact", () => {
   it("returns null for an empty phone without querying", async () => {
     const db = stubDb([{ id: "c1", phone: "15551234567" }]);
     expect(await findExistingContact(db, "acct", "   ")).toBeNull();
+  });
+});
+
+describe("hiddenDuplicatesNotice", () => {
+  it("one number: the form's own sentence", () => {
+    expect(hiddenDuplicatesNotice(1)).toBe(HIDDEN_DUPLICATE_MESSAGE);
+    expect(HIDDEN_DUPLICATE_MESSAGE).toBe(
+      "This number is already in Kuanli. Ask an admin to check it."
+    );
+  });
+
+  it("several: counts them and names nobody", () => {
+    expect(hiddenDuplicatesNotice(3)).toBe(
+      "3 numbers are already in Kuanli. Ask an admin to check them."
+    );
   });
 });

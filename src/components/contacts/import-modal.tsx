@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
 import {
   dedupeByPhone,
+  hiddenDuplicatesNotice,
   isUniqueViolation,
   normalizeKey,
 } from '@/lib/contacts/dedupe';
@@ -140,6 +141,7 @@ export function ImportModal({
     skipped: number;
     failed: number;
     tagsAssigned: number;
+    alreadyInKuanli: number;
   } | null>(null);
 
   function reset() {
@@ -219,6 +221,10 @@ export function ImportModal({
       let imported = 0;
       let skipped = 0;
       let failed = 0;
+      // Refused as duplicates although not in the account's list this user
+      // can read: held by a contact only admins see (migration 094), or a
+      // race. Counted apart so the summary can say so.
+      let alreadyInKuanli = 0;
 
       // 1) De-dupe within the file by normalized phone (keep first).
       const { unique, duplicates: inFileDupes } = dedupeByPhone(parsedRows);
@@ -263,8 +269,9 @@ export function ImportModal({
       const tagAssignments: ContactTagAssignment[] = [];
 
       // 4) Batch insert the genuinely-new rows in chunks of 50. The DB
-      //    unique index is the backstop: a 23505 (race, or a format
-      //    that normalizes equal) counts as skipped, not failed.
+      //    unique index is the backstop: a 23505 (race, a format that
+      //    normalizes equal, or a contact only admins see) is not a failure;
+      //    it is counted as "already in Kuanli".
       const chunkSize = 50;
 
       for (let i = 0; i < toInsert.length; i += chunkSize) {
@@ -307,7 +314,7 @@ export function ImportModal({
                 });
               }
             } else if (isUniqueViolation(singleErr)) {
-              skipped++;
+              alreadyInKuanli++;
             } else {
               failed++;
             }
@@ -342,7 +349,7 @@ export function ImportModal({
         toast.warning('Contacts imported, but some tag assignments failed.');
       }
 
-      setResult({ imported, skipped, failed, tagsAssigned });
+      setResult({ imported, skipped, failed, tagsAssigned, alreadyInKuanli });
       if (imported > 0) {
         toast.success(
           `${imported} contact${imported !== 1 ? 's' : ''} imported`
@@ -364,6 +371,9 @@ export function ImportModal({
       }
       if (skipped > 0) {
         toast.info(`${skipped} duplicate${skipped !== 1 ? 's' : ''} skipped`);
+      }
+      if (alreadyInKuanli > 0) {
+        toast.info(hiddenDuplicatesNotice(alreadyInKuanli));
       }
       if (failed > 0) {
         toast.error(
@@ -621,6 +631,12 @@ export function ImportModal({
                   </div>
                 )}
               </div>
+              {result.alreadyInKuanli > 0 && (
+                <p className="mt-3 flex items-center gap-1.5 text-sm text-amber-400">
+                  <AlertTriangle className="size-4 shrink-0" />
+                  {hiddenDuplicatesNotice(result.alreadyInKuanli)}
+                </p>
+              )}
             </div>
           )}
         </div>

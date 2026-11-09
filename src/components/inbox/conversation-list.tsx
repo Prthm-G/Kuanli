@@ -15,8 +15,22 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { sortConversationsByActivity } from "@/lib/inbox/conversation-order";
-import { filterConversations, type InboxFilter } from "@/lib/inbox/filter";
+import {
+  defaultInboxFilter,
+  filterConversations,
+  ownerMap,
+  ownersChanged,
+  type InboxFilter,
+} from "@/lib/inbox/filter";
+import { onFollowUpsChanged } from "@/lib/followups/events";
+import { latestOnly } from "@/lib/inbox/latest-only";
+import {
+  filterByNumber,
+  numberFilterOptions,
+  type CounsellorNumberRow,
+} from "@/lib/inbox/numbers";
 import { useAuth } from "@/hooks/use-auth";
+import { toast } from "sonner";
 
 interface ConversationListProps {
   activeConversationId: string | null;
@@ -36,6 +50,11 @@ interface ConversationListProps {
    * business number it belongs to. Omitted/single-entry => no badge.
    */
   numberLabels?: Record<string, string>;
+  /**
+   * Counsellor numbers (094), passed for the owner and admins only. When one is
+   * linked, a second filter picks Bot or a counsellor's number.
+   */
+  counsellorNumbers?: CounsellorNumberRow[];
 }
 
 const STATUS_COLORS: Record<ConversationStatus, string> = {
@@ -60,16 +79,42 @@ export function ConversationList({
   onConversationsLoaded,
   resyncToken = 0,
   numberLabels,
+  counsellorNumbers,
 }: ConversationListProps) {
   // Only worth badging when the account actually has more than one number.
   const showNumberBadges = !!numberLabels && Object.keys(numberLabels).length > 1;
-  const { profile } = useAuth();
+  const numberOptions = useMemo(
+    () => numberFilterOptions(counsellorNumbers ?? []),
+    [counsellorNumbers],
+  );
+  const counsellorIds = useMemo(
+    () =>
+      new Set(
+        (counsellorNumbers ?? []).flatMap((c) =>
+          c.phone_number_id ? [c.phone_number_id] : [],
+        ),
+      ),
+    [counsellorNumbers],
+  );
+  const [chosenNumber, setNumberFilter] = useState("all");
+  // A number that is no longer listed falls back to all.
+  const numberFilter = numberOptions.some((o) => o.value === chosenNumber)
+    ? chosenNumber
+    : "all";
+  const { profile, accountRole } = useAuth();
   const profileId = profile?.id;
   const [search, setSearch] = useState("");
   // Closed conversations are archived. They remain available through
   // the Closed/All filters, but should disappear from the working inbox.
-  const [filter, setFilter] = useState<InboxFilter>("open");
+  // Until the agent picks one, the default follows their role.
+  const [chosenFilter, setFilter] = useState<InboxFilter | null>(null);
+  const filter = chosenFilter ?? defaultInboxFilter(accountRole);
   const [loading, setLoading] = useState(true);
+  // "My leads", from the server (migration 093): chats I own plus leads
+  // assigned to me as a counsellor, minus Lost and Not Interested.
+  const [assignedIds, setAssignedIds] = useState<ReadonlySet<string>>(
+    () => new Set<string>(),
+  );
 
   // Keep the latest callback in a ref so the fetch effect below can
   // have a stable, empty-dep identity. Previously the fetch useCallback
@@ -88,17 +133,39 @@ export function ConversationList({
     onConversationsLoadedRef.current = onConversationsLoaded;
   });
 
+  // Every "My leads" request (this fetch and the quiet refreshes below) takes
+  // a number; only the newest answer is applied, so a slow poll cannot bring
+  // back a lead that a later answer already dropped.
+  const assignedGate = useRef(latestOnly());
+
   useEffect(() => {
     const supabase = createClient();
     let cancelled = false;
 
     (async () => {
-      const { data, error } = await supabase
-        .from("conversations")
-        .select("*, contact:contacts(*)")
-        .order("last_message_at", { ascending: false, nullsFirst: false });
+      const assignedSeq = assignedGate.current.claim();
+      const [{ data, error }, assigned] = await Promise.all([
+        supabase
+          .from("conversations")
+          .select("*, contact:contacts(*)")
+          .order("last_message_at", { ascending: false, nullsFirst: false }),
+        supabase.rpc("my_assigned_conversation_ids"),
+      ]);
 
       if (cancelled) return;
+
+      if (!assignedGate.current.isLatest(assignedSeq)) {
+        // A newer "My leads" answer is already in; keep it.
+      } else if (assigned.error) {
+        // Say so: without this list a counsellor silently sees fewer leads.
+        console.error("Failed to fetch assigned leads:", {
+          message: assigned.error.message,
+          code: assigned.error.code,
+        });
+        toast.error("Could not load all your leads. Refresh to try again.");
+      } else {
+        setAssignedIds(new Set((assigned.data as string[]) ?? []));
+      }
 
       if (error) {
         // Supabase errors have non-enumerable properties — log fields explicitly
@@ -126,8 +193,69 @@ export function ConversationList({
     // up on any events sent while the WS was disconnected or throttled.
   }, [resyncToken]);
 
+  // Ask the server for "My leads" again, quietly: on a new chat or a changed
+  // owner (realtime), after a follow-up is logged (Not interested drops a
+  // lead), and every minute for assignments and stage moves that leave the
+  // conversation row alone. A failed refresh keeps the last good set.
+  const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const refreshAssigned = useCallback(() => {
+    if (refreshTimer.current) clearTimeout(refreshTimer.current);
+    refreshTimer.current = setTimeout(() => {
+      refreshTimer.current = null;
+      void assignedGate.current.run(
+        async () => await createClient().rpc("my_assigned_conversation_ids"),
+        ({ data, error }) => {
+          if (error) {
+            console.error("Failed to refresh assigned leads:", {
+              message: error.message,
+              code: error.code,
+            });
+            return;
+          }
+          setAssignedIds(new Set((data as string[]) ?? []));
+        },
+      );
+    }, 800);
+  }, []);
+
+  // The minute poll only matters while "My leads" is on screen. Hidden tabs
+  // catch up through the parent's resync when they come back; switching to
+  // "My leads" asks once straight away.
+  const filterRef = useRef(filter);
+  useEffect(() => {
+    const prev = filterRef.current;
+    filterRef.current = filter;
+    if (filter === "mine" && prev !== "mine") refreshAssigned();
+  }, [filter, refreshAssigned]);
+
+  const ownersRef = useRef<Map<string, string | null> | null>(null);
+  useEffect(() => {
+    if (loading) return;
+    const prev = ownersRef.current;
+    ownersRef.current = ownerMap(conversations);
+    // The first loaded list came with its own set; only later changes count.
+    if (prev && ownersChanged(prev, conversations)) refreshAssigned();
+  }, [conversations, loading, refreshAssigned]);
+
+  useEffect(() => {
+    const off = onFollowUpsChanged(refreshAssigned);
+    const timer = setInterval(() => {
+      if (document.hidden || filterRef.current !== "mine") return;
+      refreshAssigned();
+    }, 60_000);
+    return () => {
+      off();
+      clearInterval(timer);
+      if (refreshTimer.current) clearTimeout(refreshTimer.current);
+    };
+  }, [refreshAssigned]);
+
   const filtered = useMemo(() => {
-    let result = filterConversations(conversations, filter, profileId);
+    let result = filterByNumber(
+      filterConversations(conversations, filter, profileId, assignedIds),
+      numberFilter,
+      counsellorIds,
+    );
 
     if (search.trim()) {
       const q = search.toLowerCase();
@@ -140,7 +268,7 @@ export function ConversationList({
     }
 
     return sortConversationsByActivity(result);
-  }, [conversations, filter, search, profileId]);
+  }, [conversations, filter, search, profileId, assignedIds, numberFilter, counsellorIds]);
 
   const handleSearchChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -157,6 +285,7 @@ export function ConversationList({
   );
 
   const activeFilter = FILTER_OPTIONS.find((o) => o.value === filter);
+  const activeNumber = numberOptions.find((o) => o.value === numberFilter);
 
   return (
     // w-full on mobile so the list occupies the whole viewport when it's
@@ -175,31 +304,62 @@ export function ConversationList({
           />
         </div>
 
-        <DropdownMenu>
-          <DropdownMenuTrigger className="inline-flex items-center justify-center h-7 gap-1 px-2 text-xs text-muted-foreground hover:text-foreground rounded-md hover:bg-muted">
-              {activeFilter?.label ?? "All"}
-              <ChevronDown className="h-3 w-3" />
-          </DropdownMenuTrigger>
-          <DropdownMenuContent
-            align="start"
-            className="border-border bg-popover"
-          >
-            {FILTER_OPTIONS.map((opt) => (
-              <DropdownMenuItem
-                key={opt.value}
-                onClick={() => setFilter(opt.value)}
-                className={cn(
-                  "text-sm",
-                  filter === opt.value
-                    ? "text-primary"
-                    : "text-popover-foreground"
-                )}
+        <div className="flex items-center gap-1">
+          <DropdownMenu>
+            <DropdownMenuTrigger className="inline-flex items-center justify-center h-7 gap-1 px-2 text-xs text-muted-foreground hover:text-foreground rounded-md hover:bg-muted">
+                {activeFilter?.label ?? "All"}
+                <ChevronDown className="h-3 w-3" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              align="start"
+              className="border-border bg-popover"
+            >
+              {FILTER_OPTIONS.map((opt) => (
+                <DropdownMenuItem
+                  key={opt.value}
+                  onClick={() => setFilter(opt.value)}
+                  className={cn(
+                    "text-sm",
+                    filter === opt.value
+                      ? "text-primary"
+                      : "text-popover-foreground"
+                  )}
+                >
+                  {opt.label}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          {numberOptions.length > 0 && (
+            <DropdownMenu>
+              <DropdownMenuTrigger className="inline-flex items-center justify-center h-7 gap-1 px-2 text-xs text-muted-foreground hover:text-foreground rounded-md hover:bg-muted">
+                  <Phone className="h-3 w-3" />
+                  {activeNumber?.label ?? "All numbers"}
+                  <ChevronDown className="h-3 w-3" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                align="start"
+                className="border-border bg-popover"
               >
-                {opt.label}
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
+                {numberOptions.map((opt) => (
+                  <DropdownMenuItem
+                    key={opt.value}
+                    onClick={() => setNumberFilter(opt.value)}
+                    className={cn(
+                      "text-sm",
+                      numberFilter === opt.value
+                        ? "text-primary"
+                        : "text-popover-foreground"
+                    )}
+                  >
+                    {opt.label}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+        </div>
       </div>
 
       {/* Conversation Items.

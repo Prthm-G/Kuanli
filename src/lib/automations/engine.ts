@@ -17,6 +17,7 @@ import type {
 import { supabaseAdmin } from './admin-client';
 import { engineSendText, engineSendTemplate } from './meta-send';
 import { isDeliverableUrl } from '@/lib/webhooks/ssrf';
+import { resolveAgentProfileId } from '@/lib/auth/agent-profile';
 
 // ------------------------------------------------------------
 // Public API
@@ -445,17 +446,25 @@ async function runStep(
       const cfg = step.step_config as AssignConversationStepConfig;
       if (!args.contactId)
         throw new Error('assign_conversation needs a contact');
-      let agentId = cfg.agent_id;
+      // assigned_agent_id holds a profiles.id (My leads reads it, 093).
+      let agentId: string | null = null;
       if (cfg.mode === 'round_robin') {
         // Pick any member of the account. The existing implementation
         // only ever returned the automation's author; preserving that
         // shape until a real round-robin algorithm replaces it.
         const { data: profiles } = await db
           .from('profiles')
-          .select('user_id')
+          .select('id')
           .eq('account_id', args.automation.account_id)
           .limit(1);
-        agentId = profiles?.[0]?.user_id;
+        agentId = profiles?.[0]?.id ?? null;
+      } else {
+        // The builder's picker stores the member's auth user id.
+        agentId = await resolveAgentProfileId(
+          db,
+          args.automation.account_id,
+          cfg.agent_id
+        );
       }
       if (!agentId) return 'no agent resolved';
       await db

@@ -60,6 +60,41 @@ describe("scoreLead", () => {
     expect(s.isAwaitingReply).toBe(true);
   });
 
+  it("a follow-up logged after the student's last message clears awaiting", () => {
+    const s = scoreLead(
+      signals({
+        lastCustomerAt: new Date("2026-08-18T09:00:00Z"),
+        lastAgentAt: new Date("2026-08-18T08:00:00Z"),
+        lastFollowUpAt: new Date("2026-08-18T10:00:00Z"),
+      }),
+      NOW,
+    );
+    expect(s.isAwaitingReply).toBe(false);
+    expect(s.awaitingReply).toBe(0);
+  });
+
+  it("a follow-up clears awaiting even when no message was ever sent", () => {
+    const s = scoreLead(
+      signals({
+        lastCustomerAt: new Date("2026-08-18T09:00:00Z"),
+        lastFollowUpAt: new Date("2026-08-18T10:00:00Z"),
+      }),
+      NOW,
+    );
+    expect(s.isAwaitingReply).toBe(false);
+  });
+
+  it("the student writing after the follow-up puts the lead back to awaiting", () => {
+    const s = scoreLead(
+      signals({
+        lastCustomerAt: new Date("2026-08-18T11:00:00Z"),
+        lastFollowUpAt: new Date("2026-08-18T10:00:00Z"),
+      }),
+      NOW,
+    );
+    expect(s.isAwaitingReply).toBe(true);
+  });
+
   it("does not mark answered leads as awaiting", () => {
     const s = scoreLead(
       signals({

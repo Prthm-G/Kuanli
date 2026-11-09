@@ -102,3 +102,14 @@ export function phoneVariants(sanitized: string): string[] {
 export function isRecipientNotAllowedError(message: string): boolean {
   return /131030|not in allowed list|not in the allowed list/i.test(message)
 }
+
+/** For logs: the last 4 digits only, so a log line does not carry a lead's number. */
+export function maskPhone(phone: string | null | undefined): string {
+  const digits = (phone ?? '').replace(/\D/g, '');
+  return digits.length > 4 ? `***${digits.slice(-4)}` : '***';
+}
+
+/** For logs: every run of 6 or more digits (a phone number) cut to its last 4. */
+export function maskDigitsInText(text: string): string {
+  return text.replace(/\d{6,}/g, (d) => `***${d.slice(-4)}`);
+}

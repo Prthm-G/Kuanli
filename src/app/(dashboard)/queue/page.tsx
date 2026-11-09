@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { ListOrdered, RefreshCw } from 'lucide-react';
 
 import { createClient } from '@/lib/supabase/client';
@@ -12,9 +13,10 @@ import { sourceLabel } from '@/lib/contacts/source';
 import { Button } from '@/components/ui/button';
 
 /**
- * Counsellor work queue: every workable lead (all stages except Enrolled and
- * Lost), scored and sorted so the top of the list is always the right lead to
- * work next. The score is explained in lib/queue/score.ts; the tooltip on
+ * Counsellor work queue: every workable lead (all stages except Enrolled, Lost
+ * and Not Interested), scored and sorted so the top of the list is always the
+ * right lead to work next. A follow-up logged after the student's last message
+ * clears Awaiting and Needs reply. The score is explained in lib/queue/score.ts; the tooltip on
  * each score shows its breakdown.
  */
 type Segment = 'all' | 'needs-reply' | 'fresh' | 'cold';
@@ -34,6 +36,7 @@ function inSegment(lead: QueueLead, segment: Segment): boolean {
 
 export default function QueuePage() {
   const { accountId } = useAuth();
+  const router = useRouter();
   const [segment, setSegment] = useState<Segment>('all');
   const [leads, setLeads] = useState<QueueLead[] | null>(null);
   const [loading, setLoading] = useState(true);
@@ -104,13 +107,13 @@ export default function QueuePage() {
         </Button>
       </div>
 
-      <div className="border-border bg-muted/40 flex gap-1 rounded-lg border p-1">
+      <div className="border-border bg-muted/40 flex flex-wrap gap-1 rounded-lg border p-1">
         {segments.map((t) => (
           <button
             key={t.key}
             onClick={() => setSegment(t.key)}
             className={
-              'flex-1 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ' +
+              'flex-1 rounded-md px-3 py-1.5 text-sm font-medium whitespace-nowrap transition-colors ' +
               (segment === t.key
                 ? 'bg-background text-foreground shadow-sm'
                 : 'text-muted-foreground hover:text-foreground')
@@ -121,7 +124,29 @@ export default function QueuePage() {
         ))}
       </div>
 
-      <div className="border-border overflow-x-auto rounded-lg border">
+      {/* Phones get one card per lead; the table needs a wide screen. */}
+      <div className="border-border divide-border divide-y rounded-lg border md:hidden">
+        {loading && (
+          <p className="text-muted-foreground p-6 text-center text-sm">
+            Loading…
+          </p>
+        )}
+        {!loading && error && (
+          <p className="p-6 text-center text-sm text-red-400">{error}</p>
+        )}
+        {!loading && !error && visible?.length === 0 && (
+          <p className="text-muted-foreground p-6 text-center text-sm">
+            Nothing in this segment right now.
+          </p>
+        )}
+        {!loading &&
+          !error &&
+          visible?.map((l) => (
+            <QueueCard key={l.dealId} lead={l} />
+          ))}
+      </div>
+
+      <div className="border-border hidden overflow-x-auto rounded-lg border md:block">
         <table className="w-full min-w-[900px] text-sm">
           <thead className="bg-muted/50 text-muted-foreground text-left text-xs tracking-wider uppercase">
             <tr>
@@ -166,7 +191,17 @@ export default function QueuePage() {
             {!loading &&
               !error &&
               visible?.map((l) => (
-                <tr key={l.dealId} className="hover:bg-muted/30">
+                <tr
+                  key={l.dealId}
+                  className={
+                    'hover:bg-muted/30' +
+                    (l.conversationId ? ' cursor-pointer' : '')
+                  }
+                  onClick={() => {
+                    if (l.conversationId)
+                      router.push(`/inbox?c=${l.conversationId}`);
+                  }}
+                >
                   <Td>
                     <span
                       className="text-foreground font-semibold"
@@ -202,6 +237,7 @@ export default function QueuePage() {
                     {l.conversationId && (
                       <Link
                         href={`/inbox?c=${l.conversationId}`}
+                        onClick={(e) => e.stopPropagation()}
                         className="border-border text-foreground hover:bg-muted/50 inline-flex items-center rounded-md border px-2.5 py-1 text-xs font-medium"
                       >
                         Open
@@ -214,6 +250,57 @@ export default function QueuePage() {
         </table>
       </div>
     </div>
+  );
+}
+
+/** One lead on a phone. The whole card opens the chat, same as Open. */
+function QueueCard({ lead: l }: { lead: QueueLead }) {
+  const body = (
+    <>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-foreground truncate font-medium">
+            {l.name || <Dash />}
+          </div>
+          <div className="text-muted-foreground font-mono text-xs">
+            {l.phone || <Dash />}
+          </div>
+        </div>
+        <span
+          className="bg-primary/15 text-primary shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold"
+          title={`Engagement ${l.score.engagement} · Interest ${l.score.interest} · Awaiting reply ${l.score.awaitingReply} · Recency ${l.score.recency}`}
+        >
+          {l.score.total}
+        </span>
+      </div>
+      <div className="text-muted-foreground mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+        <span className="text-foreground">{l.stageName}</span>
+        {describeInterest(l) && <span>{describeInterest(l)}</span>}
+        <span>{sourceLabel(l.source)}</span>
+        <span>
+          {l.customerMessages} msg{l.customerMessages === 1 ? '' : 's'}
+        </span>
+        {l.score.isAwaitingReply && (
+          <span className="inline-flex items-center rounded-full bg-amber-500/15 px-2 py-0.5 font-medium text-amber-500">
+            waiting {describeWait(l.lastCustomerAt)}
+          </span>
+        )}
+      </div>
+      {l.conversationId && (
+        <span className="text-primary mt-2 inline-block text-xs font-medium">
+          Open chat →
+        </span>
+      )}
+    </>
+  );
+  if (!l.conversationId) return <div className="p-3 text-sm">{body}</div>;
+  return (
+    <Link
+      href={`/inbox?c=${l.conversationId}`}
+      className="hover:bg-muted/30 block p-3 text-sm"
+    >
+      {body}
+    </Link>
   );
 }
 

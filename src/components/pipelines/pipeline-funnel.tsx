@@ -54,7 +54,8 @@ export function PipelineFunnel({
     return <p className="text-muted-foreground p-4 text-sm">Loading…</p>;
 
   const ladder = rows.filter((r) => r.reached !== null);
-  const lost = rows.find((r) => r.reached === null);
+  // Exits (reached = null): Lost and, since 093, Not Interested. One row each.
+  const exits = rows.filter((r) => r.reached === null);
   const max = Math.max(1, ...ladder.map((r) => r.reached ?? 0));
 
   return (
@@ -101,14 +102,17 @@ export function PipelineFunnel({
           </div>
         );
       })}
-      {lost && (
-        <div className="border-border flex items-center justify-between rounded-lg border border-dashed px-4 py-3">
+      {exits.map((r) => (
+        <div
+          key={r.stage}
+          className="border-border flex items-center justify-between rounded-lg border border-dashed px-4 py-3"
+        >
           <span className="text-muted-foreground text-sm font-medium">
-            Lost (exit)
+            {r.stage} (exit)
           </span>
-          <span className="text-foreground text-sm">{lost.current}</span>
+          <span className="text-foreground text-sm">{r.current}</span>
         </div>
-      )}
+      ))}
       <p className="text-muted-foreground px-1 text-xs">
         “Reached” counts every deal that ever hit the stage on this board;
         “conversion” compares against the previous rung. Time-in-stage builds up

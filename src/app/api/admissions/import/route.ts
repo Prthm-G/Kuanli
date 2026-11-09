@@ -5,6 +5,10 @@ import { supabaseAdmin } from '@/lib/automations/admin-client';
 import { readWorkbook } from '@/lib/admissions/xlsx-lite';
 import { parseAdmissionSheet, looksLikeAdmissionSheet } from '@/lib/admissions/parse-sheet';
 import { reconcile, type ReconciledRow } from '@/lib/admissions/reconcile';
+import { exitCard, importMovesDeal, listExitCards, newestDealByContact, type ExitCard } from '@/lib/admissions/stage-move';
+import { holdBackForIntake, implausibleIntake } from '@/lib/admissions/intake';
+import { parseSheetName } from '@/lib/admissions/normalize';
+import { isExitStage } from '@/lib/pipelines/closed';
 import { encrypt } from '@/lib/whatsapp/encryption';
 
 /**
@@ -31,7 +35,85 @@ interface ImportSummary {
   heldBack: Array<{ student: string; row: number; reason: string }>;
   flags: ReturnType<typeof reconcile>['flags'];
   unmappedHeaders: string[];
-  written?: { contacts: number; plans: number; payments: number; discounts: number; credentials: number; deals: number };
+  /** Read errors, a held-back sheet, and the students to move by hand. */
+  warnings: string[];
+  /**
+   * Students whose card is Lost or Not Interested. The import never moves those
+   * cards: moving one to Enrolled reports a Purchase to Meta, so a person does it.
+   */
+  exitCards: ExitCard[];
+  written?: { contacts: number; plans: number; payments: number; discounts: number; credentials: number; deals: number; cardReadErrors: number };
+}
+
+type Db = ReturnType<typeof supabaseAdmin>;
+
+/** The board the import writes deals to, and its stages. `failed` when either read errored. */
+async function loadBoard(db: Db, accountId: string) {
+  const { data: pipeline, error } = await db
+    .from('pipelines')
+    .select('id')
+    .eq('account_id', accountId)
+    .eq('name', 'LPU Admissions')
+    .maybeSingle();
+  const { data: stages, error: stagesError } = pipeline
+    ? await db.from('pipeline_stages').select('id, name, position').eq('pipeline_id', pipeline.id)
+    : { data: null, error: null };
+  return { pipeline, stages: stages ?? [], failed: !!error || !!stagesError };
+}
+
+const BOARD_UNREAD = 'Could not read the LPU Admissions board: no card was checked, created or moved.';
+const exitCardsWarning = (n: number) =>
+  `${n} student(s) in this sheet have a Lost or Not Interested card: move them to Enrolled by hand (or to Application ` +
+  'Started, as listed). The import does not move those cards.';
+
+/**
+ * Dry-run: the students whose newest LPU Admissions card is Lost or Not
+ * Interested. Same contact lookup, board and card choice as the write.
+ */
+async function previewExitCards(db: Db, accountId: string, rows: ReconciledRow[]): Promise<{ cards: ExitCard[]; warnings: string[] }> {
+  const { pipeline, stages, failed } = await loadBoard(db, accountId);
+  if (failed) return { cards: [], warnings: [BOARD_UNREAD] };
+  const stageName = new Map(stages.map((s) => [s.id as string, s.name as string]));
+  const phones = [...new Set(rows.filter((r) => r.importPhone).map((r) => r.importPhone))];
+  if (!pipeline || !phones.length) return { cards: [], warnings: [] };
+  const contactByPhone = new Map<string, { id: string; ldNumber: string | null }>();
+  const stageByContact = new Map<string, string>();
+  let unread = 0;
+  for (let i = 0; i < phones.length; i += 200) {
+    const batch = phones.slice(i, i + 200);
+    const { data: contacts, error } = await db
+      .from('contacts')
+      .select('id, phone_normalized, roll_number')
+      .eq('account_id', accountId)
+      .in('phone_normalized', batch);
+    if (error) {
+      unread += batch.length;
+      continue;
+    }
+    for (const c of contacts ?? []) {
+      contactByPhone.set(c.phone_normalized as string, { id: c.id as string, ldNumber: (c.roll_number as string | null) ?? null });
+    }
+    const ids = (contacts ?? []).map((c) => c.id as string);
+    if (!ids.length) continue;
+    const { data: deals, error: dealsError } = await db
+      .from('deals')
+      .select('id, contact_id, stage_id, created_at')
+      .eq('pipeline_id', pipeline.id)
+      .in('contact_id', ids);
+    if (dealsError) {
+      unread += ids.length;
+      continue;
+    }
+    for (const [contactId, d] of newestDealByContact(deals ?? [])) {
+      const name = stageName.get(d.stage_id);
+      if (name) stageByContact.set(contactId, name);
+    }
+  }
+  const cards = listExitCards(rows, contactByPhone, stageByContact);
+  const warnings = unread
+    ? [`Could not read the cards of ${unread} student(s): the list of Lost or Not Interested cards may be incomplete.`]
+    : [];
+  return { cards, warnings };
 }
 
 export async function POST(request: Request) {
@@ -82,7 +164,10 @@ export async function POST(request: Request) {
     }
 
     const { rows, unmappedHeaders } = parseAdmissionSheet(wantedSheet, workbook.sheet(wantedSheet));
-    const result = reconcile(rows);
+    const meta = parseSheetName(wantedSheet)!;
+    // An implausible tab (a typo like "2062-1") imports nothing, so its intake never reaches the contacts.
+    const implausible = implausibleIntake({ year: meta.intakeYear, session: meta.intakeSession });
+    const result = implausible ? holdBackForIntake(reconcile(rows), implausible) : reconcile(rows);
 
     const summary: ImportSummary = {
       sheet: wantedSheet,
@@ -94,11 +179,17 @@ export async function POST(request: Request) {
       })),
       flags: result.flags,
       unmappedHeaders,
+      warnings: implausible ? [`Sheet held back: ${implausible}.`] : [],
+      exitCards: [],
     };
 
-    if (dryRun) return NextResponse.json(summary);
-
-    summary.written = await writeRows(ctx.accountId, ctx.userId, result.importable);
+    const out: { cards: ExitCard[]; warnings: string[]; written?: ImportSummary['written'] } = dryRun
+      ? await previewExitCards(supabaseAdmin(), ctx.accountId, result.importable)
+      : await writeRows(ctx.accountId, ctx.userId, result.importable);
+    summary.exitCards = out.cards;
+    summary.warnings.push(...out.warnings);
+    if (out.cards.length) summary.warnings.push(exitCardsWarning(out.cards.length));
+    if (out.written) summary.written = out.written;
     return NextResponse.json(summary);
   } catch (err) {
     return toErrorResponse(err);
@@ -115,35 +206,30 @@ async function writeRows(
   accountId: string,
   userId: string,
   rows: ReconciledRow[],
-): Promise<NonNullable<ImportSummary['written']>> {
+): Promise<{ written: NonNullable<ImportSummary['written']>; cards: ExitCard[]; warnings: string[] }> {
   const db = supabaseAdmin();
-  const written = { contacts: 0, plans: 0, payments: 0, discounts: 0, credentials: 0, deals: 0 };
+  const written = { contacts: 0, plans: 0, payments: 0, discounts: 0, credentials: 0, deals: 0, cardReadErrors: 0 };
+  const cards: ExitCard[] = [];
+  const listed = new Set<string>();
 
-  const { data: pipeline } = await db
-    .from('pipelines')
-    .select('id')
-    .eq('account_id', accountId)
-    .eq('name', 'LPU Admissions')
-    .maybeSingle();
-
-  const { data: stages } = pipeline
-    ? await db.from('pipeline_stages').select('id, name, position').eq('pipeline_id', pipeline.id)
-    : { data: null };
+  const { pipeline, stages, failed: boardUnread } = await loadBoard(db, accountId);
   const stageByName = new Map((stages ?? []).map((s) => [s.name as string, s]));
 
   for (const row of rows) {
     // 1) Contact — never clobber a value the CRM already holds.
     let contactId: string | null = null;
+    let ldNumber: string | null = null;
     if (row.importPhone) {
       const { data: existing } = await db
         .from('contacts')
-        .select('id, name, email, university, intake_year, intake_session, university_roll_number')
+        .select('id, name, email, university, intake_year, intake_session, university_roll_number, roll_number')
         .eq('account_id', accountId)
         .eq('phone_normalized', row.importPhone)
         .maybeSingle();
 
       if (existing) {
         contactId = existing.id;
+        ldNumber = existing.roll_number ?? null;
         await db
           .from('contacts')
           .update({
@@ -278,17 +364,23 @@ async function writeRows(
       }
     }
 
-    // 6) Deal — create, or advance an existing card forward only.
+    // 6) Deal — create, or advance an existing card (importMovesDeal).
     const target = stageByName.get(row.stage);
-    if (pipeline && target) {
-      const { data: deal } = await db
+    if (pipeline && target && !boardUnread) {
+      // The newest card on the board (the dry-run counts the same one). With
+      // several, maybeSingle used to fail and a duplicate card was inserted.
+      const { data: deals, error: dealsError } = await db
         .from('deals')
-        .select('id, stage_id')
+        .select('id, contact_id, stage_id, created_at')
         .eq('contact_id', contactId)
-        .eq('pipeline_id', pipeline.id)
-        .maybeSingle();
+        .eq('pipeline_id', pipeline.id);
+      // One contact here, so its newest card is the only value.
+      const deal = dealsError ? undefined : [...newestDealByContact(deals ?? []).values()][0];
 
-      if (!deal) {
+      if (dealsError) {
+        // Unknown: neither insert a second card nor move one, and say so.
+        written.cardReadErrors++;
+      } else if (!deal) {
         const { error } = await db.from('deals').insert({
           user_id: userId,
           account_id: accountId,
@@ -303,8 +395,11 @@ async function writeRows(
         if (!error) written.deals++;
       } else {
         const current = (stages ?? []).find((s) => s.id === deal.stage_id);
-        // Forward-only, mirroring lifecycle_sweep: never drag a card backwards.
-        if (current && current.position < target.position) {
+        if (current && isExitStage(current.name)) {
+          // Never moved by the import: listed for a person to move.
+          if (!listed.has(deal.contact_id)) cards.push(exitCard(row, current.name, ldNumber));
+          listed.add(deal.contact_id);
+        } else if (current && importMovesDeal(current, target)) {
           await db.from('deals').update({ stage_id: target.id }).eq('id', deal.id);
           written.deals++;
         }
@@ -312,5 +407,10 @@ async function writeRows(
     }
   }
 
-  return written;
+  const warnings: string[] = [];
+  if (boardUnread) warnings.push(BOARD_UNREAD);
+  if (written.cardReadErrors) {
+    warnings.push(`${written.cardReadErrors} student(s) skipped at the card step: their cards could not be read, so none was created or moved.`);
+  }
+  return { written, cards, warnings };
 }

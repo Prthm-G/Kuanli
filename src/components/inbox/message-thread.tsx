@@ -121,6 +121,8 @@ interface MessageThreadProps {
    */
   contactPanelOpen?: boolean;
   onToggleContactPanel?: () => void;
+  /** Phones only: opens the student details the desktop panel shows. */
+  onOpenDetails?: () => void;
 }
 
 function formatDateSeparator(dateStr: string): string {
@@ -180,6 +182,7 @@ export function MessageThread({
   onRefresh,
   contactPanelOpen,
   onToggleContactPanel,
+  onOpenDetails,
 }: MessageThreadProps) {
   const { user } = useAuth();
   const { getPresence, getRow, now } = usePresence();
@@ -885,7 +888,9 @@ export function MessageThread({
     (s) => s.value === conversation.status
   );
   const assignedAgentId = conversation.assigned_agent_id ?? null;
-  const currentAssignee = profiles.find((p) => p.user_id === assignedAgentId);
+  // assigned_agent_id holds profiles.id, as n8n and "My leads" expect. It is not
+  // the auth user id; the two differ on every profile.
+  const currentAssignee = profiles.find((p) => p.id === assignedAgentId);
   const assignLabel = assignedAgentId
     ? (currentAssignee?.full_name ?? "Assigned")
     : "Assign";
@@ -901,9 +906,12 @@ export function MessageThread({
     // Issue #257.
     <div className={cn("flex min-w-0 flex-1 flex-col", DOODLE_BG_CLASSES)}>
       {/* Header — solid card surface sits on top of the doodle so the
-          name/avatar/dropdowns stay legible. */}
-      <div className="flex items-center justify-between gap-2 border-b border-border bg-card px-3 py-3 sm:px-4">
-        <div className="flex min-w-0 items-center gap-2 sm:gap-3">
+          name/avatar/dropdowns stay legible. It wraps: the thread can be
+          under 450px on a laptop with the contact panel open, and the buttons
+          need about 350px. Without the wrap the name collapsed to nothing and
+          the session badge painted over the buttons. */}
+      <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-2 border-b border-border bg-card px-3 py-3 sm:px-4">
+        <div className="flex min-w-[min(15rem,100%)] flex-1 flex-wrap items-center gap-2 sm:gap-3">
           {/* Back-to-list button — mobile only. Hidden on lg+ where the
               conversation list is always visible next to the thread. */}
           {onBack && (
@@ -919,7 +927,7 @@ export function MessageThread({
           <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-muted text-sm font-medium text-foreground">
             {displayName.charAt(0).toUpperCase()}
           </div>
-          <div className="min-w-0">
+          <div className="min-w-24 flex-1">
             <h2 className="truncate text-sm font-semibold text-foreground">{displayName}</h2>
             <p className="truncate text-xs text-muted-foreground">{contact.phone}</p>
           </div>
@@ -928,7 +936,7 @@ export function MessageThread({
           <Badge
             variant="outline"
             className={cn(
-              "ml-1 hidden gap-1 border-border text-[10px] sm:inline-flex sm:ml-2",
+              "ml-1 hidden shrink-0 gap-1 border-border text-[10px] sm:inline-flex sm:ml-2",
               sessionInfo.expired ? "text-red-400" : "text-primary"
             )}
           >
@@ -937,7 +945,20 @@ export function MessageThread({
           </Badge>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="ml-auto flex max-w-full flex-wrap items-center justify-end gap-2">
+          {/* Student details on a phone, where the contact panel has no room. */}
+          {onOpenDetails && (
+            <button
+              type="button"
+              onClick={onOpenDetails}
+              aria-label="Student details"
+              title="Student details"
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground lg:hidden"
+            >
+              <PanelRightOpen className="h-4 w-4" />
+            </button>
+          )}
+
           {/* Contact-panel toggle — desktop only. The contact sidebar
               eats a chunk of horizontal width that crowds the thread on
               smaller laptops; this lets agents reclaim it when they just
@@ -1062,7 +1083,7 @@ export function MessageThread({
               )}
             >
               <UserPlus className="h-3 w-3" />
-              <span className="hidden sm:inline">{assignLabel}</span>
+              <span className="hidden max-w-28 truncate sm:inline">{assignLabel}</span>
               <ChevronDown className="h-3 w-3" />
             </DropdownMenuTrigger>
             <DropdownMenuContent
@@ -1075,12 +1096,12 @@ export function MessageThread({
                 </DropdownMenuItem>
               ) : (
                 profiles.map((p) => {
-                  const isSelected = p.user_id === assignedAgentId;
+                  const isSelected = p.id === assignedAgentId;
                   const presence = getPresence(p.user_id);
                   return (
                     <DropdownMenuItem
                       key={p.id}
-                      onClick={() => handleAssignChange(p.user_id)}
+                      onClick={() => handleAssignChange(p.id)}
                       className={cn(
                         "text-sm",
                         isSelected ? "text-primary" : "text-popover-foreground"

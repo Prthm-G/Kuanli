@@ -57,6 +57,10 @@ import { CustomFieldsManager } from '@/components/contacts/custom-fields-manager
 import { useCan } from '@/hooks/use-can';
 import { GatedButton } from '@/components/ui/gated-button';
 import { Checkbox } from '@/components/ui/checkbox';
+import { loadNotInterestedContacts } from '@/lib/contacts/not-interested';
+import type { ContactTab } from '@/lib/contacts/tab-filter';
+import { contactListQuery, withoutTagJoin } from '@/lib/contacts/list-query';
+import { contactDeleteError } from '@/lib/contacts/delete-error';
 
 const PAGE_SIZE = 25;
 
@@ -72,7 +76,7 @@ export default function ContactsPage() {
   const [contacts, setContacts] = useState<ContactWithTags[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
-  const [activeTab, setActiveTab] = useState('all');
+  const [activeTab, setActiveTab] = useState<ContactTab | 'not_interested'>('all');
   const [page, setPage] = useState(0);
   const [totalCount, setTotalCount] = useState(0);
   // Tag filter — contacts shown must have ANY of these tags (OR).
@@ -153,7 +157,23 @@ export default function ContactsPage() {
     let contactRows: Contact[];
     let count: number;
 
-    if (selectedTagIds.length > 0) {
+    if (activeTab === 'not_interested') {
+      // Server-side: contacts with a deal in the Not Interested stage (093).
+      const res = await loadNotInterestedContacts(supabase, {
+        from,
+        to,
+        term,
+        tagIds: selectedTagIds,
+      });
+      if (seq !== fetchSeq.current) return; // superseded by a newer fetch
+      if (res.error) {
+        toast.error('Failed to load contacts');
+        setLoading(false);
+        return;
+      }
+      contactRows = res.rows;
+      count = res.count;
+    } else if (selectedTagIds.length > 0 && activeTab === 'all') {
       // Tag filter active — resolve it server-side (join + distinct +
       // windowed total count + pagination) so a tag covering many
       // contacts can't silently truncate the result or overflow an IN
@@ -174,25 +194,21 @@ export default function ContactsPage() {
       contactRows = rows.map((r) => r.contact);
       count = rows.length > 0 ? Number(rows[0].total_count) : 0;
     } else {
-      let query = supabase
-        .from('contacts')
-        .select('*', { count: 'exact' })
-        .order('created_at', { ascending: false })
-        .range(from, to);
-
-      if (term) {
-        const like = `%${term}%`;
-        query = query.or(`name.ilike.${like},phone.ilike.${like},email.ilike.${like}`);
-      }
-
-      const { data, count: exactCount, error } = await query;
+      // The Leads/Enrolled tabs filter here too, so the total and paging
+      // cover every match (tags with a tab included).
+      const { data, count: exactCount, error } = await contactListQuery(
+        supabase,
+        { tab: activeTab, tagIds: selectedTagIds, term, from, to }
+      );
       if (seq !== fetchSeq.current) return; // superseded by a newer fetch
       if (error) {
         toast.error('Failed to load contacts');
         setLoading(false);
         return;
       }
-      contactRows = data ?? [];
+      contactRows = withoutTagJoin(
+        (data ?? []) as unknown as (Contact & { contact_tags?: unknown })[]
+      );
       count = exactCount ?? 0;
     }
 
@@ -227,7 +243,7 @@ export default function ContactsPage() {
 
     setContacts(enriched);
     setLoading(false);
-  }, [supabase, page, search, selectedTagIds, tagsMap]);
+  }, [supabase, page, search, selectedTagIds, activeTab, tagsMap]);
 
   // Load-once-on-mount-ish data fetches. Each setter inside runs
   // inside an async promise completion (Supabase await), not
@@ -279,7 +295,7 @@ export default function ContactsPage() {
       .eq('id', deleteTarget.id);
 
     if (error) {
-      toast.error('Failed to delete contact');
+      toast.error(contactDeleteError(error, 1));
     } else {
       toast.success('Contact deleted');
       fetchContacts();
@@ -323,7 +339,7 @@ export default function ContactsPage() {
     const { error } = await supabase.from('contacts').delete().in('id', ids);
 
     if (error) {
-      toast.error('Failed to delete contacts');
+      toast.error(contactDeleteError(error, ids.length));
     } else {
       toast.success(`${ids.length} contact${ids.length === 1 ? '' : 's'} deleted`);
       setSelected(new Set());
@@ -343,7 +359,13 @@ export default function ContactsPage() {
   const allTags = Object.values(tagsMap).sort((a, b) =>
     a.name.localeCompare(b.name)
   );
-  const hasActiveFilters = search.trim().length > 0 || selectedTagIds.length > 0;
+  const hasActiveFilters =
+    search.trim().length > 0 || selectedTagIds.length > 0 || activeTab !== 'all';
+
+  function selectTab(tab: ContactTab | 'not_interested') {
+    setActiveTab(tab);
+    setPage(0);
+  }
 
   function toggleTagFilter(tagId: string) {
     setSelectedTagIds((prev) =>
@@ -366,7 +388,11 @@ export default function ContactsPage() {
         <div>
           <h1 className="text-2xl font-bold text-foreground">Contacts</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Manage your contact list. {totalCount > 0 && `${totalCount} total contacts.`}
+            Manage your contact list.{' '}
+            {totalCount > 0 &&
+              (hasActiveFilters
+                ? `${totalCount} matching contacts.`
+                : `${totalCount} total contacts.`)}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -404,9 +430,10 @@ export default function ContactsPage() {
 
       {/* Contacts Tab Navigation */}
       <div className="flex gap-6 border-b border-border/50 mb-6">
-        <button onClick={() => setActiveTab('all')} className={`pb-2 text-sm font-medium transition-colors hover:text-foreground ${activeTab === 'all' ? 'border-b-2 border-primary text-foreground' : 'text-muted-foreground'}`}>All Contacts</button>
-        <button onClick={() => setActiveTab('leads')} className={`pb-2 text-sm font-medium transition-colors hover:text-foreground ${activeTab === 'leads' ? 'border-b-2 border-primary text-foreground' : 'text-muted-foreground'}`}>Leads (Temp ID)</button>
-        <button onClick={() => setActiveTab('enrolled')} className={`pb-2 text-sm font-medium transition-colors hover:text-foreground ${activeTab === 'enrolled' ? 'border-b-2 border-primary text-foreground' : 'text-muted-foreground'}`}>Enrolled</button>
+        <button onClick={() => selectTab('all')} className={`pb-2 text-sm font-medium transition-colors hover:text-foreground ${activeTab === 'all' ? 'border-b-2 border-primary text-foreground' : 'text-muted-foreground'}`}>All Contacts</button>
+        <button onClick={() => selectTab('leads')} className={`pb-2 text-sm font-medium transition-colors hover:text-foreground ${activeTab === 'leads' ? 'border-b-2 border-primary text-foreground' : 'text-muted-foreground'}`}>Leads (Temp ID)</button>
+        <button onClick={() => selectTab('enrolled')} className={`pb-2 text-sm font-medium transition-colors hover:text-foreground ${activeTab === 'enrolled' ? 'border-b-2 border-primary text-foreground' : 'text-muted-foreground'}`}>Enrolled</button>
+        <button onClick={() => selectTab('not_interested')} className={`pb-2 text-sm font-medium transition-colors hover:text-foreground ${activeTab === 'not_interested' ? 'border-b-2 border-primary text-foreground' : 'text-muted-foreground'}`}>Not interested</button>
       </div>
 
       {/* Search + tag filter */}
@@ -614,7 +641,7 @@ export default function ContactsPage() {
                 </TableCell>
               </TableRow>
             ) : (
-              contacts.filter(c => activeTab === 'all' ? true : activeTab === 'leads' ? c.roll_number?.startsWith('LD-') : !!c.university).map((contact) => (
+              contacts.map((contact) => (
                 <TableRow
                   key={contact.id}
                   className="border-border hover:bg-muted/50 cursor-pointer"

@@ -97,6 +97,22 @@ export function ContactDetailView({
   const [deals, setDeals] = useState<Deal[]>([]);
   const [loadingDeals, setLoadingDeals] = useState(false);
 
+  // The tab bar is wider than the drawer, so it scrolls sideways. A fade on
+  // the right edge says more tabs are there until the user reaches the end.
+  const [tabsHasMore, setTabsHasMore] = useState(false);
+  const tabsListRef = useCallback((el: HTMLDivElement | null) => {
+    if (!el) return;
+    const update = () =>
+      setTabsHasMore(el.scrollLeft + el.clientWidth < el.scrollWidth - 1);
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    el.addEventListener('scroll', update, { passive: true });
+    return () => {
+      ro.disconnect();
+      el.removeEventListener('scroll', update);
+    };
+  }, []);
+
   const fetchContact = useCallback(async () => {
     if (!contactId) return;
     setLoading(true);
@@ -421,58 +437,69 @@ export function ContactDetailView({
               defaultValue="details"
               className="flex min-h-0 flex-1 flex-col"
             >
-              <TabsList className="bg-muted/50 border-border mx-4 mt-3 border-b">
-                <TabsTrigger
-                  value="details"
-                  className="data-active:bg-muted data-active:text-primary text-muted-foreground"
+              <div className="relative mx-4 mt-3">
+                <TabsList
+                  ref={tabsListRef}
+                  className="bg-muted/50 border-border flex w-full justify-start overflow-x-auto overflow-y-hidden border-b [scrollbar-color:var(--border)_transparent] [scrollbar-width:thin] group-data-horizontal/tabs:h-auto [&>[data-slot=tabs-trigger]]:flex-none"
                 >
-                  Details
-                </TabsTrigger>
-                <TabsTrigger
-                  value="tags"
-                  className="data-active:bg-muted data-active:text-primary text-muted-foreground"
-                >
-                  Tags
-                </TabsTrigger>
-                <TabsTrigger
-                  value="notes"
-                  className="data-active:bg-muted data-active:text-primary text-muted-foreground"
-                >
-                  Notes
-                </TabsTrigger>
-                <TabsTrigger
-                  value="custom"
-                  className="data-active:bg-muted data-active:text-primary text-muted-foreground"
-                >
-                  Custom Fields
-                </TabsTrigger>
-                {showMoney && (
                   <TabsTrigger
-                    value="deals"
+                    value="details"
                     className="data-active:bg-muted data-active:text-primary text-muted-foreground"
                   >
-                    Deals
+                    Details
                   </TabsTrigger>
+                  <TabsTrigger
+                    value="tags"
+                    className="data-active:bg-muted data-active:text-primary text-muted-foreground"
+                  >
+                    Tags
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="notes"
+                    className="data-active:bg-muted data-active:text-primary text-muted-foreground"
+                  >
+                    Notes
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="custom"
+                    className="data-active:bg-muted data-active:text-primary text-muted-foreground"
+                  >
+                    Custom Fields
+                  </TabsTrigger>
+                  {showMoney && (
+                    <TabsTrigger
+                      value="deals"
+                      className="data-active:bg-muted data-active:text-primary text-muted-foreground"
+                    >
+                      Deals
+                    </TabsTrigger>
+                  )}
+                  <TabsTrigger
+                    value="followups"
+                    className="data-active:bg-muted data-active:text-primary text-muted-foreground"
+                  >
+                    Follow-ups
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="payments"
+                    className="data-active:bg-muted data-active:text-primary text-muted-foreground"
+                  >
+                    Payments
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="portals"
+                    className="data-active:bg-muted data-active:text-primary text-muted-foreground"
+                  >
+                    Portals
+                  </TabsTrigger>
+                </TabsList>
+                {tabsHasMore && (
+                  <span
+                    aria-hidden
+                    className="from-popover pointer-events-none absolute inset-y-0 right-0 w-10 bg-gradient-to-l to-transparent"
+                  />
                 )}
-                <TabsTrigger
-                  value="followups"
-                  className="data-active:bg-muted data-active:text-primary text-muted-foreground"
-                >
-                  Follow-ups
-                </TabsTrigger>
-                <TabsTrigger
-                  value="payments"
-                  className="data-active:bg-muted data-active:text-primary text-muted-foreground"
-                >
-                  Payments
-                </TabsTrigger>
-                <TabsTrigger
-                  value="portals"
-                  className="data-active:bg-muted data-active:text-primary text-muted-foreground"
-                >
-                  Portals
-                </TabsTrigger>
-              </TabsList>
+              </div>
 
               {/* Details Tab */}
               <TabsContent

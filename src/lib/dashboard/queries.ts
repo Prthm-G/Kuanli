@@ -16,6 +16,7 @@ import type {
   ResponseTimeBucket,
   ResponseTimeSummary,
 } from './types'
+import { openDealsSummary } from '@/lib/pipelines/closed'
 
 // ------------------------------------------------------------
 // All client-side aggregation. RLS scopes every query to the
@@ -29,9 +30,24 @@ type DB = SupabaseClient
 
 // --- 1. Metric cards ---------------------------------------------------
 
+// Chats on counsellors' own numbers (094) are not open or new leads: history
+// brings every past chat on those numbers in at once. Only admins and the owner
+// can read them, so for anyone else this changes nothing. A failed lookup (or
+// a database before 094) leaves the counts as they were.
+async function counsellorNumberList(db: DB): Promise<string | null> {
+  const { data, error } = await db.rpc('counsellor_phone_number_ids')
+  if (error || !Array.isArray(data) || data.length === 0) return null
+  return `(${(data as string[]).map((id) => `"${id}"`).join(',')})`
+}
+
 export async function loadMetrics(db: DB): Promise<MetricsBundle> {
   const todayStart = startOfLocalDay().toISOString()
   const yesterdayStart = daysAgoStart(1).toISOString()
+  const counsellorNumbers = await counsellorNumberList(db)
+  const conversations = () => {
+    const q = db.from('conversations').select('id', { count: 'exact', head: true })
+    return counsellorNumbers ? q.not('phone_number_id', 'in', counsellorNumbers) : q
+  }
 
   const [
     openConvCur,
@@ -43,25 +59,27 @@ export async function loadMetrics(db: DB): Promise<MetricsBundle> {
     messagesToday,
     messagesYesterday,
   ] = await Promise.all([
-    db.from('conversations').select('id', { count: 'exact', head: true }).eq('status', 'open'),
-    db
-      .from('conversations')
-      .select('id', { count: 'exact', head: true })
-      .eq('status', 'open')
-      .gte('created_at', todayStart),
-    db
-      .from('conversations')
-      .select('id', { count: 'exact', head: true })
+    conversations().eq('status', 'open'),
+    conversations().eq('status', 'open').gte('created_at', todayStart),
+    conversations()
       .eq('status', 'open')
       .gte('created_at', yesterdayStart)
       .lt('created_at', todayStart),
-    db.from('contacts').select('id', { count: 'exact', head: true }).gte('created_at', todayStart),
+    // Leads only: a contact that arrived through a counsellor's own number
+    // (094) is not one until it writes to another number.
     db
       .from('contacts')
       .select('id', { count: 'exact', head: true })
+      .eq('counsellor_number_only', false)
+      .gte('created_at', todayStart),
+    db
+      .from('contacts')
+      .select('id', { count: 'exact', head: true })
+      .eq('counsellor_number_only', false)
       .gte('created_at', yesterdayStart)
       .lt('created_at', todayStart),
-    db.from('deals').select('value, status').eq('status', 'open'),
+    // Lost and Not Interested deals keep status 'open'; their stage closes them.
+    db.from('deals').select('value, status, stage:pipeline_stages(name)').eq('status', 'open'),
     db
       .from('messages')
       .select('id', { count: 'exact', head: true })
@@ -75,8 +93,9 @@ export async function loadMetrics(db: DB): Promise<MetricsBundle> {
       .lt('created_at', todayStart),
   ])
 
-  const openDealsRows = (openDeals.data ?? []) as { value: number | null }[]
-  const openDealsValue = openDealsRows.reduce((sum, d) => sum + (d.value ?? 0), 0)
+  const openDealsSum = openDealsSummary(
+    (openDeals.data ?? []) as unknown as { value: number | null; stage: { name: string } | null }[],
+  )
 
   return {
     activeConversations: {
@@ -90,8 +109,8 @@ export async function loadMetrics(db: DB): Promise<MetricsBundle> {
       current: newContactsToday.count ?? 0,
       previous: newContactsYesterday.count ?? 0,
     },
-    openDealsValue,
-    openDealsCount: openDealsRows.length,
+    openDealsValue: openDealsSum.value,
+    openDealsCount: openDealsSum.count,
     messagesSentToday: {
       current: messagesToday.count ?? 0,
       previous: messagesYesterday.count ?? 0,

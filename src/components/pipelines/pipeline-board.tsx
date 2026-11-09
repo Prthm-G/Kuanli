@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -49,6 +49,40 @@ export function PipelineBoard({
     () => [...stages].sort((a, b) => a.position - b.position),
     [stages],
   );
+
+  // The horizontal slider sits above the board and sticks to the top of the
+  // page. Columns are as tall as their cards, so a bottom slider could be
+  // thousands of pixels away, below the whole Lost column.
+  const boardRef = useRef<HTMLDivElement>(null);
+  const sliderRef = useRef<HTMLDivElement>(null);
+  const [boardWidth, setBoardWidth] = useState({ scroll: 0, client: 0 });
+
+  useEffect(() => {
+    const board = boardRef.current;
+    if (!board) return;
+    // Fires once on observe, then whenever the board resizes.
+    const observer = new ResizeObserver(() => {
+      setBoardWidth({ scroll: board.scrollWidth, client: board.clientWidth });
+    });
+    observer.observe(board);
+    return () => observer.disconnect();
+  }, [sortedStages.length]);
+
+  // Equal-value guards stop the two scroll listeners feeding each other.
+  const syncSliderFromBoard = useCallback(() => {
+    const board = boardRef.current;
+    const slider = sliderRef.current;
+    if (board && slider && slider.scrollLeft !== board.scrollLeft) {
+      slider.scrollLeft = board.scrollLeft;
+    }
+  }, []);
+  const syncBoardFromSlider = useCallback(() => {
+    const board = boardRef.current;
+    const slider = sliderRef.current;
+    if (board && slider && board.scrollLeft !== slider.scrollLeft) {
+      board.scrollLeft = slider.scrollLeft;
+    }
+  }, []);
 
   const dealsByStage = useMemo(() => {
     const map = new Map<string, Deal[]>();
@@ -102,13 +136,32 @@ export function PipelineBoard({
       onDragEnd={handleDragEnd}
       onDragCancel={handleDragCancel}
     >
+      <div
+        ref={sliderRef}
+        onScroll={syncBoardFromSlider}
+        data-testid="pipeline-top-scroll"
+        aria-hidden="true"
+        tabIndex={-1}
+        className={
+          boardWidth.scroll > boardWidth.client + 1
+            ? "pipeline-top-scroll sticky top-0 z-20 mb-2 overflow-x-auto bg-background"
+            : "hidden"
+        }
+      >
+        <div style={{ width: boardWidth.scroll, height: 1 }} />
+      </div>
+
       {/* snap-x + snap-mandatory on mobile so swipes land the next
           stage cleanly at the viewport edge instead of mid-column.
           Disabled on lg+ where snapping would interfere with the
           natural layout. The board can still overflow horizontally on
           lg+ once a pipeline has many stages (columns keep a 260px
-          min-width), so a thin scrollbar stays visible on desktop. */}
-      <div className="pipeline-scroll flex snap-x snap-mandatory gap-3 overflow-x-auto pb-4 lg:snap-none">
+          min-width); the slider above is how you move it on desktop. */}
+      <div
+        ref={boardRef}
+        onScroll={syncSliderFromBoard}
+        className="pipeline-scroll flex snap-x snap-mandatory gap-3 overflow-x-auto pb-4 lg:snap-none"
+      >
         {sortedStages.map((stage) => {
           const stageDeals = dealsByStage.get(stage.id) ?? [];
           const totalValue = stageDeals.reduce(
@@ -153,39 +206,38 @@ export function PipelineBoard({
       </DragOverlay>
 
       <style jsx>{`
-        .pipeline-scroll {
-          scroll-behavior: smooth;
+        /* The board's own scrollbar is always hidden. On touch devices the
+           peek/snap layout already signals there's more to swipe. On desktop
+           (mouse) the board can overflow with many stages and there is no
+           peek hint, so the thin, themed slider above the board does the job. */
+        .pipeline-scroll::-webkit-scrollbar {
+          height: 0;
+          display: none;
         }
-        /* On touch devices the peek/snap layout already signals there's
-           more to swipe, so the scrollbar is hidden for a clean look.
-           On desktop (mouse) the board can overflow with many stages
-           and there is no peek hint, so keep a thin, themed scrollbar
-           visible to make the overflow discoverable and usable. */
+        .pipeline-scroll {
+          scrollbar-width: none;
+        }
         @media (hover: none), (pointer: coarse) {
-          .pipeline-scroll::-webkit-scrollbar {
-            height: 0;
+          .pipeline-top-scroll {
             display: none;
-          }
-          .pipeline-scroll {
-            scrollbar-width: none;
           }
         }
         @media (hover: hover) and (pointer: fine) {
-          .pipeline-scroll {
+          .pipeline-top-scroll {
             scrollbar-width: thin;
-            scrollbar-color: var(--border) transparent;
+            scrollbar-color: var(--muted-foreground) transparent;
           }
-          .pipeline-scroll::-webkit-scrollbar {
-            height: 8px;
+          .pipeline-top-scroll::-webkit-scrollbar {
+            height: 10px;
           }
-          .pipeline-scroll::-webkit-scrollbar-track {
+          .pipeline-top-scroll::-webkit-scrollbar-track {
             background: transparent;
           }
-          .pipeline-scroll::-webkit-scrollbar-thumb {
+          .pipeline-top-scroll::-webkit-scrollbar-thumb {
             background-color: var(--border);
             border-radius: 9999px;
           }
-          .pipeline-scroll::-webkit-scrollbar-thumb:hover {
+          .pipeline-top-scroll::-webkit-scrollbar-thumb:hover {
             background-color: var(--muted-foreground);
           }
         }

@@ -10,10 +10,28 @@ import {
   FIRST_CONTACT_GREETING,
   type ClassifiableInboundMessage,
 } from '@/lib/whatsapp/inbound-classification';
-import { normalizePhone } from '@/lib/whatsapp/phone-utils';
+import {
+  maskDigitsInText,
+  maskPhone,
+  normalizePhone,
+} from '@/lib/whatsapp/phone-utils';
 import { findExistingContact, isUniqueViolation } from '@/lib/contacts/dedupe';
 import { pricingRow, type StatusPricing } from '@/lib/whatsapp/billable';
-import { isPhoneNumberAiDisabled } from '@/lib/whatsapp/ai-disabled';
+import {
+  inboundActions,
+  loadNumberPolicy,
+  type NumberPolicy,
+} from '@/lib/whatsapp/number-policy';
+import {
+  HISTORY_DECLINED_CODE,
+  HISTORY_MEDIA_PLACEHOLDER,
+  historyScopeOf,
+  planHistory,
+  summarizeHistoryParts,
+  type HistoryScope,
+  type HistoryValue,
+  type PlannedHistoryMessage,
+} from '@/lib/whatsapp/history-sync';
 import { verifyMetaWebhookSignature } from '@/lib/whatsapp/webhook-signature';
 import { runAutomationsForTrigger } from '@/lib/automations/engine';
 import { dispatchInboundToFlows } from '@/lib/flows/engine';
@@ -419,6 +437,14 @@ async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
         continue;
       }
 
+      // Coexistence chat history (migration 094): past chats of a number,
+      // once, after onboarding. Its media follow-ups carry `messages` too, so
+      // this must come before the inbound path below.
+      if (change.field === 'history') {
+        await processHistoryChange(change.value as HistoryValue);
+        continue;
+      }
+
       const value = change.value;
 
       if (value.statuses) {
@@ -456,6 +482,10 @@ async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
       }
 
       const config = configRows[0];
+      // Counsellor number or not (migration 094). Throws when the lookup
+      // fails: nothing below runs, nothing reaches n8n, and the webhook inbox
+      // replays this delivery.
+      const policy = await loadNumberPolicy(supabaseAdmin(), phoneNumberId);
       await backfillDisplayPhoneNumber(
         config,
         value.metadata.display_phone_number
@@ -476,7 +506,8 @@ async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
           // Default ON: the bug being fixed is silent data loss, so an
           // account that never finds the setting should keep its
           // attachments rather than keep losing them.
-          config.mirror_inbound_media !== false
+          config.mirror_inbound_media !== false,
+          policy
         );
       }
     }
@@ -551,12 +582,18 @@ async function processEchoChange(
   }
 
   const config = configRows[0];
+  // Throws when the lookup fails, so a counsellor number's media never goes to
+  // the shared bucket by mistake; the webhook inbox replays the delivery.
+  const policy = await loadNumberPolicy(supabaseAdmin(), phoneNumberId);
   await backfillDisplayPhoneNumber(config, value.metadata.display_phone_number);
   const decryptedAccessToken = decrypt(config.access_token);
 
   // Isolated per item: one malformed/unexpected echo must not abort the
   // rest of this delivery's other changes (the route already returned its
-  // 200 to Meta before processWebhook finishes running).
+  // 200 to Meta before processWebhook finishes running). Any failure is thrown
+  // after the loop so the webhook inbox replays the delivery; echoes already
+  // stored are skipped on the replay (wamid guard).
+  let echoFailures = 0;
   for (const echo of items) {
     try {
       await processEchoItem(
@@ -565,15 +602,25 @@ async function processEchoChange(
         config.user_id,
         decryptedAccessToken,
         phoneNumberId,
-        config.mirror_inbound_media !== false
+        inboundActions(policy, {
+          botActive: null,
+          mirrorSetting: config.mirror_inbound_media !== false,
+        }).mirrorMedia,
+        policy.counsellorNumber
       );
     } catch (err) {
+      echoFailures += 1;
       console.error(
         '[webhook] failed to process smb_message_echoes item',
         echo.id,
-        err
+        errorText(err)
       );
     }
+  }
+  if (echoFailures > 0) {
+    throw new Error(
+      `${echoFailures} smb_message_echoes item(s) not stored for ${phoneNumberId}`
+    );
   }
 }
 
@@ -584,7 +631,9 @@ async function processEchoItem(
   accessToken: string,
   phoneNumberId: string,
   // Per-account opt-out for the media mirror (migration 051).
-  mirrorMedia: boolean
+  mirrorMedia: boolean,
+  // A counsellor number (094): a new contact gets no LD lead number.
+  counsellorNumber: boolean
 ) {
   // No contacts[]/profile name on this field — resolve by phone alone.
   const customerPhone = normalizePhone(echo.to);
@@ -593,9 +642,14 @@ async function processEchoItem(
     accountId,
     configOwnerUserId,
     customerPhone,
-    ''
+    '',
+    'organic',
+    counsellorNumber
   );
-  if (!contactOutcome) return;
+  // Thrown, not returned: the message is not stored yet, so the webhook inbox
+  // replays the delivery (the wamid guard makes the replay safe). A contact
+  // left without its chat would otherwise stay chatless.
+  if (!contactOutcome) throw new Error('contact not found or created');
   const contactRecord = contactOutcome.contact;
 
   const conversation = await findOrCreateConversation(
@@ -604,7 +658,7 @@ async function processEchoItem(
     contactRecord.id,
     phoneNumberId
   );
-  if (!conversation) return;
+  if (!conversation) throw new Error('conversation not found or created');
 
   const { contentText, mediaUrl, mediaType } = await parseMessageContent(
     echo,
@@ -657,6 +711,390 @@ async function processEchoItem(
       msgError
     );
   }
+}
+
+// ---- coexistence chat history (migration 094) -------------------------------
+// Meta sends a number's past chats once, in chunks, after the save script asks
+// (smb_app_data, sync_type "history"). Each message is stored once (the wamid
+// unique index), with its original time and who wrote it: the contact is
+// 'customer', the business (the counsellor's app) is 'agent'. Nothing here
+// reaches n8n, flows or automations, nothing is copied to the shared media
+// bucket, and nothing marks a lead reached: these messages are from before the
+// number was connected, mark_counsellor_reached would stamp now() as the
+// arrival and queue an ad event for it, and an old chat can predate the
+// assignment it would close. Live messages on the number mark arrival as usual.
+// Only a counsellor number's history is stored: anything else is logged and
+// dropped (the bot number's past chats are not ours to import). A thread that
+// cannot be stored is logged and the rest of the chunk is kept; only a chunk
+// where nothing could be stored throws, so the webhook inbox replays it (what
+// was stored is skipped on the replay).
+const HISTORY_CONTENT_TYPES = new Set([
+  'text',
+  'image',
+  'document',
+  'audio',
+  'video',
+  'location',
+  'template',
+  'interactive',
+]);
+const historyContentType = (type: string) =>
+  HISTORY_CONTENT_TYPES.has(type)
+    ? type
+    : type === 'sticker'
+      ? 'image'
+      : 'text';
+
+async function processHistoryChange(value: HistoryValue) {
+  const phoneNumberId = value.metadata?.phone_number_id;
+  if (!phoneNumberId) return;
+
+  const { parts, media } = planHistory(value);
+  const summary = summarizeHistoryParts(parts);
+  for (const d of summary.declined) {
+    console.warn(
+      '[webhook] history sync declined by the business for phone_number_id %s: code %s %s',
+      phoneNumberId,
+      d.code,
+      d.details
+    );
+  }
+  for (const p of parts) {
+    if (p.kind === 'error' && p.code !== HISTORY_DECLINED_CODE) {
+      console.error(
+        '[webhook] history sync error for phone_number_id %s: code %s %s',
+        phoneNumberId,
+        p.code,
+        p.details
+      );
+    }
+  }
+  const total =
+    summary.chunks.reduce((n, c) => n + c.messages, 0) + media.length;
+  if (total === 0) {
+    if (summary.chunks.length > 0) {
+      console.log(
+        '[webhook] history for phone_number_id %s: %s, nothing to store',
+        phoneNumberId,
+        JSON.stringify(summary.chunks)
+      );
+    }
+    return;
+  }
+
+  const { data: configRows, error: configError } = await supabaseAdmin()
+    .from('whatsapp_config')
+    .select('*')
+    .eq('phone_number_id', phoneNumberId);
+  if (configError) {
+    // Thrown so the webhook inbox replays the chunk: history comes only once.
+    throw new Error(
+      `whatsapp_config lookup failed for history on ${phoneNumberId}: ${configError.message}`
+    );
+  }
+  if (!configRows || configRows.length !== 1) {
+    console.error(
+      '[webhook] history for phone_number_id %s dropped: %d whatsapp_config rows',
+      phoneNumberId,
+      configRows?.length ?? 0
+    );
+    return;
+  }
+  const config = configRows[0];
+  // Throws when the lookup fails (fail closed: nothing stored, the inbox replays).
+  const policy = await loadNumberPolicy(supabaseAdmin(), phoneNumberId);
+  if (!policy.counsellorNumber) {
+    console.warn(
+      '[webhook] history for phone_number_id %s dropped: not a counsellor number (%d messages)',
+      phoneNumberId,
+      total
+    );
+    return;
+  }
+  const accessToken = decrypt(config.access_token);
+  // 094 whatsapp_config.history_scope: every 1:1 chat ('all', the default) or
+  // only chats with someone already in Contacts ('known_contacts').
+  const scope = historyScopeOf(config.history_scope);
+
+  let stored = 0;
+  let existed = 0;
+  let failed = 0;
+  let outOfScope = 0;
+  for (const part of parts) {
+    if (part.kind !== 'chunk') continue;
+    for (const thread of part.threads) {
+      try {
+        const r = await storeHistoryThread(
+          config,
+          phoneNumberId,
+          accessToken,
+          thread.customerPhone,
+          thread.messages,
+          scope
+        );
+        stored += r.stored;
+        existed += r.existed;
+        outOfScope += r.outOfScope;
+      } catch (err) {
+        failed += thread.messages.length;
+        // The error can quote the contact's number (a constraint's detail): masked.
+        console.error(
+          '[webhook] history thread not stored for phone_number_id',
+          phoneNumberId,
+          errorText(err)
+        );
+      }
+    }
+  }
+  for (const item of media) {
+    try {
+      const r = await storeHistoryMedia(
+        config,
+        phoneNumberId,
+        accessToken,
+        item.customerPhone,
+        item.message,
+        scope
+      );
+      if (r === 'existed') existed += 1;
+      else if (r === 'out_of_scope') outOfScope += 1;
+      else stored += 1;
+    } catch (err) {
+      failed += 1;
+      console.error(
+        '[webhook] history media not stored for phone_number_id',
+        phoneNumberId,
+        item.message.message.id,
+        errorText(err)
+      );
+    }
+  }
+
+  console.log(
+    '[webhook] history for phone_number_id %s (scope %s): %s, media %d | stored %d, already there %d, not a known contact %d, failed %d',
+    phoneNumberId,
+    scope,
+    JSON.stringify(summary.chunks),
+    media.length,
+    stored,
+    existed,
+    outOfScope,
+    failed
+  );
+  if (failed > 0 && stored + existed + outOfScope === 0) {
+    throw new Error(
+      `history: none of ${failed} message(s) stored for ${phoneNumberId}; the inbox replays this chunk`
+    );
+  }
+}
+
+// For a log line: the error's text with any long digit run (a phone number)
+// cut to its last 4 digits.
+function errorText(err: unknown): string {
+  const text =
+    err instanceof Error
+      ? err.message
+      : typeof err === 'string'
+        ? err
+        : JSON.stringify(err);
+  return maskDigitsInText(text ?? String(err));
+}
+
+// The chat for a history thread, or null when the scope is 'known_contacts'
+// and the person is not in Contacts yet.
+async function historyChat(
+  config: { account_id: string; user_id: string },
+  phoneNumberId: string,
+  customerPhone: string,
+  scope: HistoryScope
+) {
+  const phone = normalizePhone(customerPhone);
+  if (scope === 'known_contacts') {
+    const known = await findExistingContact(
+      supabaseAdmin(),
+      config.account_id,
+      phone
+    );
+    if (!known) return null;
+  }
+  // A new contact is made through create_counsellor_number_contact: no LD
+  // lead number, admins and the owner only (094) until they write elsewhere.
+  const contactOutcome = await findOrCreateContact(
+    config.account_id,
+    config.user_id,
+    phone,
+    '',
+    'organic',
+    true
+  );
+  if (!contactOutcome) throw new Error('contact not found or created');
+  const conversation = await findOrCreateConversation(
+    config.account_id,
+    config.user_id,
+    contactOutcome.contact.id,
+    phoneNumberId
+  );
+  if (!conversation) throw new Error('conversation not found or created');
+  return conversation as { id: string };
+}
+
+async function historyRow(
+  conversationId: string,
+  planned: PlannedHistoryMessage,
+  accessToken: string
+) {
+  const m = planned.message as unknown as WhatsAppMessage;
+  let content: {
+    contentText: string | null;
+    mediaUrl: string | null;
+    mediaType: string | null;
+    interactiveReplyId: string | null;
+  };
+  let errorCode: number | null = null;
+  let errorDetails: string | null = null;
+  if (planned.placeholder) {
+    content = {
+      contentText: HISTORY_MEDIA_PLACEHOLDER,
+      mediaUrl: null,
+      mediaType: null,
+      interactiveReplyId: null,
+    };
+  } else {
+    const special =
+      planned.senderType === 'customer' ? classifyInboundMessage(m) : null;
+    if (special && !special.store) return null;
+    content = special
+      ? {
+          contentText: special.contentText,
+          mediaUrl: null,
+          mediaType: null,
+          interactiveReplyId: special.interactiveReplyId,
+        }
+      : await parseMessageContent(m, accessToken, null);
+    errorCode = special?.errorCode ?? null;
+    errorDetails = special?.errorDetails ?? null;
+  }
+  return {
+    conversation_id: conversationId,
+    sender_type: planned.senderType,
+    content_type: planned.placeholder ? 'text' : historyContentType(m.type),
+    content_text: content.contentText,
+    media_url: content.mediaUrl,
+    media_type: content.mediaType,
+    message_id: m.id,
+    status: planned.status,
+    created_at: planned.createdAt,
+    interactive_reply_id: content.interactiveReplyId,
+    error_code: errorCode,
+    error_details: errorDetails,
+  };
+}
+
+async function storeHistoryThread(
+  config: { account_id: string; user_id: string },
+  phoneNumberId: string,
+  accessToken: string,
+  customerPhone: string,
+  messages: PlannedHistoryMessage[],
+  scope: HistoryScope
+): Promise<{ stored: number; existed: number; outOfScope: number }> {
+  const conversation = await historyChat(
+    config,
+    phoneNumberId,
+    customerPhone,
+    scope
+  );
+  if (!conversation)
+    return { stored: 0, existed: 0, outOfScope: messages.length };
+
+  // What a replay (or a retry from Meta) already stored.
+  const ids = messages.map((m) => m.message.id);
+  const already = new Set<string>();
+  for (let i = 0; i < ids.length; i += 200) {
+    const { data, error } = await supabaseAdmin()
+      .from('messages')
+      .select('message_id')
+      .in('message_id', ids.slice(i, i + 200));
+    if (error) throw new Error(error.message);
+    for (const r of (data ?? []) as { message_id: string }[]) {
+      already.add(r.message_id);
+    }
+  }
+
+  const rows = [];
+  for (const m of messages) {
+    if (already.has(m.message.id)) continue;
+    const row = await historyRow(conversation.id, m, accessToken);
+    if (row) rows.push(row);
+  }
+
+  let stored = 0;
+  for (let i = 0; i < rows.length; i += 500) {
+    const batch = rows.slice(i, i + 500);
+    const { error } = await supabaseAdmin().from('messages').insert(batch);
+    if (!error) {
+      stored += batch.length;
+      continue;
+    }
+    if (!isUniqueViolation(error)) throw new Error(error.message);
+    // A concurrent replay stored some of these: one by one, skipping those.
+    for (const row of batch) {
+      const { error: oneError } = await supabaseAdmin()
+        .from('messages')
+        .insert(row);
+      if (!oneError) stored += 1;
+      else if (!isUniqueViolation(oneError)) throw new Error(oneError.message);
+    }
+  }
+  return { stored, existed: already.size, outOfScope: 0 };
+}
+
+async function storeHistoryMedia(
+  config: { account_id: string; user_id: string },
+  phoneNumberId: string,
+  accessToken: string,
+  customerPhone: string,
+  planned: PlannedHistoryMessage,
+  scope: HistoryScope
+): Promise<'filled' | 'stored' | 'existed' | 'out_of_scope'> {
+  const m = planned.message as unknown as WhatsAppMessage;
+  // No copy to the shared bucket: Meta's link through the media proxy only.
+  const { contentText, mediaUrl, mediaType } = await parseMessageContent(
+    m,
+    accessToken,
+    null
+  );
+
+  // The placeholder stored from the chunk, if it came first.
+  const { data: filled, error: fillError } = await supabaseAdmin()
+    .from('messages')
+    .update({
+      content_type: historyContentType(m.type),
+      content_text: contentText,
+      media_url: mediaUrl,
+      media_type: mediaType,
+    })
+    .eq('message_id', m.id)
+    .eq('content_text', HISTORY_MEDIA_PLACEHOLDER)
+    .is('media_url', null)
+    .select('id');
+  if (fillError) throw new Error(fillError.message);
+  if (filled && filled.length > 0) return 'filled';
+
+  // The media came first (chunks are not ordered) or is already stored.
+  const conversation = await historyChat(
+    config,
+    phoneNumberId,
+    customerPhone,
+    scope
+  );
+  if (!conversation) return 'out_of_scope';
+  const row = await historyRow(conversation.id, planned, accessToken);
+  if (!row) return 'existed';
+  const { error } = await supabaseAdmin().from('messages').insert(row);
+  if (!error) return 'stored';
+  if (isUniqueViolation(error)) return 'existed';
+  throw new Error(error.message);
 }
 
 const RECIPIENT_STATUS_LADDER = [
@@ -893,7 +1331,9 @@ async function processMessage(
   accessToken: string,
   phoneNumberId: string,
   // Per-account opt-out for the inbound media mirror (migration 051).
-  mirrorMedia: boolean
+  mirrorSetting: boolean,
+  // Counsellor number or not (migration 094).
+  policy: NumberPolicy
 ) {
   const senderPhone = normalizePhone(message.from);
   const contactName = contact?.profile?.name ?? '';
@@ -903,9 +1343,13 @@ async function processMessage(
     configOwnerUserId,
     senderPhone,
     contactName,
-    message.referral ? 'ads' : 'organic'
+    message.referral ? 'ads' : 'organic',
+    policy.counsellorNumber
   );
-  if (!contactOutcome) return;
+  // Thrown, not returned: the message is not stored yet, so the webhook inbox
+  // replays the delivery (the wamid guard makes the replay safe). A contact
+  // left without its chat would otherwise stay chatless.
+  if (!contactOutcome) throw new Error('contact not found or created');
   const contactRecord = contactOutcome.contact;
 
   const conversation = await findOrCreateConversation(
@@ -914,7 +1358,12 @@ async function processMessage(
     contactRecord.id,
     phoneNumberId
   );
-  if (!conversation) return;
+  if (!conversation) throw new Error('conversation not found or created');
+
+  const actions = inboundActions(policy, {
+    botActive: conversation.bot_active,
+    mirrorSetting,
+  });
 
   // Written from here rather than from the referral block in
   // parseMessageContent, which is a pure content parser with no conversation
@@ -968,7 +1417,7 @@ async function processMessage(
     : await parseMessageContent(
         message,
         accessToken,
-        mirrorMedia ? { accountId } : null
+        actions.mirrorMedia ? { accountId } : null
       );
 
   let replyToInternalId: string | null = null;
@@ -1057,12 +1506,13 @@ async function processMessage(
     );
   }
 
-  // SP3b: a lead messaged their counsellor's own number (the counsellor
-  // numbers are AI-disabled). Runs on every inbound there, not only the first:
+  // SP3b: a lead messaged their counsellor's own number (counsellor numbers
+  // come from counsellors.phone_number_id since 094; the env list still
+  // counts). Runs on every inbound there, not only the first:
   // mark_counsellor_reached is idempotent, and a first message whose RPC
   // failed (or whose webhook retry hit the duplicate guard) is caught by the
-  // next one.
-  if (isPhoneNumberAiDisabled(phoneNumberId)) {
+  // next one. History never marks reached (see processHistoryChange).
+  if (actions.markArrival) {
     await markCounsellorArrival(contactRecord.id, phoneNumberId);
   }
 
@@ -1080,6 +1530,8 @@ async function processMessage(
   // for when a number is being wound down or handed to humans. Comma-separated
   // phone_number_ids; unset means nothing is silenced. It is checked here rather
   // than per conversation so new threads on that number are covered too.
+  // A counsellor number (counsellors.phone_number_id, migration 094) is always
+  // silenced, with no .env entry: see number-policy.ts.
   // An unreadable message (Meta 131051/131060) as the first inbound of a chat
   // nobody has answered is a lead's first contact. The bot is handed a plain
   // greeting as a text message (n8n drops any other type) so they get the
@@ -1090,10 +1542,7 @@ async function processMessage(
     : false;
   const botForward = botForwardFor(special, pastFirstContact);
 
-  if (
-    conversation.bot_active === false ||
-    isPhoneNumberAiDisabled(phoneNumberId)
-  ) {
+  if (!actions.forwardToBot) {
     console.log(
       '[webhook] AI replies disabled, skipping n8n forward for conversation',
       conversation.id
@@ -1152,6 +1601,10 @@ async function processMessage(
     }).catch((err) => console.error('[n8n forward] error:', err));
   }
   // ===================================
+
+  // Flows and automations send through the API from this chat's number: never
+  // on a counsellor's own number, which only the counsellor's app speaks from.
+  if (!actions.runAutomations) return;
 
   const flowResult = await dispatchInboundToFlows({
     accountId,
@@ -1366,7 +1819,11 @@ async function findOrCreateContact(
   // Stored lead channel (migration 073): 'ads' when the first inbound
   // message carries a CTWA referral, else 'organic'. Only these two are
   // ever webhook-derived; reference/walkin are counsellor-entered.
-  source: 'organic' | 'ads' = 'organic'
+  source: 'organic' | 'ads' = 'organic',
+  // First seen on a counsellor number (094): made through
+  // create_counsellor_number_contact, so it gets no LD lead number and stays
+  // admin and owner only until it has a chat on another number.
+  onCounsellorNumber = false
 ) {
   const existingContact = await findExistingContact(
     supabaseAdmin(),
@@ -1384,17 +1841,27 @@ async function findOrCreateContact(
     return { contact: existingContact, wasCreated: false };
   }
 
-  const { data: newContact, error: createError } = await supabaseAdmin()
-    .from('contacts')
-    .insert({
-      account_id: accountId,
-      user_id: configOwnerUserId,
-      phone,
-      name: name || phone,
-      source,
-    })
-    .select()
-    .single();
+  const { data: created, error: createError } = onCounsellorNumber
+    ? await supabaseAdmin().rpc('create_counsellor_number_contact', {
+        p_account_id: accountId,
+        p_user_id: configOwnerUserId,
+        p_phone: phone,
+        p_name: name,
+        p_source: source,
+      })
+    : await supabaseAdmin()
+        .from('contacts')
+        .insert({
+          account_id: accountId,
+          user_id: configOwnerUserId,
+          phone,
+          name: name || phone,
+          source,
+        })
+        .select()
+        .single();
+  // The RPC returns a set (one row).
+  const newContact = Array.isArray(created) ? created[0] : created;
 
   if (createError) {
     if (isUniqueViolation(createError)) {
@@ -1407,8 +1874,15 @@ async function findOrCreateContact(
     }
     console.error(
       '[webhook] failed to create contact for phone',
-      phone,
-      createError
+      maskPhone(phone),
+      errorText(createError)
+    );
+    return null;
+  }
+  if (!newContact) {
+    console.error(
+      '[webhook] contact insert returned no row for phone',
+      maskPhone(phone)
     );
     return null;
   }

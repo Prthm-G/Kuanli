@@ -75,6 +75,22 @@ export function isUniqueViolation(error: unknown): boolean {
 }
 
 /**
+ * The database refused a number as a duplicate, but the contact holding it is
+ * not one the user can see (since migration 094, a contact that arrived
+ * through a counsellor's own number is for admins and the owner only). Say
+ * that much and no more: no name, nothing unhidden.
+ */
+export const HIDDEN_DUPLICATE_MESSAGE =
+  "This number is already in Kuanli. Ask an admin to check it.";
+
+/** The import summary's line for numbers refused that way. */
+export function hiddenDuplicatesNotice(count: number): string {
+  return count === 1
+    ? HIDDEN_DUPLICATE_MESSAGE
+    : `${count} numbers are already in Kuanli. Ask an admin to check them.`;
+}
+
+/**
  * De-duplicate parsed CSV rows by normalized phone, keeping the first
  * occurrence of each. Rows with an empty normalized phone are dropped
  * (they can't be a valid contact). Returns the unique rows plus the

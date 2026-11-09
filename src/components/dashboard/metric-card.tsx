@@ -19,9 +19,11 @@ interface MetricCardProps {
   }
   /** Used instead of `delta` when the metric has a static subtitle. */
   subtitle?: string
+  /** Small caption under everything else, e.g. what the number leaves out. */
+  note?: string
 }
 
-export function MetricCard({ title, value, icon: Icon, delta, subtitle }: MetricCardProps) {
+export function MetricCard({ title, value, icon: Icon, delta, subtitle, note }: MetricCardProps) {
   return (
     <div className="rounded-xl border border-border bg-card p-5">
       <div className="flex items-start justify-between">
@@ -36,6 +38,7 @@ export function MetricCard({ title, value, icon: Icon, delta, subtitle }: Metric
       {delta ? <DeltaRow sign={delta.sign} label={delta.label} /> : subtitle ? (
         <p className="mt-2 text-sm text-muted-foreground">{subtitle}</p>
       ) : null}
+      {note && <p className="mt-1 text-xs text-muted-foreground">{note}</p>}
     </div>
   )
 }
