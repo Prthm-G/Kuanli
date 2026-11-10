@@ -838,8 +838,9 @@ async function processHistoryChange(value: HistoryValue) {
       } catch (err) {
         failed += thread.messages.length;
         // The error can quote the contact's number (a constraint's detail): masked.
+        // "lookup-batch-40" also marks this build for replay-kuanli-history-inbox.mjs.
         console.error(
-          '[webhook] history thread not stored for phone_number_id',
+          '[webhook] history thread not stored (lookup-batch-40) for phone_number_id',
           phoneNumberId,
           errorText(err)
         );
@@ -1007,14 +1008,16 @@ async function storeHistoryThread(
   if (!conversation)
     return { stored: 0, existed: 0, outOfScope: messages.length };
 
-  // What a replay (or a retry from Meta) already stored.
+  // What a replay (or a retry from Meta) already stored. The ids go in the URL:
+  // wamids run ~76-90 chars, so 200 per request overflowed the gateway ("URI
+  // too long") on long chats; 40 stays near 4 KB, half the usual 8 KB limit.
   const ids = messages.map((m) => m.message.id);
   const already = new Set<string>();
-  for (let i = 0; i < ids.length; i += 200) {
+  for (let i = 0; i < ids.length; i += 40) {
     const { data, error } = await supabaseAdmin()
       .from('messages')
       .select('message_id')
-      .in('message_id', ids.slice(i, i + 200));
+      .in('message_id', ids.slice(i, i + 40));
     if (error) throw new Error(error.message);
     for (const r of (data ?? []) as { message_id: string }[]) {
       already.add(r.message_id);

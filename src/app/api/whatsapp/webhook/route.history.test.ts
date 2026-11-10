@@ -376,6 +376,34 @@ describe('webhook: history', () => {
       'none of 3 message(s) stored'
     );
   });
+
+  it('a long chat is looked up in batches small enough for the gateway URL limit, and stored whole', async () => {
+    // Real wamids are ~76-90 chars; 200 of them in one .in() made "URI too long".
+    const body = historyBody(PN_COUNSELLOR);
+    const history = body.entry[0].changes[0].value.history[0];
+    history.threads = [
+      {
+        id: LEAD_A,
+        messages: Array.from({ length: 120 }, (_, i) => ({
+          from: LEAD_A,
+          id: `wamid.LONG${i}`,
+          timestamp: String(1739230955 + i),
+          type: 'text',
+          text: { body: `m${i}` },
+        })),
+      },
+    ];
+    h.handler = world({ counsellor: 'yes' });
+    await post(body);
+    await settled();
+    const lookups = h.ops
+      .filter((o) => o.table === 'messages' && o.op === 'select')
+      .map((o) => o.filters.find(([c]) => c === 'message_id')?.[1])
+      .filter(Array.isArray) as string[][];
+    expect(lookups.flat()).toHaveLength(120);
+    expect(Math.max(...lookups.map((l) => l.length))).toBeLessThanOrEqual(40);
+    expect(inserted()).toHaveLength(120);
+  });
 });
 
 const inboundBody = (phoneNumberId: string) => ({
