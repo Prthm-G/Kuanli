@@ -150,3 +150,136 @@ BEGIN
   RETURN NULL;
 END;
 $function$;
+
+-- Task 3: the application tracker lists every deal from Application Started through Enrolled (so the three new stages too).
+-- Body copied from 094_counsellor_number_privacy.sql; only the stage test differs (a position range, not a name list).
+CREATE OR REPLACE FUNCTION public.application_tracker(p_account_id uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+DECLARE
+  v_result jsonb;
+  v_hidden text[];
+  v_all_contacts boolean;
+BEGIN
+  IF auth.uid() IS NULL THEN
+    RAISE EXCEPTION 'Unauthorized' USING ERRCODE = '42501';
+  END IF;
+
+  IF NOT is_account_member(p_account_id, 'viewer'::account_role_enum) THEN
+    RAISE EXCEPTION 'This action requires membership in this account'
+      USING ERRCODE = '42501';
+  END IF;
+
+  -- 094: counsellor numbers, and contacts that arrived through one, unless the caller is an admin or the owner.
+  v_hidden := CASE WHEN can_see_counsellor_chats(p_account_id) THEN '{}'::text[]
+                   ELSE counsellor_phone_number_ids() END;
+  v_all_contacts := can_see_counsellor_chats(p_account_id);
+
+  SELECT COALESCE(jsonb_agg(row ORDER BY row->>'stage', row->>'name'), '[]'::jsonb)
+  INTO v_result
+  FROM (
+    SELECT jsonb_build_object(
+      'contact_id', ct.id,
+      'name', ct.name,
+      'phone', ct.phone,
+      'roll_number', ct.roll_number,
+      'university', ct.university,
+      'stage', ps.name,
+      'conversation_id', conv.id,
+      'required', COALESCE((
+        SELECT jsonb_agg(jsonb_build_object(
+          'doc_type', r.doc_type,
+          'label', r.label,
+          'status', COALESCE((
+            SELECT ad.status FROM application_documents ad
+            WHERE ad.contact_id = ct.id AND ad.doc_type = r.doc_type
+            ORDER BY ad.created_at DESC LIMIT 1
+          ), 'missing'),
+          'document_id', (
+            SELECT ad.id FROM application_documents ad
+            WHERE ad.contact_id = ct.id AND ad.doc_type = r.doc_type
+            ORDER BY ad.created_at DESC LIMIT 1
+          )
+        ) ORDER BY r.position)
+        FROM university_required_docs r
+        WHERE r.account_id = p_account_id
+          AND r.university = COALESCE(ct.university, 'LPU')
+      ), '[]'::jsonb),
+      'unsorted', COALESCE((
+        SELECT jsonb_agg(jsonb_build_object(
+          'document_id', ad.id,
+          'created_at', ad.created_at,
+          'media_url', m.media_url,
+          'content_text', m.content_text,
+          'content_type', m.content_type
+        ) ORDER BY ad.created_at DESC)
+        FROM application_documents ad
+        LEFT JOIN messages m ON m.id = ad.message_id
+        WHERE ad.contact_id = ct.id AND ad.doc_type IS NULL
+          AND ad.status <> 'rejected'
+      ), '[]'::jsonb)
+    ) AS row
+    FROM deals d
+    JOIN pipeline_stages ps ON ps.id = d.stage_id
+      AND ps.position BETWEEN public.stage_position(ps.pipeline_id, 'Application Started')
+                          AND public.stage_position(ps.pipeline_id, 'Enrolled')
+    JOIN contacts ct ON ct.id = d.contact_id
+    LEFT JOIN LATERAL (
+      SELECT c.id FROM conversations c
+      WHERE c.contact_id = ct.id
+        AND NOT coalesce(c.phone_number_id = ANY (v_hidden), false)
+      ORDER BY c.last_message_at DESC NULLS LAST LIMIT 1
+    ) conv ON true
+    WHERE d.account_id = p_account_id
+      AND (v_all_contacts OR NOT ct.counsellor_number_only)
+  ) rows;
+
+  RETURN v_result;
+END;
+$function$;
+
+-- Task 3: a student's image or document is captured on any stage from Application Started through Enrolled.
+-- Body copied from 094; only the stage test differs. lifecycle_sweep, funnel_analytics and pipeline_funnel are left alone on
+-- purpose (ruling R-2): 095_test.sql proves the 14-day Lost sweep and the funnel read the same on the new ladder.
+CREATE OR REPLACE FUNCTION public.capture_application_document()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+DECLARE
+  v_contact_id uuid;
+  v_account_id uuid;
+  v_phone_number_id text;
+BEGIN
+  IF NEW.sender_type <> 'customer'
+     OR NEW.content_type NOT IN ('image', 'document') THEN
+    RETURN NEW;
+  END IF;
+
+  SELECT c.contact_id, c.account_id, c.phone_number_id INTO v_contact_id, v_account_id, v_phone_number_id
+  FROM conversations c WHERE c.id = NEW.conversation_id;
+
+  IF v_contact_id IS NULL THEN RETURN NEW; END IF;
+  -- 094
+  IF coalesce(v_phone_number_id = ANY (counsellor_phone_number_ids()), false) THEN RETURN NEW; END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM deals d
+    JOIN pipeline_stages ps ON ps.id = d.stage_id
+    WHERE d.contact_id = v_contact_id
+      AND ps.position BETWEEN public.stage_position(ps.pipeline_id, 'Application Started')
+                          AND public.stage_position(ps.pipeline_id, 'Enrolled')
+  ) THEN
+    RETURN NEW;
+  END IF;
+
+  INSERT INTO application_documents (account_id, contact_id, message_id, status)
+  VALUES (v_account_id, v_contact_id, NEW.id, 'received');
+
+  RETURN NEW;
+END;
+$function$;
