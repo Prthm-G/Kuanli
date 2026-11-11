@@ -10,8 +10,8 @@
 --   4. The four functions 095 replaced go back to their pre-095 bodies, copied from 042 (log_deal_stage_event), 093
 --      (record_conversion_from_deal) and 094 (application_tracker, capture_application_document).
 --   5. stage_position is dropped LAST, after no restored body can call it.
--- Re-applying 095 after this leaves any kept (position 100+) stage hidden: 095 skips a board that still has a stage named
--- Provisional ID. Rename or delete the kept stages before a second go.
+-- Re-applying 095 after this puts a kept (position 100+) stage back in place, same row and id: 095 reuses existing names.
+
 
 DO $$
 DECLARE

@@ -13,15 +13,28 @@ GRANT EXECUTE ON FUNCTION public.stage_position(uuid, text) TO authenticated, se
 -- Provisional ID, Form & Documents and Fee Submitted go between Application Started and Enrolled on every board that
 -- has an Application Started stage. Deals keep their stage rows (they point at stage ids); only positions shift.
 DO $$
-DECLARE p record;
+-- A board that already has some or all of the three names (095_rollback.sql keeps a stage with history at position 100+)
+-- gets those rows back in place, same ids; only missing names are inserted. A board already correct is left alone.
+DECLARE p record; v_min int; v_n int;
 BEGIN
   FOR p IN SELECT pipeline_id, position AS app_pos FROM public.pipeline_stages WHERE name = 'Application Started' LOOP
-    CONTINUE WHEN EXISTS (SELECT 1 FROM public.pipeline_stages WHERE pipeline_id = p.pipeline_id AND name = 'Provisional ID');
-    UPDATE public.pipeline_stages SET position = position + 3 WHERE pipeline_id = p.pipeline_id AND position > p.app_pos;
-    INSERT INTO public.pipeline_stages (pipeline_id, name, position, color) VALUES
-      (p.pipeline_id, 'Provisional ID',   p.app_pos + 1, '#0ea5e9'),
-      (p.pipeline_id, 'Form & Documents', p.app_pos + 2, '#6366f1'),
-      (p.pipeline_id, 'Fee Submitted',    p.app_pos + 3, '#14b8a6');
+    SELECT count(*) INTO v_n FROM public.pipeline_stages
+     WHERE pipeline_id = p.pipeline_id
+       AND (name, position) IN (('Provisional ID', p.app_pos + 1), ('Form & Documents', p.app_pos + 2), ('Fee Submitted', p.app_pos + 3));
+    CONTINUE WHEN v_n = 3;
+    -- The other stages after Application Started start at app_pos + 4.
+    SELECT min(position) INTO v_min FROM public.pipeline_stages
+     WHERE pipeline_id = p.pipeline_id AND position > p.app_pos AND name NOT IN ('Provisional ID', 'Form & Documents', 'Fee Submitted');
+    IF v_min IS NOT NULL AND v_min < p.app_pos + 4 THEN
+      UPDATE public.pipeline_stages SET position = position + (p.app_pos + 4 - v_min)
+       WHERE pipeline_id = p.pipeline_id AND position > p.app_pos AND name NOT IN ('Provisional ID', 'Form & Documents', 'Fee Submitted');
+    END IF;
+    UPDATE public.pipeline_stages SET position = p.app_pos + CASE name WHEN 'Provisional ID' THEN 1 WHEN 'Form & Documents' THEN 2 ELSE 3 END
+     WHERE pipeline_id = p.pipeline_id AND name IN ('Provisional ID', 'Form & Documents', 'Fee Submitted');
+    INSERT INTO public.pipeline_stages (pipeline_id, name, position, color)
+    SELECT p.pipeline_id, n.name, p.app_pos + n.off, n.color
+      FROM (VALUES ('Provisional ID', 1, '#0ea5e9'), ('Form & Documents', 2, '#6366f1'), ('Fee Submitted', 3, '#14b8a6')) n(name, off, color)
+     WHERE NOT EXISTS (SELECT 1 FROM public.pipeline_stages x WHERE x.pipeline_id = p.pipeline_id AND x.name = n.name);
   END LOOP;
   IF (SELECT count(DISTINCT m) FROM (SELECT string_agg(name||':'||position, ',' ORDER BY position) m
         FROM public.pipeline_stages WHERE pipeline_id IN (SELECT pipeline_id FROM public.pipeline_stages WHERE name = 'Application Started')
