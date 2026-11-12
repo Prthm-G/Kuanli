@@ -78,12 +78,14 @@ CREATE TRIGGER applications_mirror_registration AFTER INSERT OR UPDATE OF regist
 -- One row per contact that has a deal at Application Started or later on an admissions board, Lost and Not Interested
 -- excluded. Positions come from stage_position(), never a literal. Registration number from the roll number, university,
 -- program and specialization from the fee plan (student_fee_plans.program / .specialization, same names). Writes no deal
--- or stage event; app.suppress_automation is on for the call only (set_config local). Returns the rows inserted.
+-- or stage event; app.suppress_automation is on during the call and restored to the caller's value after it. Returns the rows inserted.
 -- Called by the apply script (service_role / postgres), not by the migration.
 CREATE OR REPLACE FUNCTION public.backfill_applications(p_account_id uuid)
 RETURNS integer LANGUAGE plpgsql SET search_path = public AS $$
-DECLARE v_n integer;
+DECLARE v_n integer; v_prev text;
 BEGIN
+  -- Put back whatever the caller had (an import may already hold the flag on); set_config cannot unset, so unset becomes ''.
+  v_prev := coalesce(current_setting('app.suppress_automation', true), '');
   PERFORM set_config('app.suppress_automation', 'on', true);
   INSERT INTO public.applications (account_id, contact_id, university, program, specialization, registration_number, backfilled)
   SELECT p_account_id, c.id, fp.university, fp.program, fp.specialization, c.university_roll_number, true
@@ -99,7 +101,7 @@ BEGIN
           AND s.position >= public.stage_position(d.pipeline_id, 'Application Started'))
   ON CONFLICT (contact_id) DO NOTHING;
   GET DIAGNOSTICS v_n = ROW_COUNT;
-  PERFORM set_config('app.suppress_automation', 'off', true);
+  PERFORM set_config('app.suppress_automation', v_prev, true);
   RETURN v_n;
 END $$;
 REVOKE ALL ON FUNCTION public.backfill_applications(uuid) FROM PUBLIC, anon, authenticated;
@@ -205,7 +207,7 @@ BEGIN
   -- Lock the row and read the status again: a concurrent reversal that committed first is seen here, so two reversals
   -- cannot both succeed or overwrite each other's note.
   SELECT status::text INTO v_status FROM public.payments WHERE id = p_payment_id FOR UPDATE;
-  IF v_status <> 'verified' THEN
+  IF v_status IS DISTINCT FROM 'verified' THEN
     RAISE EXCEPTION 'Only a verified payment can be reversed (this one is %)', v_status USING ERRCODE = '22023';
   END IF;
   UPDATE public.payments SET status = 'reversed', decision_note = btrim(p_note) WHERE id = p_payment_id;
@@ -243,7 +245,7 @@ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 BEGIN
   IF NEW.kind = 'provisional' AND btrim(coalesce(NEW.username, '')) <> '' THEN
     UPDATE public.applications SET provisional_app_id = btrim(NEW.username)
-     WHERE contact_id = NEW.contact_id AND btrim(coalesce(provisional_app_id, '')) = '';
+     WHERE contact_id = NEW.contact_id AND account_id = NEW.account_id AND btrim(coalesce(provisional_app_id, '')) = '';
   END IF;
   RETURN NULL;
 END $$;
@@ -285,3 +287,127 @@ ALTER TABLE public.contacts
 CREATE INDEX IF NOT EXISTS idx_contacts_referred_by ON public.contacts (referred_by_contact_id) WHERE referred_by_contact_id IS NOT NULL;
 
 -- ===== end of Task 11. Tasks 12-17 append their sections below this line. =====
+
+-- ===== Task 12: cards move forward from the application checklist =====
+
+-- Hardening carried from Tasks 9-11 is edited in place above: backfill_applications restores app.suppress_automation,
+-- reverse_payment raises when the row is gone, fill_provisional_app_id matches the account.
+
+-- R-4 when the login came first: a new application with no provisional ID takes it from the contact's provisional login
+-- (same account). SECURITY DEFINER because an agent saving an application may not read the credentials table.
+CREATE OR REPLACE FUNCTION public.fill_provisional_on_application() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+DECLARE v text;
+BEGIN
+  IF btrim(coalesce(NEW.provisional_app_id, '')) = '' THEN
+    SELECT btrim(c.username) INTO v FROM public.student_portal_credentials c
+     WHERE c.contact_id = NEW.contact_id AND c.account_id = NEW.account_id AND c.kind = 'provisional'
+       AND btrim(coalesce(c.username, '')) <> ''
+     ORDER BY c.created_at LIMIT 1;
+    IF v IS NOT NULL THEN NEW.provisional_app_id := v; END IF;
+  END IF;
+  RETURN NEW;
+END $$;
+REVOKE ALL ON FUNCTION public.fill_provisional_on_application() FROM PUBLIC, anon, authenticated, service_role;
+DROP TRIGGER IF EXISTS applications_fill_provisional ON public.applications;
+CREATE TRIGGER applications_fill_provisional BEFORE INSERT ON public.applications
+  FOR EACH ROW EXECUTE FUNCTION public.fill_provisional_on_application();
+
+-- A referrer must belong to the same account. SECURITY DEFINER so row security cannot hide a contact of another account
+-- from the check (the foreign key itself ignores row security). A missing referrer is left to the foreign key (23503).
+CREATE OR REPLACE FUNCTION public.check_referrer_same_account() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM public.contacts r WHERE r.id = NEW.referred_by_contact_id AND r.account_id IS DISTINCT FROM NEW.account_id) THEN
+    RAISE EXCEPTION 'A referrer must be a contact of the same account' USING ERRCODE = '23514';
+  END IF;
+  RETURN NEW;
+END $$;
+REVOKE ALL ON FUNCTION public.check_referrer_same_account() FROM PUBLIC, anon, authenticated, service_role;
+DROP TRIGGER IF EXISTS contacts_referrer_same_account ON public.contacts;
+CREATE TRIGGER contacts_referrer_same_account BEFORE INSERT OR UPDATE OF referred_by_contact_id, account_id ON public.contacts
+  FOR EACH ROW WHEN (NEW.referred_by_contact_id IS NOT NULL) EXECUTE FUNCTION public.check_referrer_same_account();
+
+-- advance_application: moves every live admissions card of the contact forward to the stage its checklist has earned.
+--   * never backward, never out of Enrolled / Lost / Not Interested; a fee may jump ahead of documents
+--   * positions come from the cards' own board (stage_position / pipeline_stages), never a literal
+--   * moves are logged with a NULL changed_by (app.automation = 'on' while it moves, as 095's stage-log trigger expects)
+--   * does nothing while app.suppress_automation = 'on' (backfills, imports)
+--   * locks the contact's deals first and reads their stages in a LATER statement, so a Lost move that committed while it
+--     waited (lifecycle_sweep, a person) is seen and respected
+-- Documents are matched on the application's university (the contact's, then 'LPU', as application_tracker does).
+CREATE OR REPLACE FUNCTION public.advance_application(p_contact_id uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+DECLARE
+  a public.applications; v_target text; v_plan boolean; v_app_fee boolean; v_course_fee boolean; v_docs boolean;
+  v_univ text; v_moved int; v_prev_auto text;
+BEGIN
+  IF current_setting('app.suppress_automation', true) = 'on' THEN RETURN; END IF;
+  SELECT * INTO a FROM public.applications WHERE contact_id = p_contact_id;
+  IF NOT FOUND THEN RETURN; END IF;
+  v_univ := coalesce(a.university, (SELECT ct.university FROM public.contacts ct WHERE ct.id = p_contact_id), 'LPU');
+  v_plan := EXISTS (SELECT 1 FROM public.student_fee_plans WHERE contact_id = p_contact_id);
+  v_app_fee := EXISTS (SELECT 1 FROM public.payments WHERE contact_id = p_contact_id AND head = 'application' AND status::text IN ('reported', 'verified'));
+  v_course_fee := EXISTS (SELECT 1 FROM public.payments WHERE contact_id = p_contact_id AND head <> 'application' AND status::text = 'verified');
+  v_docs := NOT EXISTS (SELECT 1 FROM public.university_required_docs r
+             WHERE r.account_id = a.account_id AND r.university = v_univ
+               AND NOT EXISTS (SELECT 1 FROM public.application_documents x
+                               WHERE x.contact_id = p_contact_id AND x.doc_type = r.doc_type AND x.uploaded_to_portal_at IS NOT NULL));
+  v_target := CASE
+    WHEN a.registration_number IS NOT NULL AND v_plan THEN 'Enrolled'
+    WHEN a.provisional_app_id IS NOT NULL AND v_course_fee THEN 'Fee Submitted'
+    WHEN a.provisional_app_id IS NOT NULL AND a.form_filled_at IS NOT NULL AND v_docs THEN 'Form & Documents'
+    WHEN a.provisional_app_id IS NOT NULL THEN 'Provisional ID'
+    WHEN a.details_punched_at IS NOT NULL AND v_app_fee THEN 'Application Started'
+  END;
+  IF v_target IS NULL THEN RETURN; END IF;
+
+  PERFORM 1 FROM public.deals WHERE contact_id = p_contact_id ORDER BY id FOR UPDATE;
+  v_prev_auto := coalesce(current_setting('app.automation', true), '');
+  PERFORM set_config('app.automation', 'on', true);
+  WITH moved AS (
+    UPDATE public.deals dl SET stage_id = t.id, updated_at = now()
+      FROM public.pipeline_stages cur, public.pipeline_stages t
+     WHERE dl.contact_id = p_contact_id AND dl.account_id = a.account_id
+       AND cur.id = dl.stage_id AND cur.name NOT IN ('Enrolled', 'Lost', 'Not Interested')
+       AND public.stage_position(dl.pipeline_id, 'Application Started') IS NOT NULL
+       AND t.pipeline_id = dl.pipeline_id AND t.name = v_target AND t.position > cur.position
+    RETURNING dl.id)
+  SELECT count(*) INTO v_moved FROM moved;
+  PERFORM set_config('app.automation', v_prev_auto, true);
+
+  IF v_moved > 0 AND v_target = 'Enrolled' THEN
+    UPDATE public.applications SET enrolled_at = now() WHERE contact_id = p_contact_id AND enrolled_at IS NULL;
+  END IF;
+END $$;
+REVOKE ALL ON FUNCTION public.advance_application(uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.advance_application(uuid) TO service_role;
+
+-- Every input that can earn a stage calls it through this one trigger function (SECURITY DEFINER: the saving user may not
+-- be allowed to write deals, and advance_application is closed to API roles).
+CREATE OR REPLACE FUNCTION public.advance_application_on_change() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+BEGIN
+  IF NEW.contact_id IS NOT NULL THEN PERFORM public.advance_application(NEW.contact_id); END IF;
+  RETURN NULL;
+END $$;
+REVOKE ALL ON FUNCTION public.advance_application_on_change() FROM PUBLIC, anon, authenticated, service_role;
+
+-- pg_trigger_depth() is 0 for a statement run by a user or an API call and 1 or more when a row is written from inside
+-- another trigger. Only the first fires this trigger, so advance_application's own write of enrolled_at, and the provisional
+-- fill from a login, do not loop back in. (The WHEN clause runs before the trigger function enters, hence 0 and not 1.)
+DROP TRIGGER IF EXISTS applications_advance ON public.applications;
+CREATE TRIGGER applications_advance AFTER INSERT OR UPDATE ON public.applications
+  FOR EACH ROW WHEN (pg_trigger_depth() = 0) EXECUTE FUNCTION public.advance_application_on_change();
+DROP TRIGGER IF EXISTS payments_advance ON public.payments;
+CREATE TRIGGER payments_advance AFTER INSERT OR UPDATE OF status ON public.payments
+  FOR EACH ROW EXECUTE FUNCTION public.advance_application_on_change();
+-- Trigger names run alphabetically: this one must run after portal_credentials_fill_provisional so the ID is already filled.
+DROP TRIGGER IF EXISTS portal_credentials_then_advance ON public.student_portal_credentials;
+CREATE TRIGGER portal_credentials_then_advance AFTER INSERT ON public.student_portal_credentials
+  FOR EACH ROW EXECUTE FUNCTION public.advance_application_on_change();
+DROP TRIGGER IF EXISTS application_documents_advance ON public.application_documents;
+CREATE TRIGGER application_documents_advance AFTER UPDATE OF uploaded_to_portal_at ON public.application_documents
+  FOR EACH ROW WHEN (OLD.uploaded_to_portal_at IS DISTINCT FROM NEW.uploaded_to_portal_at) EXECUTE FUNCTION public.advance_application_on_change();
+
+-- ===== end of Task 12. Tasks 13-17 append their sections below this line. =====
