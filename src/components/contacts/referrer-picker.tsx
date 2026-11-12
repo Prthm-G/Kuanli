@@ -51,7 +51,7 @@ export function ReferrerPicker({
   const [newName, setNewName] = useState('');
   const [newPhone, setNewPhone] = useState('');
   const [saving, setSaving] = useState(false);
-  const [found, setFound] = useState<ReferrerOption | null>(null);
+  const [found, setFound] = useState<{ contact: ReferrerOption; exact: boolean } | null>(null);
 
   useEffect(() => {
     if (!accountId || value.id) return;
@@ -79,18 +79,17 @@ export function ReferrerPicker({
     setSearching(false);
   }
 
-  async function addPerson() {
+  async function addPerson(allowFuzzy = false) {
     if (!accountId || !user) return;
     setSaving(true);
-    const out = await createReferrer(supabase, {
-      accountId,
-      userId: user.id,
-      name: newName,
-      phone: newPhone,
-    });
+    const out = await createReferrer(
+      supabase,
+      { accountId, userId: user.id, name: newName, phone: newPhone },
+      { allowFuzzy },
+    );
     setSaving(false);
     if (!out.ok) {
-      setFound(out.existing ?? null);
+      setFound(out.existing ? { contact: out.existing, exact: !!out.exact } : null);
       toast.error(out.error);
       return;
     }
@@ -176,14 +175,20 @@ export function ReferrerPicker({
             <div className="border-border space-y-2 rounded-md border p-2">
               <Input
                 value={newName}
-                onChange={(e) => setNewName(e.target.value)}
+                onChange={(e) => {
+                  setNewName(e.target.value);
+                  setFound(null);
+                }}
                 placeholder="Name"
                 aria-label="New referrer name"
                 className={inputCls}
               />
               <Input
                 value={newPhone}
-                onChange={(e) => setNewPhone(e.target.value)}
+                onChange={(e) => {
+                  setNewPhone(e.target.value);
+                  setFound(null);
+                }}
                 placeholder="Phone, with country code"
                 aria-label="New referrer phone"
                 className={inputCls}
@@ -192,21 +197,33 @@ export function ReferrerPicker({
                 <button
                   type="button"
                   onClick={() => {
-                    pick(found);
+                    pick(found.contact);
                     setFound(null);
                     setAdding(false);
                   }}
                   className="text-primary text-xs underline underline-offset-2"
                 >
-                  Link {found.name || found.phone} instead
+                  Link {found.contact.name || 'this contact'} ({found.contact.phone}) instead
                 </button>
               )}
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
+                {found && !found.exact && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={saving}
+                    onClick={() => addPerson(true)}
+                    className="border-border text-muted-foreground h-7 text-xs"
+                  >
+                    Create new person anyway
+                  </Button>
+                )}
                 <Button
                   type="button"
                   size="sm"
-                  disabled={saving || !newName.trim() || !newPhone.trim()}
-                  onClick={addPerson}
+                  disabled={saving || (!!found && found.exact) || !newName.trim() || !newPhone.trim()}
+                  onClick={() => addPerson(false)}
                   className="bg-primary hover:bg-primary/90 text-primary-foreground h-7 text-xs"
                 >
                   {saving && <Loader2 className="size-3 animate-spin" />}
@@ -216,7 +233,10 @@ export function ReferrerPicker({
                   type="button"
                   size="sm"
                   variant="outline"
-                  onClick={() => setAdding(false)}
+                  onClick={() => {
+                    setAdding(false);
+                    setFound(null);
+                  }}
                   className="border-border text-muted-foreground h-7 text-xs"
                 >
                   Cancel

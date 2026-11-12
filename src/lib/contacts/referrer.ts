@@ -1,11 +1,13 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import {
-  findExistingContact,
   HIDDEN_DUPLICATE_MESSAGE,
+  isExactMatch,
   isUniqueViolation,
+  type ExistingContact,
 } from '@/lib/contacts/dedupe';
 import { normalizeIndianPhone } from '@/lib/admissions/normalize';
+import { normalizePhone, phonesMatch } from '@/lib/whatsapp/phone-utils';
 
 /**
  * Referrer lookup for the contact forms (migration 096:
@@ -59,42 +61,84 @@ export async function searchReferrers(
 
 export type CreateReferrerResult =
   | { ok: true; referrer: ReferrerOption }
-  | { ok: false; error: string; existing?: ReferrerOption };
+  | {
+      ok: false;
+      error: string;
+      /** A contact with this number (or a close variant) already exists. */
+      existing?: ReferrerOption;
+      /** True when the digits are identical: creating another is blocked.
+       *  False is a last-8-digit look-alike: warn, but "create anyway" works. */
+      exact?: boolean;
+    };
 
 /**
  * "New person": a plain contact (name + phone) in the same account. The
  * referrer's own `source` is left alone; only the referred student is
  * marked Reference.
  */
+/**
+ * Indian shapes become the 91-prefixed 12-digit form Kuanli stores; anything
+ * else must be 7-15 digits with its country code (as the contact form allows).
+ */
+function normalizeReferrerPhone(raw: string): string | null {
+  const indian = normalizeIndianPhone(raw).phone;
+  if (indian) return indian;
+  const digits = normalizePhone(raw);
+  return digits.length >= 7 && digits.length <= 15 ? digits : null;
+}
+
+/** Visible contacts matching `phone`, an exact match first. */
+async function findPhoneMatch(
+  db: SupabaseClient,
+  accountId: string,
+  phone: string,
+): Promise<{ contact: ExistingContact; exact: boolean } | null> {
+  const suffix = phone.length >= 8 ? phone.slice(-8) : phone;
+  const { data, error } = await db
+    .from('contacts')
+    .select('id, name, phone')
+    .eq('account_id', accountId)
+    .like('phone', `%${suffix}`);
+  if (error || !data) return null;
+  const matches = (data as ExistingContact[]).filter((c) =>
+    phonesMatch(c.phone, phone),
+  );
+  const exact = matches.find((c) => isExactMatch(c, phone));
+  if (exact) return { contact: exact, exact: true };
+  return matches[0] ? { contact: matches[0], exact: false } : null;
+}
+
 export async function createReferrer(
   db: SupabaseClient,
   input: { accountId: string; userId: string; name: string; phone: string },
+  opts: { allowFuzzy?: boolean } = {},
 ): Promise<CreateReferrerResult> {
   const name = input.name.trim();
   if (!name) return { ok: false, error: 'Name is required' };
   if (!input.phone.trim()) return { ok: false, error: 'Phone is required' };
 
-  // Kuanli stores the 91-prefixed 12-digit form; imports that skip this
-  // silently duplicate contacts.
-  const { phone } = normalizeIndianPhone(input.phone);
+  const phone = normalizeReferrerPhone(input.phone);
   if (!phone) {
     return {
       ok: false,
-      error: 'Enter an Indian mobile number: 10 digits, or with 91 in front',
+      error: 'Enter a phone number with its country code (7 to 15 digits)',
     };
   }
 
-  // Same check the contact form uses: a match in any number format means
-  // link that person, not create a second one. Visible contacts only (RLS).
-  const existing = await findExistingContact(db, input.accountId, phone);
-  if (existing) {
+  // Same rule as the contact form: identical digits block, a look-alike only
+  // warns. Visible contacts only (RLS).
+  const match = await findPhoneMatch(db, input.accountId, phone);
+  if (match && (match.exact || !opts.allowFuzzy)) {
     return {
       ok: false,
-      error: 'This number is already a contact. Link that person instead.',
+      error: match.exact
+        ? 'This number is already a contact. Link that person instead.'
+        : 'A contact with a very similar number exists. Link them, or create anyway.',
+      exact: match.exact,
       existing: {
-        id: existing.id,
-        name: (existing.name as string | null) ?? null,
-        phone: existing.phone,
+        id: match.contact.id,
+        name: (match.contact.name as string | null) ?? null,
+        phone: match.contact.phone,
       },
     };
   }
