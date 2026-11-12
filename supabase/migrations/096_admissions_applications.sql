@@ -328,43 +328,73 @@ DROP TRIGGER IF EXISTS contacts_referrer_same_account ON public.contacts;
 CREATE TRIGGER contacts_referrer_same_account BEFORE INSERT OR UPDATE OF referred_by_contact_id, account_id ON public.contacts
   FOR EACH ROW WHEN (NEW.referred_by_contact_id IS NOT NULL) EXECUTE FUNCTION public.check_referrer_same_account();
 
+-- application_checklist: the one place that reads an application's checklist. advance_application decides the stage from it
+-- and application_card_status (the board chips) returns it, so a chip can never disagree with what the auto-move would do.
+--   * SECURITY INVOKER: advance_application (definer) sees everything, a board member sees what row security lets them see
+--   * every input must belong to the application's own account: row security on those tables only checks the row's own
+--     account_id, so a member of another account could file a row naming this contact
+--   * a blank provisional ID or registration number counts as absent
+--   * app fee = reported or verified; course fee = any non-application head, verified; plan counts once agreed_total > 0
+--     (apply_fee_template inserts it at 0 and sets the total afterwards; Enrolled before that would lose the Purchase value)
+--   * documents are matched on the application's university (the contact's, then 'LPU', as application_tracker does)
+--   * 'reversed' is compared as text: the enum value is added in this same migration
+CREATE OR REPLACE FUNCTION public.application_checklist(p_account_id uuid, p_contact_id uuid DEFAULT NULL)
+RETURNS TABLE (contact_id uuid, details boolean, app_fee boolean, provisional boolean, form boolean, docs_uploaded int, docs_required int,
+               course_fee boolean, registration boolean, has_plan boolean, reversed boolean)
+LANGUAGE sql STABLE SECURITY INVOKER SET search_path = public, pg_temp AS $$
+  SELECT a.contact_id,
+         a.details_punched_at IS NOT NULL,
+         EXISTS (SELECT 1 FROM public.payments py WHERE py.contact_id = a.contact_id AND py.account_id = a.account_id
+                  AND py.head = 'application' AND py.status::text IN ('reported', 'verified')),
+         nullif(btrim(a.provisional_app_id), '') IS NOT NULL,
+         a.form_filled_at IS NOT NULL,
+         (SELECT count(*)::int FROM public.university_required_docs r
+           WHERE r.account_id = a.account_id AND r.university = u.univ
+             AND EXISTS (SELECT 1 FROM public.application_documents x WHERE x.contact_id = a.contact_id AND x.account_id = a.account_id
+                          AND x.doc_type = r.doc_type AND x.uploaded_to_portal_at IS NOT NULL)),
+         (SELECT count(*)::int FROM public.university_required_docs r WHERE r.account_id = a.account_id AND r.university = u.univ),
+         EXISTS (SELECT 1 FROM public.payments py WHERE py.contact_id = a.contact_id AND py.account_id = a.account_id
+                  AND py.head <> 'application' AND py.status::text = 'verified'),
+         nullif(btrim(a.registration_number), '') IS NOT NULL,
+         EXISTS (SELECT 1 FROM public.student_fee_plans sp WHERE sp.contact_id = a.contact_id AND sp.account_id = a.account_id AND sp.agreed_total > 0),
+         EXISTS (SELECT 1 FROM public.payments py WHERE py.contact_id = a.contact_id AND py.account_id = a.account_id AND py.status::text = 'reversed')
+    FROM public.applications a
+   CROSS JOIN LATERAL (SELECT coalesce(a.university, (SELECT ct.university FROM public.contacts ct WHERE ct.id = a.contact_id), 'LPU') AS univ) u
+   WHERE a.account_id = p_account_id AND (p_contact_id IS NULL OR a.contact_id = p_contact_id)
+$$;
+REVOKE ALL ON FUNCTION public.application_checklist(uuid, uuid) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.application_checklist(uuid, uuid) TO authenticated, service_role;
+
 -- advance_application: moves every live admissions card of the contact forward to the stage its checklist has earned.
 --   * never backward, never out of Enrolled / Lost / Not Interested; a fee may jump ahead of documents
 --   * positions come from the cards' own board (stage_position / pipeline_stages), never a literal
 --   * moves are logged with a NULL changed_by (app.automation = 'on' while it moves, as 095's stage-log trigger expects)
 --   * does nothing while app.suppress_automation = 'on' (backfills, imports)
---   * locks the contact's deals first and reads their stages in a LATER statement, so a Lost move that committed while it
---     waited (lifecycle_sweep, a person) is seen and respected
--- Documents are matched on the application's university (the contact's, then 'LPU', as application_tracker does).
+--   * locks the contact's deals on admissions boards in the application's account first (not its other deals: a fee plan or
+--     a Sales card of the same contact must not wait, and fewer locks means less deadlock exposure against lifecycle_sweep),
+--     then reads the checklist and the stages in LATER statements, so a Lost move that committed while it waited
+--     (lifecycle_sweep, a person) is seen and respected
 CREATE OR REPLACE FUNCTION public.advance_application(p_contact_id uuid) RETURNS void
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
-  a public.applications; v_target text; v_plan boolean; v_app_fee boolean; v_course_fee boolean; v_docs boolean;
-  v_univ text; v_moved int; v_prev_auto text;
+  v_acct uuid; c record; v_target text; v_moved int; v_prev_auto text;
 BEGIN
   IF current_setting('app.suppress_automation', true) = 'on' THEN RETURN; END IF;
+  SELECT account_id INTO v_acct FROM public.applications WHERE contact_id = p_contact_id;
+  IF NOT FOUND THEN RETURN; END IF;
   -- Lock first, read after: a second input committing at the same time waits here and then reads the first one's rows
   -- (every later statement takes a new snapshot), so two inputs together are never seen as half each.
-  PERFORM 1 FROM public.deals WHERE contact_id = p_contact_id ORDER BY id FOR UPDATE;
-  SELECT * INTO a FROM public.applications WHERE contact_id = p_contact_id;
+  PERFORM 1 FROM public.deals dl
+    WHERE dl.contact_id = p_contact_id AND dl.account_id = v_acct AND public.stage_position(dl.pipeline_id, 'Application Started') IS NOT NULL
+    ORDER BY dl.id FOR UPDATE;
+  SELECT * INTO c FROM public.application_checklist(v_acct, p_contact_id);
   IF NOT FOUND THEN RETURN; END IF;
-  v_univ := coalesce(a.university, (SELECT ct.university FROM public.contacts ct WHERE ct.id = p_contact_id), 'LPU');
-  -- Every input must belong to the application's own account: row security on those tables only checks the row's own
-  -- account_id, so a member of another account could file a row naming this contact. A plan counts once it has a total
-  -- (apply_fee_template inserts it at 0 and sets the total afterwards; Enrolled before that would lose the Purchase value).
-  v_plan := EXISTS (SELECT 1 FROM public.student_fee_plans WHERE contact_id = p_contact_id AND account_id = a.account_id AND agreed_total > 0);
-  v_app_fee := EXISTS (SELECT 1 FROM public.payments WHERE contact_id = p_contact_id AND account_id = a.account_id AND head = 'application' AND status::text IN ('reported', 'verified'));
-  v_course_fee := EXISTS (SELECT 1 FROM public.payments WHERE contact_id = p_contact_id AND account_id = a.account_id AND head <> 'application' AND status::text = 'verified');
-  v_docs := NOT EXISTS (SELECT 1 FROM public.university_required_docs r
-             WHERE r.account_id = a.account_id AND r.university = v_univ
-               AND NOT EXISTS (SELECT 1 FROM public.application_documents x
-                               WHERE x.contact_id = p_contact_id AND x.account_id = a.account_id AND x.doc_type = r.doc_type AND x.uploaded_to_portal_at IS NOT NULL));
   v_target := CASE
-    WHEN a.registration_number IS NOT NULL AND v_plan THEN 'Enrolled'
-    WHEN a.provisional_app_id IS NOT NULL AND v_course_fee THEN 'Fee Submitted'
-    WHEN a.provisional_app_id IS NOT NULL AND a.form_filled_at IS NOT NULL AND v_docs THEN 'Form & Documents'
-    WHEN a.provisional_app_id IS NOT NULL THEN 'Provisional ID'
-    WHEN a.details_punched_at IS NOT NULL AND v_app_fee THEN 'Application Started'
+    WHEN c.registration AND c.has_plan THEN 'Enrolled'
+    WHEN c.provisional AND c.course_fee THEN 'Fee Submitted'
+    WHEN c.provisional AND c.form AND c.docs_uploaded = c.docs_required THEN 'Form & Documents'
+    WHEN c.provisional THEN 'Provisional ID'
+    WHEN c.details AND c.app_fee THEN 'Application Started'
   END;
   IF v_target IS NULL THEN RETURN; END IF;
 
@@ -373,7 +403,7 @@ BEGIN
   WITH moved AS (
     UPDATE public.deals dl SET stage_id = t.id, updated_at = now()
       FROM public.pipeline_stages cur, public.pipeline_stages t
-     WHERE dl.contact_id = p_contact_id AND dl.account_id = a.account_id
+     WHERE dl.contact_id = p_contact_id AND dl.account_id = v_acct
        AND cur.id = dl.stage_id AND cur.name NOT IN ('Enrolled', 'Lost', 'Not Interested')
        AND public.stage_position(dl.pipeline_id, 'Application Started') IS NOT NULL
        AND t.pipeline_id = dl.pipeline_id AND t.name = v_target AND t.position > cur.position
@@ -421,4 +451,17 @@ DROP TRIGGER IF EXISTS student_fee_plans_advance ON public.student_fee_plans;
 CREATE TRIGGER student_fee_plans_advance AFTER INSERT OR UPDATE ON public.student_fee_plans
   FOR EACH ROW EXECUTE FUNCTION public.advance_application_on_change();
 
--- ===== end of Task 12. Tasks 13-17 append their sections below this line. =====
+-- ===== end of Task 12. =====
+
+-- Board chips: one row per application of the account (contacts without an application have no row). A thin wrapper over
+-- application_checklist, so what the card shows is what advance_application would decide from.
+CREATE OR REPLACE FUNCTION public.application_card_status(p_account_id uuid)
+RETURNS TABLE (contact_id uuid, details boolean, app_fee boolean, provisional boolean, form boolean, docs_uploaded int, docs_required int,
+               course_fee boolean, registration boolean, has_plan boolean, reversed boolean)
+LANGUAGE sql STABLE SECURITY INVOKER SET search_path = public, pg_temp AS $$
+  SELECT * FROM public.application_checklist(p_account_id, NULL)
+$$;
+REVOKE ALL ON FUNCTION public.application_card_status(uuid) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.application_card_status(uuid) TO authenticated, service_role;
+
+-- ===== end of Task 13. Tasks 14-17 append their sections below this line. =====

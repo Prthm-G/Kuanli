@@ -16,6 +16,7 @@ import {
 } from "@dnd-kit/core";
 import type { Deal, PipelineStage } from "@/types";
 import type { QueueLead } from "@/lib/queue/types";
+import type { CardStatus } from "@/lib/applications/card-status";
 import { DealCard } from "./deal-card";
 import { Button } from "@/components/ui/button";
 import { Plus } from "lucide-react";
@@ -28,6 +29,8 @@ interface PipelineBoardProps {
   deals: Deal[];
   /** Per-contact queue insight (score / awaiting / interest), optional. */
   insights?: Map<string, QueueLead>;
+  /** Checklist state per contact on admissions boards; absent contacts show no chips. */
+  cardStatuses?: Map<string, CardStatus>;
   onDealMoved: (dealId: string, newStageId: string) => void;
   onAddDeal: (stageId: string) => void;
   onEditDeal: (deal: Deal) => void;
@@ -37,6 +40,7 @@ export function PipelineBoard({
   stages,
   deals,
   insights,
+  cardStatuses,
   onDealMoved,
   onAddDeal,
   onEditDeal,
@@ -180,6 +184,7 @@ export function PipelineBoard({
               onEditDeal={onEditDeal}
               onMoveToStage={onDealMoved}
               insights={insights}
+              cardStatuses={cardStatuses}
             />
           );
         })}
@@ -256,6 +261,7 @@ function StageColumn({
   onEditDeal,
   onMoveToStage,
   insights,
+  cardStatuses,
 }: {
   stage: PipelineStage;
   stages: PipelineStage[];
@@ -267,6 +273,7 @@ function StageColumn({
   onEditDeal: (deal: Deal) => void;
   onMoveToStage: (dealId: string, stageId: string) => void;
   insights?: Map<string, QueueLead>;
+  cardStatuses?: Map<string, CardStatus>;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: stage.id });
 
@@ -321,6 +328,9 @@ function StageColumn({
               insight={
                 deal.contact_id ? insights?.get(deal.contact_id) : undefined
               }
+              status={
+                deal.contact_id ? cardStatuses?.get(deal.contact_id) : undefined
+              }
             />
           ))
         )}
@@ -346,6 +356,7 @@ function DraggableDealCard({
   onEdit,
   onMoveToStage,
   insight,
+  status,
 }: {
   deal: Deal;
   stage: PipelineStage;
@@ -353,6 +364,7 @@ function DraggableDealCard({
   onEdit: (deal: Deal) => void;
   onMoveToStage: (dealId: string, stageId: string) => void;
   insight?: QueueLead;
+  status?: CardStatus;
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: deal.id,
@@ -372,6 +384,7 @@ function DraggableDealCard({
         onEdit={onEdit}
         onMoveToStage={onMoveToStage}
         insight={insight}
+        status={status}
       />
     </div>
   );
