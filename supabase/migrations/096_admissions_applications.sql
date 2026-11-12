@@ -343,16 +343,22 @@ DECLARE
   v_univ text; v_moved int; v_prev_auto text;
 BEGIN
   IF current_setting('app.suppress_automation', true) = 'on' THEN RETURN; END IF;
+  -- Lock first, read after: a second input committing at the same time waits here and then reads the first one's rows
+  -- (every later statement takes a new snapshot), so two inputs together are never seen as half each.
+  PERFORM 1 FROM public.deals WHERE contact_id = p_contact_id ORDER BY id FOR UPDATE;
   SELECT * INTO a FROM public.applications WHERE contact_id = p_contact_id;
   IF NOT FOUND THEN RETURN; END IF;
   v_univ := coalesce(a.university, (SELECT ct.university FROM public.contacts ct WHERE ct.id = p_contact_id), 'LPU');
-  v_plan := EXISTS (SELECT 1 FROM public.student_fee_plans WHERE contact_id = p_contact_id);
-  v_app_fee := EXISTS (SELECT 1 FROM public.payments WHERE contact_id = p_contact_id AND head = 'application' AND status::text IN ('reported', 'verified'));
-  v_course_fee := EXISTS (SELECT 1 FROM public.payments WHERE contact_id = p_contact_id AND head <> 'application' AND status::text = 'verified');
+  -- Every input must belong to the application's own account: row security on those tables only checks the row's own
+  -- account_id, so a member of another account could file a row naming this contact. A plan counts once it has a total
+  -- (apply_fee_template inserts it at 0 and sets the total afterwards; Enrolled before that would lose the Purchase value).
+  v_plan := EXISTS (SELECT 1 FROM public.student_fee_plans WHERE contact_id = p_contact_id AND account_id = a.account_id AND agreed_total > 0);
+  v_app_fee := EXISTS (SELECT 1 FROM public.payments WHERE contact_id = p_contact_id AND account_id = a.account_id AND head = 'application' AND status::text IN ('reported', 'verified'));
+  v_course_fee := EXISTS (SELECT 1 FROM public.payments WHERE contact_id = p_contact_id AND account_id = a.account_id AND head <> 'application' AND status::text = 'verified');
   v_docs := NOT EXISTS (SELECT 1 FROM public.university_required_docs r
              WHERE r.account_id = a.account_id AND r.university = v_univ
                AND NOT EXISTS (SELECT 1 FROM public.application_documents x
-                               WHERE x.contact_id = p_contact_id AND x.doc_type = r.doc_type AND x.uploaded_to_portal_at IS NOT NULL));
+                               WHERE x.contact_id = p_contact_id AND x.account_id = a.account_id AND x.doc_type = r.doc_type AND x.uploaded_to_portal_at IS NOT NULL));
   v_target := CASE
     WHEN a.registration_number IS NOT NULL AND v_plan THEN 'Enrolled'
     WHEN a.provisional_app_id IS NOT NULL AND v_course_fee THEN 'Fee Submitted'
@@ -362,7 +368,6 @@ BEGIN
   END;
   IF v_target IS NULL THEN RETURN; END IF;
 
-  PERFORM 1 FROM public.deals WHERE contact_id = p_contact_id ORDER BY id FOR UPDATE;
   v_prev_auto := coalesce(current_setting('app.automation', true), '');
   PERFORM set_config('app.automation', 'on', true);
   WITH moved AS (
@@ -409,5 +414,11 @@ CREATE TRIGGER portal_credentials_then_advance AFTER INSERT ON public.student_po
 DROP TRIGGER IF EXISTS application_documents_advance ON public.application_documents;
 CREATE TRIGGER application_documents_advance AFTER UPDATE OF uploaded_to_portal_at ON public.application_documents
   FOR EACH ROW WHEN (OLD.uploaded_to_portal_at IS DISTINCT FROM NEW.uploaded_to_portal_at) EXECUTE FUNCTION public.advance_application_on_change();
+
+-- A fee plan is an input too (no depth guard: advance_application never writes plans, and apply_fee_template deletes then
+-- inserts, then sets the total with an update).
+DROP TRIGGER IF EXISTS student_fee_plans_advance ON public.student_fee_plans;
+CREATE TRIGGER student_fee_plans_advance AFTER INSERT OR UPDATE ON public.student_fee_plans
+  FOR EACH ROW EXECUTE FUNCTION public.advance_application_on_change();
 
 -- ===== end of Task 12. Tasks 13-17 append their sections below this line. =====
