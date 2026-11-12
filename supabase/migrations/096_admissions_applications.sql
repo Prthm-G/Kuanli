@@ -202,6 +202,9 @@ BEGIN
   IF p_note IS NULL OR btrim(p_note) = '' THEN
     RAISE EXCEPTION 'A reason is required to reverse a payment' USING ERRCODE = '22023';
   END IF;
+  -- Lock the row and read the status again: a concurrent reversal that committed first is seen here, so two reversals
+  -- cannot both succeed or overwrite each other's note.
+  SELECT status::text INTO v_status FROM public.payments WHERE id = p_payment_id FOR UPDATE;
   IF v_status <> 'verified' THEN
     RAISE EXCEPTION 'Only a verified payment can be reversed (this one is %)', v_status USING ERRCODE = '22023';
   END IF;
@@ -222,3 +225,63 @@ REVOKE ALL ON FUNCTION public.duplicate_payment_reference(uuid, text) FROM PUBLI
 GRANT EXECUTE ON FUNCTION public.duplicate_payment_reference(uuid, text) TO authenticated;
 
 -- ===== end of Task 10. Tasks 11-17 append their sections below this line. =====
+
+-- ===== Task 11: login kinds, document upload marks, referrer link =====
+
+-- Kinds of student portal login. The rows that exist today are registration logins (the column default says so).
+ALTER TABLE public.student_portal_credentials
+  ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'registration'
+  CONSTRAINT student_portal_credentials_kind_check CHECK (kind IN ('provisional', 'registration', 'other'));
+-- One provisional and one registration login per student; any number of "other".
+CREATE UNIQUE INDEX IF NOT EXISTS uq_portal_credentials_contact_kind
+  ON public.student_portal_credentials (contact_id, kind) WHERE kind <> 'other';
+
+-- Saving a provisional login fills applications.provisional_app_id with its username when that is still empty (R-4).
+-- SECURITY DEFINER so it does not depend on the saving role's rights on applications; never creates an application.
+CREATE OR REPLACE FUNCTION public.fill_provisional_app_id() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+BEGIN
+  IF NEW.kind = 'provisional' AND btrim(coalesce(NEW.username, '')) <> '' THEN
+    UPDATE public.applications SET provisional_app_id = btrim(NEW.username)
+     WHERE contact_id = NEW.contact_id AND btrim(coalesce(provisional_app_id, '')) = '';
+  END IF;
+  RETURN NULL;
+END $$;
+REVOKE ALL ON FUNCTION public.fill_provisional_app_id() FROM PUBLIC, anon, authenticated, service_role;
+DROP TRIGGER IF EXISTS portal_credentials_fill_provisional ON public.student_portal_credentials;
+CREATE TRIGGER portal_credentials_fill_provisional AFTER INSERT ON public.student_portal_credentials
+  FOR EACH ROW EXECUTE FUNCTION public.fill_provisional_app_id();
+
+-- Document upload marks (the counsellor uploaded the file to the university portal) and a deletion stamp for the file.
+ALTER TABLE public.application_documents
+  ADD COLUMN IF NOT EXISTS uploaded_to_portal_at timestamptz,
+  ADD COLUMN IF NOT EXISTS uploaded_to_portal_by uuid REFERENCES auth.users(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS file_deleted_at timestamptz;
+
+-- Marks every still-unmarked document of the contact as uploaded now, by the caller. Agent and above. Runs as the caller,
+-- so RLS applies (a counsellor-number chat stays out of reach of agents). Returns how many rows it marked.
+CREATE OR REPLACE FUNCTION public.mark_documents_uploaded(p_contact_id uuid) RETURNS int
+LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
+DECLARE v_account uuid; v_n int;
+BEGIN
+  IF auth.uid() IS NULL THEN RAISE EXCEPTION 'Unauthorized' USING ERRCODE = '42501'; END IF;
+  SELECT account_id INTO v_account FROM public.contacts WHERE id = p_contact_id;
+  IF v_account IS NULL THEN RAISE EXCEPTION 'Contact not found' USING ERRCODE = '42704'; END IF;
+  IF NOT public.is_account_member(v_account, 'agent'::public.account_role_enum) THEN
+    RAISE EXCEPTION 'Marking documents requires agent in this account' USING ERRCODE = '42501';
+  END IF;
+  UPDATE public.application_documents SET uploaded_to_portal_at = now(), uploaded_to_portal_by = auth.uid()
+   WHERE contact_id = p_contact_id AND uploaded_to_portal_at IS NULL;
+  GET DIAGNOSTICS v_n = ROW_COUNT;
+  RETURN v_n;
+END $$;
+REVOKE ALL ON FUNCTION public.mark_documents_uploaded(uuid) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.mark_documents_uploaded(uuid) TO authenticated;
+
+-- Who referred this student (another contact). Deleting the referrer keeps the student; a contact cannot refer itself.
+ALTER TABLE public.contacts
+  ADD COLUMN IF NOT EXISTS referred_by_contact_id uuid REFERENCES public.contacts(id) ON DELETE SET NULL
+  CONSTRAINT contacts_referred_by_not_self CHECK (referred_by_contact_id IS NULL OR referred_by_contact_id <> id);
+CREATE INDEX IF NOT EXISTS idx_contacts_referred_by ON public.contacts (referred_by_contact_id) WHERE referred_by_contact_id IS NOT NULL;
+
+-- ===== end of Task 11. Tasks 12-17 append their sections below this line. =====
