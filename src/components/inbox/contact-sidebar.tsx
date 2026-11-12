@@ -12,6 +12,8 @@ import type {
   Tag,
 } from '@/types';
 import { EnrollmentPanel } from './enrollment-panel';
+import { ApplicationPanel } from '@/components/applications/application-panel';
+import { DocumentsTab } from '@/components/applications/documents-tab';
 import { NextDueStrip } from '@/components/followups/next-due-strip';
 import {
   Phone,
@@ -26,6 +28,8 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { hasMinRole } from '@/lib/auth/roles';
 import {
   Select,
   SelectContent,
@@ -37,6 +41,15 @@ import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { format } from 'date-fns';
 import { whatsappChatUrl } from '@/lib/inbox/wa-link';
+
+/** Stages a student is in once the application has begun (Application Started through Enrolled). */
+const STUDENT_STAGES = new Set([
+  'Application Started',
+  'Provisional ID',
+  'Form & Documents',
+  'Fee Submitted',
+  'Enrolled',
+]);
 
 interface ContactSidebarProps {
   contact: Contact | null;
@@ -56,8 +69,9 @@ export function ContactSidebar({
   onContactUpdated,
   className,
 }: ContactSidebarProps) {
-  const { accountId, accountRole } = useAuth();
+  const { accountId, accountRole, user } = useAuth();
   const canEditStage = accountRole !== null && accountRole !== 'viewer';
+  const canKeepFiles = accountRole !== null && hasMinRole(accountRole, 'admin');
   const [copied, setCopied] = useState(false);
   const [deals, setDeals] = useState<Deal[]>([]);
   const [stages, setStages] = useState<PipelineStage[]>([]);
@@ -219,262 +233,324 @@ export function ContactSidebar({
       {/* `min-h-0` is load-bearing: without it this grows to fit its content
           instead of scrolling, and everything below the fold is unreachable
           (same bug as the conversation list, issue #229). */}
-      <ScrollArea className="min-h-0 flex-1">
-        <div className="p-4">
-          {/* Contact Info */}
-          <div className="flex flex-col items-center text-center">
-            <div className="bg-muted text-foreground flex h-16 w-16 items-center justify-center rounded-full text-lg font-semibold">
-              {contact.avatar_url ? (
-                // avatar_url is an arbitrary https URL pasted in the UI, so
-                // there is no finite remotePatterns list for the optimizer.
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={contact.avatar_url}
-                  alt={displayName}
-                  className="h-16 w-16 rounded-full object-cover"
-                />
-              ) : (
-                initials
-              )}
-            </div>
-            <h3 className="text-foreground mt-3 text-sm font-semibold">
-              {displayName}{' '}
-              {contact.roll_number ? ` — ${contact.roll_number}` : ''}
-            </h3>
-            {contact.company && (
-              <p className="text-muted-foreground text-xs">{contact.company}</p>
-            )}
-          </div>
-
-          {/* Phone */}
-          <div className="mt-4 space-y-2">
-            <button
-              onClick={handleCopyPhone}
-              className="text-muted-foreground hover:bg-muted flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm transition-colors"
-            >
-              <Phone className="text-muted-foreground h-4 w-4" />
-              <span className="flex-1 text-left">{contact.phone}</span>
-              {copied ? (
-                <Check className="text-primary h-3 w-3" />
-              ) : (
-                <Copy className="text-muted-foreground h-3 w-3" />
-              )}
-            </button>
-
-            {/* SP3b: counsellors reply from their WhatsApp Business app. */}
-            {waUrl && (
-              <a
-                href={waUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-muted-foreground hover:bg-muted flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm transition-colors"
-              >
-                <MessageCircle
-                  className="text-muted-foreground h-4 w-4"
-                  aria-hidden="true"
-                />
-                <span className="flex-1 text-left">Open in WhatsApp</span>
-                <span className="sr-only">(opens in a new tab)</span>
-              </a>
-            )}
-
-            {contact.email && (
-              <div className="text-muted-foreground flex items-center gap-2 rounded-lg px-3 py-2 text-sm">
-                <Mail className="text-muted-foreground h-4 w-4" />
-                <span className="truncate">{contact.email}</span>
-              </div>
-            )}
-          </div>
-
-          {/* Divider */}
-          <div className="border-border my-4 border-t" />
-
-          {/* Stage: the first thing a counsellor needs after the contact. */}
-          <div>
-            <div className="text-muted-foreground flex items-center gap-2 px-1 text-xs font-medium tracking-wider uppercase">
-              <GitBranch className="h-3 w-3" />
-              Stage
-            </div>
-            <div className="mt-2 space-y-2">
-              {deals.length === 0 ? (
-                <p className="text-muted-foreground px-1 text-xs">No deals</p>
-              ) : (
-                deals.map((deal) => {
-                  const options = stages.filter(
-                    (s) => s.pipeline_id === deal.pipeline_id
-                  );
-                  return (
-                    <div
-                      key={deal.id}
-                      className="bg-muted rounded-lg px-3 py-2"
-                    >
-                      <p className="text-foreground truncate text-sm font-medium">
-                        {deal.title}
-                      </p>
-                      {canEditStage && options.length > 0 ? (
-                        <Select
-                          value={deal.stage_id}
-                          onValueChange={(value) => {
-                            const next = String(value);
-                            if (next && next !== deal.stage_id) {
-                              void handleStageChange(deal.id, next);
-                            }
-                          }}
-                        >
-                          <SelectTrigger
-                            size="sm"
-                            className="bg-background/60 mt-2 w-full"
-                            aria-label="Change stage"
-                          >
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {options.map((s) => (
-                              <SelectItem key={s.id} value={s.id}>
-                                {s.name}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      ) : (
-                        deal.stage && (
-                          <span
-                            className="mt-1 inline-block rounded-full px-1.5 py-0.5 text-[10px]"
-                            style={{
-                              backgroundColor: `${deal.stage.color}20`,
-                              color: deal.stage.color,
-                            }}
-                          >
-                            {deal.stage.name}
-                          </span>
-                        )
-                      )}
-                    </div>
-                  );
-                })
-              )}
-            </div>
-          </div>
-
-          {/* Divider */}
-          <div className="border-border my-4 border-t" />
-
-          {/* Follow-up (migration 054) */}
-          <NextDueStrip
-            contactId={contact.id}
-            contactName={contact.name}
-            conversationId={conversation?.id ?? null}
-          />
-
-          {/* Divider */}
-          <div className="border-border my-4 border-t" />
-
-          {/* Tags */}
-          <div>
-            <div className="text-muted-foreground flex items-center gap-2 px-1 text-xs font-medium tracking-wider uppercase">
-              <TagIcon className="h-3 w-3" />
-              Tags
-            </div>
-            <div className="mt-2 flex flex-wrap gap-1">
-              {tags.length === 0 ? (
-                <p className="text-muted-foreground px-1 text-xs">No tags</p>
-              ) : (
-                tags.map((tag) => (
-                  <span
-                    key={tag.contact_tag_id}
-                    className="rounded-full px-2 py-0.5 text-[10px] font-medium"
-                    style={{
-                      backgroundColor: `${tag.color}20`,
-                      color: tag.color,
-                    }}
-                  >
-                    {tag.name}
-                  </span>
-                ))
-              )}
-            </div>
-          </div>
-
-          {/* Divider */}
-          <div className="border-border my-4 border-t" />
-
-          {/* Enrollment Setup */}
-          <div>
-            <div className="text-muted-foreground flex items-center gap-2 px-1 text-xs font-medium tracking-wider uppercase">
-              University Enrollment
-            </div>
-            {!contact.university ? (
-              /* Keyed on the thread so switching conversations re-seeds the
-                 suggested university, without resetting the notes / deals /
-                 tags state this sidebar also holds. */
-              <EnrollmentPanel
-                key={conversation?.id ?? 'none'}
-                contact={contact}
-                interestUniversity={conversation?.interest_university}
-                onDone={onContactUpdated}
-              />
-            ) : (
-              <div className="bg-primary/10 border-primary/20 mt-2 rounded-lg border p-3 text-sm">
-                <p className="text-primary text-lg font-bold tracking-wide">
-                  {contact.roll_number}
-                </p>
-                <p className="text-muted-foreground mt-1 text-xs">
-                  {contact.university} • 20{contact.intake_year} • Intake{' '}
-                  {contact.intake_session}
-                </p>
-                {contact.university_roll_number && (
-                  <p className="text-muted-foreground mt-1 text-xs">
-                    Univ. Roll: {contact.university_roll_number}
+      <Tabs defaultValue="student" className="min-h-0 flex-1 gap-0">
+        <TabsList className="mx-4 mt-3 w-auto">
+          <TabsTrigger value="student">Student</TabsTrigger>
+          <TabsTrigger value="documents">Documents</TabsTrigger>
+        </TabsList>
+        <TabsContent value="student" className="flex min-h-0 flex-1 flex-col">
+          <ScrollArea className="min-h-0 flex-1">
+            <div className="p-4">
+              {/* Contact Info */}
+              <div className="flex flex-col items-center text-center">
+                <div className="bg-muted text-foreground flex h-16 w-16 items-center justify-center rounded-full text-lg font-semibold">
+                  {contact.avatar_url ? (
+                    // avatar_url is an arbitrary https URL pasted in the UI, so
+                    // there is no finite remotePatterns list for the optimizer.
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={contact.avatar_url}
+                      alt={displayName}
+                      className="h-16 w-16 rounded-full object-cover"
+                    />
+                  ) : (
+                    initials
+                  )}
+                </div>
+                <h3 className="text-foreground mt-3 text-sm font-semibold">
+                  {displayName}{' '}
+                  {contact.roll_number ? ` — ${contact.roll_number}` : ''}
+                </h3>
+                {contact.company && (
+                  <p className="text-muted-foreground text-xs">
+                    {contact.company}
                   </p>
                 )}
               </div>
-            )}
-          </div>
 
-          {/* Divider */}
-          <div className="border-border my-4 border-t" />
-
-          {/* Notes */}
-          <div>
-            <div className="text-muted-foreground flex items-center gap-2 px-1 text-xs font-medium tracking-wider uppercase">
-              <StickyNote className="h-3 w-3" />
-              Notes
-            </div>
-            <div className="mt-2">
-              <div className="flex gap-2">
-                <textarea
-                  value={newNote}
-                  onChange={(e) => setNewNote(e.target.value)}
-                  placeholder="Add a note..."
-                  rows={2}
-                  className="border-border bg-muted text-foreground placeholder-muted-foreground focus:border-primary/50 flex-1 resize-none rounded-lg border px-3 py-2 text-xs outline-none"
-                />
-                <Button
-                  size="sm"
-                  className="bg-primary hover:bg-primary/90 h-auto px-2"
-                  onClick={handleAddNote}
-                  disabled={!newNote.trim() || addingNote}
+              {/* Phone */}
+              <div className="mt-4 space-y-2">
+                <button
+                  onClick={handleCopyPhone}
+                  className="text-muted-foreground hover:bg-muted flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm transition-colors"
                 >
-                  <Plus className="h-3 w-3" />
-                </Button>
+                  <Phone className="text-muted-foreground h-4 w-4" />
+                  <span className="flex-1 text-left">{contact.phone}</span>
+                  {copied ? (
+                    <Check className="text-primary h-3 w-3" />
+                  ) : (
+                    <Copy className="text-muted-foreground h-3 w-3" />
+                  )}
+                </button>
+
+                {/* SP3b: counsellors reply from their WhatsApp Business app. */}
+                {waUrl && (
+                  <a
+                    href={waUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-muted-foreground hover:bg-muted flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm transition-colors"
+                  >
+                    <MessageCircle
+                      className="text-muted-foreground h-4 w-4"
+                      aria-hidden="true"
+                    />
+                    <span className="flex-1 text-left">Open in WhatsApp</span>
+                    <span className="sr-only">(opens in a new tab)</span>
+                  </a>
+                )}
+
+                {contact.email && (
+                  <div className="text-muted-foreground flex items-center gap-2 rounded-lg px-3 py-2 text-sm">
+                    <Mail className="text-muted-foreground h-4 w-4" />
+                    <span className="truncate">{contact.email}</span>
+                  </div>
+                )}
               </div>
 
-              <div className="mt-2 space-y-2">
-                {notes.map((note) => (
-                  <div key={note.id} className="bg-muted rounded-lg px-3 py-2">
-                    <p className="text-muted-foreground text-xs whitespace-pre-wrap">
-                      {note.note_text}
+              {/* Divider */}
+              <div className="border-border my-4 border-t" />
+
+              {/* Stage: the first thing a counsellor needs after the contact. */}
+              <div>
+                <div className="text-muted-foreground flex items-center gap-2 px-1 text-xs font-medium tracking-wider uppercase">
+                  <GitBranch className="h-3 w-3" />
+                  Stage
+                </div>
+                <div className="mt-2 space-y-2">
+                  {deals.length === 0 ? (
+                    <p className="text-muted-foreground px-1 text-xs">
+                      No deals
                     </p>
-                    <p className="text-muted-foreground mt-1 text-[10px]">
-                      {format(new Date(note.created_at), 'MMM d, yyyy HH:mm')}
+                  ) : (
+                    deals.map((deal) => {
+                      const options = stages.filter(
+                        (s) => s.pipeline_id === deal.pipeline_id
+                      );
+                      return (
+                        <div
+                          key={deal.id}
+                          className="bg-muted rounded-lg px-3 py-2"
+                        >
+                          <p className="text-foreground truncate text-sm font-medium">
+                            {deal.title}
+                          </p>
+                          {canEditStage && options.length > 0 ? (
+                            <Select
+                              value={deal.stage_id}
+                              onValueChange={(value) => {
+                                const next = String(value);
+                                if (next && next !== deal.stage_id) {
+                                  void handleStageChange(deal.id, next);
+                                }
+                              }}
+                            >
+                              <SelectTrigger
+                                size="sm"
+                                className="bg-background/60 mt-2 w-full"
+                                aria-label="Change stage"
+                              >
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {options.map((s) => (
+                                  <SelectItem key={s.id} value={s.id}>
+                                    {s.name}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          ) : (
+                            deal.stage && (
+                              <span
+                                className="mt-1 inline-block rounded-full px-1.5 py-0.5 text-[10px]"
+                                style={{
+                                  backgroundColor: `${deal.stage.color}20`,
+                                  color: deal.stage.color,
+                                }}
+                              >
+                                {deal.stage.name}
+                              </span>
+                            )
+                          )}
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+
+              {/* Application (migration 096): from Application Started onwards */}
+              {accountId &&
+                user &&
+                deals.some(
+                  (d) => d.stage && STUDENT_STAGES.has(d.stage.name)
+                ) && (
+                  <>
+                    <div className="border-border my-4 border-t" />
+                    <div>
+                      <div className="text-muted-foreground flex items-center gap-2 px-1 text-xs font-medium tracking-wider uppercase">
+                        Application
+                      </div>
+                      <div className="mt-2">
+                        <ApplicationPanel
+                          key={contact.id}
+                          contactId={contact.id}
+                          accountId={accountId}
+                          userId={user.id}
+                          canEdit={canEditStage}
+                          onSaved={fetchContactData}
+                        />
+                      </div>
+                    </div>
+                  </>
+                )}
+
+              {/* Divider */}
+              <div className="border-border my-4 border-t" />
+
+              {/* Follow-up (migration 054) */}
+              <NextDueStrip
+                contactId={contact.id}
+                contactName={contact.name}
+                conversationId={conversation?.id ?? null}
+              />
+
+              {/* Divider */}
+              <div className="border-border my-4 border-t" />
+
+              {/* Tags */}
+              <div>
+                <div className="text-muted-foreground flex items-center gap-2 px-1 text-xs font-medium tracking-wider uppercase">
+                  <TagIcon className="h-3 w-3" />
+                  Tags
+                </div>
+                <div className="mt-2 flex flex-wrap gap-1">
+                  {tags.length === 0 ? (
+                    <p className="text-muted-foreground px-1 text-xs">
+                      No tags
                     </p>
+                  ) : (
+                    tags.map((tag) => (
+                      <span
+                        key={tag.contact_tag_id}
+                        className="rounded-full px-2 py-0.5 text-[10px] font-medium"
+                        style={{
+                          backgroundColor: `${tag.color}20`,
+                          color: tag.color,
+                        }}
+                      >
+                        {tag.name}
+                      </span>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              {/* Divider */}
+              <div className="border-border my-4 border-t" />
+
+              {/* Enrollment Setup */}
+              <div>
+                <div className="text-muted-foreground flex items-center gap-2 px-1 text-xs font-medium tracking-wider uppercase">
+                  University Enrollment
+                </div>
+                {!contact.university ? (
+                  /* Keyed on the thread so switching conversations re-seeds the
+                 suggested university, without resetting the notes / deals /
+                 tags state this sidebar also holds. */
+                  <EnrollmentPanel
+                    key={conversation?.id ?? 'none'}
+                    contact={contact}
+                    interestUniversity={conversation?.interest_university}
+                    onDone={onContactUpdated}
+                  />
+                ) : (
+                  <div className="bg-primary/10 border-primary/20 mt-2 rounded-lg border p-3 text-sm">
+                    <p className="text-primary text-lg font-bold tracking-wide">
+                      {contact.roll_number}
+                    </p>
+                    <p className="text-muted-foreground mt-1 text-xs">
+                      {contact.university} • 20{contact.intake_year} • Intake{' '}
+                      {contact.intake_session}
+                    </p>
+                    {contact.university_roll_number && (
+                      <p className="text-muted-foreground mt-1 text-xs">
+                        Univ. Roll: {contact.university_roll_number}
+                      </p>
+                    )}
                   </div>
-                ))}
+                )}
+              </div>
+
+              {/* Divider */}
+              <div className="border-border my-4 border-t" />
+
+              {/* Notes */}
+              <div>
+                <div className="text-muted-foreground flex items-center gap-2 px-1 text-xs font-medium tracking-wider uppercase">
+                  <StickyNote className="h-3 w-3" />
+                  Notes
+                </div>
+                <div className="mt-2">
+                  <div className="flex gap-2">
+                    <textarea
+                      value={newNote}
+                      onChange={(e) => setNewNote(e.target.value)}
+                      placeholder="Add a note..."
+                      rows={2}
+                      className="border-border bg-muted text-foreground placeholder-muted-foreground focus:border-primary/50 flex-1 resize-none rounded-lg border px-3 py-2 text-xs outline-none"
+                    />
+                    <Button
+                      size="sm"
+                      className="bg-primary hover:bg-primary/90 h-auto px-2"
+                      onClick={handleAddNote}
+                      disabled={!newNote.trim() || addingNote}
+                    >
+                      <Plus className="h-3 w-3" />
+                    </Button>
+                  </div>
+
+                  <div className="mt-2 space-y-2">
+                    {notes.map((note) => (
+                      <div
+                        key={note.id}
+                        className="bg-muted rounded-lg px-3 py-2"
+                      >
+                        <p className="text-muted-foreground text-xs whitespace-pre-wrap">
+                          {note.note_text}
+                        </p>
+                        <p className="text-muted-foreground mt-1 text-[10px]">
+                          {format(
+                            new Date(note.created_at),
+                            'MMM d, yyyy HH:mm'
+                          )}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
               </div>
             </div>
-          </div>
-        </div>
-      </ScrollArea>
+          </ScrollArea>
+        </TabsContent>
+        <TabsContent value="documents" className="flex min-h-0 flex-1 flex-col">
+          <ScrollArea className="min-h-0 flex-1">
+            {accountId && user ? (
+              <DocumentsTab
+                key={contact.id}
+                contactId={contact.id}
+                accountId={accountId}
+                userId={user.id}
+                contactUniversity={contact.university ?? null}
+                canEdit={canEditStage}
+                canKeepFiles={canKeepFiles}
+                onChanged={fetchContactData}
+              />
+            ) : null}
+          </ScrollArea>
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

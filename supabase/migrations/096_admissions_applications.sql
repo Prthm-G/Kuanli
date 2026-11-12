@@ -465,3 +465,32 @@ REVOKE ALL ON FUNCTION public.application_card_status(uuid) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.application_card_status(uuid) TO authenticated, service_role;
 
 -- ===== end of Task 13. Tasks 14-17 append their sections below this line. =====
+
+-- Who opened which stored document, and when. Written by the signed-URL route with the caller's own session, so a member can
+-- only log themselves; read by admins. No FK on document_id / user_id: the log must outlive a deleted file or a removed member.
+CREATE TABLE IF NOT EXISTS public.document_access_log (
+  id uuid PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
+  account_id uuid NOT NULL REFERENCES public.accounts(id) ON DELETE CASCADE,
+  document_id uuid NOT NULL,
+  user_id uuid NOT NULL,
+  at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS document_access_log_account_document ON public.document_access_log (account_id, document_id, at DESC);
+
+ALTER TABLE public.document_access_log ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.document_access_log FROM PUBLIC, anon, authenticated;
+GRANT SELECT, INSERT ON public.document_access_log TO authenticated;
+GRANT ALL ON public.document_access_log TO service_role;
+
+DROP POLICY IF EXISTS document_access_log_insert ON public.document_access_log;
+CREATE POLICY document_access_log_insert ON public.document_access_log FOR INSERT
+  WITH CHECK (
+    user_id = auth.uid()
+    AND public.is_account_member(account_id, 'viewer'::public.account_role_enum)
+    AND EXISTS (SELECT 1 FROM public.application_documents d WHERE d.id = document_id AND d.account_id = document_access_log.account_id)
+  );
+DROP POLICY IF EXISTS document_access_log_select ON public.document_access_log;
+CREATE POLICY document_access_log_select ON public.document_access_log FOR SELECT
+  USING (public.is_account_member(account_id, 'admin'::public.account_role_enum));
+
+-- ===== end of Task 14 (SQL). Tasks 15-17 append their sections below this line. =====
