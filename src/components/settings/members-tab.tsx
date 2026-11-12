@@ -3,15 +3,10 @@
 // ============================================================
 // MembersTab — Settings → Members
 //
-// Two stacked sections:
-//   1. Roster   — every member of the account. Admin+ can change a
-//                 teammate's role inline and remove them. Owner row
-//                 is non-editable everywhere (transfer is its own
-//                 separate flow, deferred to a later PR).
-//   2. Pending  — outstanding invite links. Admin+ can revoke. The
-//                 plaintext URL is gone after the create dialog
-//                 closes, so we surface a "revoke + new link" hint
-//                 rather than pretending we can resurface it.
+// Roster of every member of the account. Admin+ can add a member by
+// username (one-time password), change a teammate's role inline,
+// reset their password (new one-time password) and remove them. Owner
+// row is non-editable everywhere (transfer is its own separate flow).
 //
 // Role-gating
 //   The tab itself is reachable by any member, but mutation buttons
@@ -25,12 +20,10 @@ import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import {
   AlertTriangle,
+  KeyRound,
   Loader2,
-  Mail,
-  MailX,
   Plus,
   Trash2,
-  UsersRound,
 } from 'lucide-react';
 
 import {
@@ -71,25 +64,22 @@ import {
   PRESENCE_DOT_CLASS,
   PresenceDot,
 } from '@/components/presence/presence-dot';
-import { InviteMemberDialog } from './invite-member-dialog';
+import {
+  AddMemberDialog,
+  LoginCredentials,
+  type IssuedCredentials,
+} from './add-member-dialog';
 import { SettingsPanelHead } from './settings-panel-head';
 import { ROLE_META } from './role-meta';
 
 interface Member {
   user_id: string;
   full_name: string;
+  username: string | null;
   email: string | null;
   avatar_url: string | null;
   role: AccountRole;
   joined_at: string;
-}
-
-interface Invitation {
-  id: string;
-  role: 'admin' | 'agent' | 'viewer';
-  label: string | null;
-  created_at: string;
-  expires_at: string;
 }
 
 // Editable roles in the inline dropdown. Owner is never an option —
@@ -115,37 +105,24 @@ function fmtDate(iso: string): string {
   });
 }
 
-function fmtExpiresIn(iso: string): string {
-  const ms = new Date(iso).getTime() - Date.now();
-  if (ms <= 0) return 'expired';
-  const days = Math.floor(ms / (24 * 60 * 60 * 1000));
-  if (days >= 1) return `expires in ${days} day${days === 1 ? '' : 's'}`;
-  const hours = Math.max(1, Math.floor(ms / (60 * 60 * 1000)));
-  return `expires in ${hours} hour${hours === 1 ? '' : 's'}`;
-}
-
 export function MembersTab() {
   const { user, canManageMembers } = useAuth();
   const { getPresence, getRow, now } = usePresence();
 
   const [members, setMembers] = useState<Member[]>([]);
-  const [invitations, setInvitations] = useState<Invitation[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const [inviteOpen, setInviteOpen] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
   const [removingMember, setRemovingMember] = useState<Member | null>(null);
+  const [resettingMember, setResettingMember] = useState<Member | null>(null);
+  const [resetResult, setResetResult] = useState<IssuedCredentials | null>(null);
   const [pendingMemberAction, setPendingMemberAction] = useState<string | null>(
     null,
   );
 
   const loadEverything = useCallback(async () => {
     try {
-      const [mres, ires] = await Promise.all([
-        fetch('/api/account/members', { cache: 'no-store' }),
-        canManageMembers
-          ? fetch('/api/account/invitations', { cache: 'no-store' })
-          : Promise.resolve(null),
-      ]);
+      const mres = await fetch('/api/account/members', { cache: 'no-store' });
 
       if (!mres.ok) {
         const payload = await mres.json().catch(() => ({}));
@@ -154,25 +131,13 @@ export function MembersTab() {
       }
       const mdata = (await mres.json()) as { members: Member[] };
       setMembers(mdata.members);
-
-      if (ires) {
-        if (!ires.ok) {
-          const payload = await ires.json().catch(() => ({}));
-          toast.error(payload.error || 'Failed to load invitations');
-          return;
-        }
-        const idata = (await ires.json()) as { invitations: Invitation[] };
-        setInvitations(idata.invitations);
-      } else {
-        setInvitations([]);
-      }
     } catch (err) {
       console.error('[MembersTab] load error:', err);
       toast.error('Could not reach the server');
     } finally {
       setLoading(false);
     }
-  }, [canManageMembers]);
+  }, []);
 
   useEffect(() => {
     void loadEverything();
@@ -252,21 +217,26 @@ export function MembersTab() {
     }
   }
 
-  async function handleRevoke(invite: Invitation) {
+  async function handleReset() {
+    if (!resettingMember) return;
+    setPendingMemberAction(resettingMember.user_id);
     try {
-      const res = await fetch(`/api/account/invitations/${invite.id}`, {
-        method: 'DELETE',
-      });
+      const res = await fetch(
+        `/api/account/members/${resettingMember.user_id}/reset-password`,
+        { method: 'POST' },
+      );
+      const payload = await res.json().catch(() => ({}));
       if (!res.ok) {
-        const payload = await res.json().catch(() => ({}));
-        toast.error(payload.error || 'Failed to revoke invitation');
+        toast.error(payload.error || 'Failed to reset password');
         return;
       }
-      toast.success('Invitation revoked');
-      setInvitations((prev) => prev.filter((i) => i.id !== invite.id));
+      setResettingMember(null);
+      setResetResult({ login: payload.login, password: payload.password });
     } catch (err) {
-      console.error('[MembersTab] revoke error:', err);
+      console.error('[MembersTab] reset error:', err);
       toast.error('Could not reach the server');
+    } finally {
+      setPendingMemberAction(null);
     }
   }
 
@@ -285,9 +255,9 @@ export function MembersTab() {
         description="People with access to this account. Roles control what each teammate can do."
         action={
           <RequireRole min="admin">
-            <Button onClick={() => setInviteOpen(true)}>
+            <Button onClick={() => setAddOpen(true)}>
               <Plus className="size-4" />
-              Invite member
+              Add member
             </Button>
           </RequireRole>
         }
@@ -359,7 +329,7 @@ export function MembersTab() {
                               />
                             ) : null}
                             <AvatarFallback className="bg-primary/10 text-sm font-medium text-primary">
-                              {(member.full_name || member.email || 'U')
+                              {(member.full_name || member.username || 'U')
                                 .charAt(0)
                                 .toUpperCase()}
                             </AvatarFallback>
@@ -389,9 +359,9 @@ export function MembersTab() {
                           </Badge>
                         )}
                       </div>
-                      {member.email && (
+                      {(member.username || member.email) && (
                         <p className="truncate text-xs text-muted-foreground">
-                          {member.email}
+                          {member.username ? `@${member.username}` : member.email}
                         </p>
                       )}
                     </div>
@@ -452,10 +422,32 @@ export function MembersTab() {
                         user moused over. Now red is the default
                         state with a darker shade on hover so the
                         affordance reads at-a-glance. */}
+                    {/* Reset password: a new one-time password. Same
+                        visibility rules as Remove. */}
+                    {canManageMembers && !isOwnerRow && !isSelf && (
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              aria-label="Reset password"
+                              onClick={() => setResettingMember(member)}
+                              disabled={isBusy}
+                            >
+                              <KeyRound className="size-4" />
+                            </Button>
+                          }
+                        />
+                        <TooltipContent>Reset password</TooltipContent>
+                      </Tooltip>
+                    )}
+
                     {canManageMembers && !isOwnerRow && !isSelf && (
                       <Button
                         variant="outline"
                         size="sm"
+                        aria-label="Remove member"
                         onClick={() => setRemovingMember(member)}
                         disabled={isBusy}
                         className="border-red-500/40 bg-red-500/10 text-red-300 hover:bg-red-500/20 hover:border-red-500/60 hover:text-red-200"
@@ -471,101 +463,87 @@ export function MembersTab() {
         </CardContent>
       </Card>
 
-      {/* Pending invitations — admin+ only */}
-      <RequireRole min="admin">
-        <div>
-          <div className="mb-2 flex items-center gap-2">
-            <UsersRound className="size-4 text-muted-foreground" />
-            <h3 className="text-sm font-semibold text-foreground">
-              Pending invitations
-            </h3>
-            <Badge className="bg-muted text-muted-foreground border-border">
-              {invitations.length}
-            </Badge>
-          </div>
-          {/* P10 — make the no-resend design explicit. Admins were
-              confused why the pending list shows roles + expiry but
-              no "copy link again" button. Stating the constraint up
-              front (rather than letting the user discover it by
-              looking for a button) keeps it from feeling like a bug. */}
-          {invitations.length > 0 ? (
-            <p className="mb-3 text-xs text-muted-foreground">
-              The plaintext invite URL is only shown once at creation
-              for security — to re-share, revoke the invite below and
-              create a new one.
-            </p>
-          ) : null}
-
-          {invitations.length === 0 ? (
-            <Card>
-              <CardContent className="flex flex-col items-center justify-center py-8 text-center">
-                <Mail className="size-6 text-muted-foreground" />
-                <p className="mt-2 text-sm text-muted-foreground">
-                  No pending invitations.
-                </p>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  Click <span className="text-muted-foreground">Invite member</span>{' '}
-                  above to generate a shareable link.
-                </p>
-              </CardContent>
-            </Card>
-          ) : (
-            <Card>
-              <CardContent className="p-0">
-                <ul className="divide-y divide-border">
-                  {invitations.map((inv) => {
-                    const inviteRoleMeta = ROLE_META[inv.role];
-                    const InviteRoleIcon = inviteRoleMeta.icon;
-                    return (
-                    <li
-                      key={inv.id}
-                      className="flex items-center gap-4 px-4 py-3"
-                    >
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-medium text-foreground">
-                            {inv.label || 'Untitled invite'}
-                          </span>
-                          <span
-                            className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] font-medium ${inviteRoleMeta.className}`}
-                          >
-                            <InviteRoleIcon className="size-3" />
-                            {inviteRoleMeta.label}
-                          </span>
-                        </div>
-                        <p className="mt-0.5 text-xs text-muted-foreground">
-                          Created {fmtDate(inv.created_at)} · {fmtExpiresIn(inv.expires_at)}
-                        </p>
-                      </div>
-
-                      {/* Revoke: red default state, mirrors the
-                          members-tab Remove button. Pre-polish version
-                          read as a neutral secondary button until
-                          hover. */}
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handleRevoke(inv)}
-                        className="border-red-500/40 bg-red-500/10 text-red-300 hover:bg-red-500/20 hover:border-red-500/60 hover:text-red-200"
-                      >
-                        <MailX className="size-4" />
-                        Revoke
-                      </Button>
-                    </li>
-                    );
-                  })}
-                </ul>
-              </CardContent>
-            </Card>
-          )}
-        </div>
-      </RequireRole>
-
-      <InviteMemberDialog
-        open={inviteOpen}
-        onOpenChange={setInviteOpen}
+      <AddMemberDialog
+        open={addOpen}
+        onOpenChange={setAddOpen}
         onCreated={loadEverything}
       />
+
+      <Dialog
+        open={resettingMember !== null}
+        onOpenChange={(open) => {
+          if (!open) setResettingMember(null);
+        }}
+      >
+        <DialogContent className="bg-popover border-border sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-popover-foreground">
+              <KeyRound className="size-4 text-primary" />
+              Reset password
+            </DialogTitle>
+            <DialogDescription className="text-muted-foreground">
+              Give{' '}
+              <span className="font-medium text-muted-foreground">
+                {resettingMember?.full_name || 'this teammate'}
+              </span>{' '}
+              a new one-time password? Their current password stops working
+              and they&apos;re signed out right away.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="bg-popover border-border">
+            <Button
+              variant="outline"
+              onClick={() => setResettingMember(null)}
+              className="border-border text-muted-foreground hover:bg-muted"
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleReset}
+              disabled={!!pendingMemberAction}
+              className="bg-primary hover:bg-primary/90 text-primary-foreground"
+            >
+              {pendingMemberAction ? (
+                <>
+                  <Loader2 className="size-4 animate-spin" />
+                  Resetting...
+                </>
+              ) : (
+                'Reset password'
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={resetResult !== null}
+        onOpenChange={(open) => {
+          // The one-time password is never kept once this closes.
+          if (!open) setResetResult(null);
+        }}
+      >
+        <DialogContent className="bg-popover border-border sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-popover-foreground">
+              New one-time password
+            </DialogTitle>
+            <DialogDescription className="text-muted-foreground">
+              Send these details to your teammate. They choose a new password
+              when they sign in.
+            </DialogDescription>
+          </DialogHeader>
+          {resetResult && <LoginCredentials credentials={resetResult} />}
+          <DialogFooter className="bg-popover border-border">
+            <Button
+              onClick={() => setResetResult(null)}
+              className="bg-primary hover:bg-primary/90 text-primary-foreground"
+            >
+              Done
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog
         open={removingMember !== null}
@@ -584,7 +562,7 @@ export function MembersTab() {
               <span className="font-medium text-muted-foreground">
                 {removingMember?.full_name || 'this teammate'}
               </span>{' '}
-              from the account? They&apos;ll be signed out immediately and permanently banned from signing back in — this can only be undone by sending them a brand new invite.
+              from the account? They&apos;ll be signed out immediately and can&apos;t sign back in. To bring them back later, use Add member with the same username.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter className="bg-popover border-border">

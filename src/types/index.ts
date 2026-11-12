@@ -61,6 +61,8 @@ export interface Account {
 export interface AccountMember {
   user_id: string;
   full_name: string;
+  /** Login username (admin+ only); null for an email login. */
+  username: string | null;
   email: string | null;
   avatar_url: string | null;
   role: AccountRole;

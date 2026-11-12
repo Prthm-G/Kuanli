@@ -29,6 +29,7 @@ import {
   X,
 } from 'lucide-react';
 import { canViewGrowth, type AccountRole } from '@/lib/auth/roles';
+import { displayLogin } from '@/lib/auth/username';
 
 // Per-role chip metadata used in the sidebar's account strip + the
 // Members tab roster. Keeping this near both consumers in a single
@@ -361,7 +362,7 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
                   {profile?.full_name ?? 'User'}
                 </p>
                 <p className="text-muted-foreground truncate text-xs">
-                  {profile?.email ?? ''}
+                  {displayLogin(profile?.email)}
                 </p>
               </div>
             </DropdownMenuTrigger>

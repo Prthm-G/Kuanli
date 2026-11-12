@@ -1,6 +1,8 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
+import { mustChangePassword, passwordGate } from '@/lib/auth/username'
+
 export async function middleware(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request })
 
@@ -25,30 +27,30 @@ export async function middleware(request: NextRequest) {
 
   const { data: { user } } = await supabase.auth.getUser()
 
+  // A one-time password login must choose its own password first:
+  // only /set-password and its API are open until then. getUser() is
+  // a GoTrue round trip, so the flag is current, not the JWT's copy.
+  if (user) {
+    const gate = passwordGate(request.nextUrl.pathname, mustChangePassword(user))
+    if (gate === 'forbid') {
+      return NextResponse.json({ error: 'Set your password first' }, { status: 403 })
+    }
+    if (gate === 'to-set-password' || gate === 'to-dashboard') {
+      const url = request.nextUrl.clone()
+      url.pathname = gate === 'to-set-password' ? '/set-password' : '/dashboard'
+      url.search = ''
+      return NextResponse.redirect(url)
+    }
+  }
+
   // Auth pages - redirect to dashboard if already logged in.
-  // Exception: when an invite token is in the query string we
-  // send the already-signed-in user to /join/<token> instead so
-  // they can accept the invitation in one click. Without this,
-  // a forwarded invite link to someone who's already signed in
-  // would silently drop them on /dashboard.
   if (user && (
     request.nextUrl.pathname === '/login' ||
-    request.nextUrl.pathname === '/signup' ||
     request.nextUrl.pathname === '/forgot-password'
   )) {
     const url = request.nextUrl.clone()
-    const inviteToken = request.nextUrl.searchParams.get('invite')
-    if (
-      inviteToken &&
-      (request.nextUrl.pathname === '/login' ||
-        request.nextUrl.pathname === '/signup')
-    ) {
-      url.pathname = `/join/${encodeURIComponent(inviteToken)}`
-      url.search = ''
-    } else {
-      url.pathname = '/dashboard'
-      url.search = ''
-    }
+    url.pathname = '/dashboard'
+    url.search = ''
     return NextResponse.redirect(url)
   }
 
@@ -76,6 +78,7 @@ export async function middleware(request: NextRequest) {
     '/automations',
     '/flows',
     '/settings',
+    '/set-password',
   ]
   if (!user && protectedPaths.some(path => request.nextUrl.pathname.startsWith(path))) {
     const url = request.nextUrl.clone()

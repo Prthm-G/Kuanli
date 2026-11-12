@@ -1,10 +1,10 @@
 "use client";
 
-import { Suspense, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useState } from "react";
+import { useRouter } from "next/navigation";
 import Image from "next/image";
-import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
+import { loginEmailFor } from "@/lib/auth/username";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -16,27 +16,8 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 
-// `useSearchParams` opts the component out of static prerendering
-// unless it sits under a Suspense boundary. We split the form into
-// a child component so the outer page can prerender the chrome
-// (background, card frame) while the form hydrates with the query
-// string on the client.
 export default function LoginPage() {
-  return (
-    <Suspense fallback={null}>
-      <LoginPageInner />
-    </Suspense>
-  );
-}
-
-function LoginPageInner() {
-  const searchParams = useSearchParams();
-  // Forwarded from `/join/<token>` when the visitor already has an
-  // account. After a successful sign-in we send them to the join
-  // page to accept rather than to /dashboard.
-  const inviteToken = searchParams.get("invite");
-
-  const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -46,6 +27,13 @@ function LoginPageInner() {
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+
+    // A username maps to its internal login email; an email passes through.
+    const email = loginEmailFor(username);
+    if (!email) {
+      setError("Enter your username");
+      return;
+    }
     setLoading(true);
 
     const { error } = await supabase.auth.signInWithPassword({
@@ -54,16 +42,19 @@ function LoginPageInner() {
     });
 
     if (error) {
-      setError(error.message);
+      setError(
+        /invalid login credentials/i.test(error.message)
+          ? "Wrong username or password"
+          : /banned/i.test(error.message)
+            ? "This login has been removed. Ask your admin."
+            : error.message,
+      );
       setLoading(false);
       return;
     }
 
-    if (inviteToken) {
-      router.push(`/join/${encodeURIComponent(inviteToken)}`);
-    } else {
-      router.push("/dashboard");
-    }
+    // Middleware sends a one-time password login on to /set-password.
+    router.push("/dashboard");
   };
 
   return (
@@ -80,13 +71,9 @@ function LoginPageInner() {
                 className="h-16 w-16 object-contain drop-shadow-2xl"
               />
           </div>
-          <CardTitle className="text-xl text-white">
-            {inviteToken ? "Sign in to accept" : "Welcome back"}
-          </CardTitle>
+          <CardTitle className="text-xl text-white">Welcome back</CardTitle>
           <CardDescription className="text-slate-400">
-            {inviteToken
-              ? "Sign in and we'll take you to the invitation."
-              : "Sign in to your account"}
+            Sign in with your username
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -98,36 +85,33 @@ function LoginPageInner() {
             )}
 
             <div className="flex flex-col gap-2">
-              <Label htmlFor="email" className="text-slate-400">
-                Email
+              <Label htmlFor="username" className="text-slate-400">
+                Username
               </Label>
               <Input
-                id="email"
-                type="email"
-                placeholder="you@example.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
+                id="username"
+                type="text"
+                autoComplete="username"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                placeholder="e.g. riya"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
                 required
                 className="border-border bg-slate-800 border-slate-700 text-white placeholder:text-slate-500 text-white placeholder:text-slate-400 focus-visible:border-primary focus-visible:ring-primary/20"
               />
             </div>
 
             <div className="flex flex-col gap-2">
-              <div className="flex items-center justify-between">
-                <Label htmlFor="password" className="text-slate-400">
-                  Password
-                </Label>
-                <Link
-                  href="/forgot-password"
-                  className="text-sm text-primary hover:text-primary/80"
-                >
-                  Forgot password?
-                </Link>
-              </div>
+              <Label htmlFor="password" className="text-slate-400">
+                Password
+              </Label>
               <Input
                 id="password"
                 type="password"
-                placeholder="Enter your password"
+                autoComplete="current-password"
+                placeholder="Password or one-time password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
@@ -142,9 +126,12 @@ function LoginPageInner() {
             >
               {loading ? "Signing in..." : "Sign in"}
             </Button>
-          </form>
 
-          
+            <p className="text-center text-xs text-slate-500">
+              Forgot your password? Ask your admin for a new one-time
+              password.
+            </p>
+          </form>
         </CardContent>
       </Card>
     </div>

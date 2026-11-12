@@ -15,10 +15,10 @@ import { cn } from '@/lib/utils';
 import { SECTION_META, type SettingsSection } from './settings-sections';
 import { SettingsChip, StatusDot } from './settings-chip';
 import { ROLE_META } from './role-meta';
+import { displayLogin } from '@/lib/auth/username';
 
 interface OverviewCounts {
   members: number | null;
-  pendingInvites: number | null;
   templates: number | null;
   templatesPending: number | null;
   tags: number | null;
@@ -35,8 +35,7 @@ export function SettingsOverview({
 }: {
   onSelect: (section: SettingsSection) => void;
 }) {
-  const { user, profile, accountId, accountRole, defaultCurrency, canManageMembers } =
-    useAuth();
+  const { user, profile, accountId, accountRole, defaultCurrency } = useAuth();
   const { mode, theme } = useTheme();
 
   const [counts, setCounts] = useState<OverviewCounts | null>(null);
@@ -58,14 +57,9 @@ export function SettingsOverview({
     // Cheap counts — resolve fast, render immediately.
     (async () => {
       setCountsLoading(true);
-      const [membersRes, invitesRes, templatesTotal, templatesPending, tagsRes, fieldsRes] =
+      const [membersRes, templatesTotal, templatesPending, tagsRes, fieldsRes] =
         await Promise.allSettled([
           fetch('/api/account/members', { cache: 'no-store' }).then((r) => r.json()),
-          canManageMembers
-            ? fetch('/api/account/invitations', { cache: 'no-store' }).then((r) =>
-                r.json(),
-              )
-            : Promise.resolve(null),
           supabase
             .from('message_templates')
             .select('id', { count: 'exact', head: true })
@@ -88,16 +82,9 @@ export function SettingsOverview({
         membersRes.status === 'fulfilled' && Array.isArray(membersRes.value?.members)
           ? membersRes.value.members.length
           : null;
-      const pendingInvites =
-        invitesRes.status === 'fulfilled' &&
-        invitesRes.value &&
-        Array.isArray(invitesRes.value.invitations)
-          ? invitesRes.value.invitations.length
-          : null;
 
       setCounts({
         members,
-        pendingInvites,
         templates:
           templatesTotal.status === 'fulfilled'
             ? templatesTotal.value.count ?? null
@@ -136,9 +123,9 @@ export function SettingsOverview({
     return () => {
       cancelled = true;
     };
-  }, [user, accountId, canManageMembers]);
+  }, [user, accountId]);
 
-  const displayName = profile?.full_name || profile?.email || 'Your account';
+  const displayName = profile?.full_name || displayLogin(profile?.email) || 'Your account';
   const initial = (profile?.full_name || profile?.email || 'U').charAt(0).toUpperCase();
   const roleMeta = accountRole ? ROLE_META[accountRole] : null;
   const RoleIcon = roleMeta?.icon;
@@ -176,13 +163,7 @@ export function SettingsOverview({
       subtitle:
         counts?.members == null
           ? 'View team members'
-          : `${counts.members} member${counts.members === 1 ? '' : 's'}${
-              counts.pendingInvites
-                ? ` · ${counts.pendingInvites} pending invite${
-                    counts.pendingInvites === 1 ? '' : 's'
-                  }`
-                : ''
-            }`,
+          : `${counts.members} member${counts.members === 1 ? '' : 's'}`,
     },
     {
       section: 'templates',
@@ -236,7 +217,7 @@ export function SettingsOverview({
           </div>
           {profile?.email ? (
             <div className="truncate text-sm text-muted-foreground">
-              {profile.email}
+              {displayLogin(profile.email)}
             </div>
           ) : null}
         </div>

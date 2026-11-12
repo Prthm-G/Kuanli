@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useAuth } from "@/hooks/use-auth";
+import { displayLogin } from "@/lib/auth/username";
 import { LogOut, Menu, Settings as SettingsIcon, User } from "lucide-react";
 import {
   Avatar,
@@ -113,7 +114,7 @@ export function Header({ onOpenSidebar }: HeaderProps) {
               {profile?.full_name ?? "User"}
             </p>
             <p className="truncate text-xs text-muted-foreground">
-              {profile?.email ?? ""}
+              {displayLogin(profile?.email)}
             </p>
           </div>
           <DropdownMenuSeparator className="bg-border" />
