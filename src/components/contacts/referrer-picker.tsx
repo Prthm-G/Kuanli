@@ -51,6 +51,7 @@ export function ReferrerPicker({
   const [newName, setNewName] = useState('');
   const [newPhone, setNewPhone] = useState('');
   const [saving, setSaving] = useState(false);
+  const [found, setFound] = useState<ReferrerOption | null>(null);
 
   useEffect(() => {
     if (!accountId || value.id) return;
@@ -89,9 +90,11 @@ export function ReferrerPicker({
     });
     setSaving(false);
     if (!out.ok) {
+      setFound(out.existing ?? null);
       toast.error(out.error);
       return;
     }
+    setFound(null);
     pick(out.referrer);
     setAdding(false);
     setNewName('');
@@ -185,6 +188,19 @@ export function ReferrerPicker({
                 aria-label="New referrer phone"
                 className={inputCls}
               />
+              {found && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    pick(found);
+                    setFound(null);
+                    setAdding(false);
+                  }}
+                  className="text-primary text-xs underline underline-offset-2"
+                >
+                  Link {found.name || found.phone} instead
+                </button>
+              )}
               <div className="flex gap-2">
                 <Button
                   type="button"

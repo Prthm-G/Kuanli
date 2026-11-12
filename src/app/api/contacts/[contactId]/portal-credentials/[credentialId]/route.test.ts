@@ -80,6 +80,20 @@ describe('PATCH portal-credentials/[id]', () => {
     expect((await patch({ kind: 'nope' })).status).toBe(400);
   });
 
+  it('logs only the code and message of a database error', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    h.updateError = {
+      code: 'XX000',
+      message: 'boom',
+      details: 'Failing row contains (CIPHERTEXT-MARKER)',
+    } as never;
+    await patch({ label: 'x' });
+    const logged = JSON.stringify(spy.mock.calls);
+    expect(logged).toContain('XX000');
+    expect(logged).not.toContain('CIPHERTEXT-MARKER');
+    spy.mockRestore();
+  });
+
   it('maps a duplicate to a friendly 409', async () => {
     h.updateError = { code: '23505', message: 'duplicate key' };
     const res = await patch({ kind: 'registration' });

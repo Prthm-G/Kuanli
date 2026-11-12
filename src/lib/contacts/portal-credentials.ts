@@ -162,3 +162,13 @@ export function duplicateLoginMessage(
   if (kind !== 'provisional' && kind !== 'registration') return null;
   return `This student already has a ${kind} login`;
 }
+
+/** What is safe to log from a database error: code and message, never `details` or `hint`, which can echo row values. */
+export function dbErrorSummary(error: unknown): { code?: string; message?: string } {
+  if (!error || typeof error !== 'object') return {};
+  const e = error as { code?: unknown; message?: unknown };
+  return {
+    code: typeof e.code === 'string' ? e.code : undefined,
+    message: typeof e.message === 'string' ? e.message : undefined,
+  };
+}

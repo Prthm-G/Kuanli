@@ -1,22 +1,29 @@
 import { describe, expect, it } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { HIDDEN_DUPLICATE_MESSAGE } from './dedupe';
 import { createReferrer, searchReferrers } from './referrer';
 
 type Call = { method: string; args: unknown[] };
 
-function fakeDb(result: { data?: unknown; error?: unknown } = { data: [] }) {
+function fakeDb(
+  result: { data?: unknown; error?: unknown } = { data: [] },
+  lookup: unknown[] = [],
+) {
   const calls: Call[] = [];
   const tables: string[] = [];
   const b: Record<string, unknown> = {};
-  for (const m of ['select', 'eq', 'neq', 'or', 'order', 'limit', 'insert']) {
+  for (const m of ['select', 'eq', 'neq', 'or', 'order', 'limit', 'insert', 'like']) {
     b[m] = (...args: unknown[]) => {
       calls.push({ method: m, args });
       return b;
     };
   }
   b.single = async () => result;
-  b.then = (resolve: (v: unknown) => unknown) => resolve(result);
+  // findExistingContact awaits the builder after .like(); searches await it
+  // after .limit(); both read `result`, except the pre-insert lookup.
+  b.then = (resolve: (v: unknown) => unknown) =>
+    resolve(calls.some((c) => c.method === 'like') ? { data: lookup, error: null } : result);
   const db = {
     from: (t: string) => {
       tables.push(t);
@@ -74,40 +81,58 @@ describe('searchReferrers', () => {
 });
 
 describe('createReferrer', () => {
-  it('inserts name and phone in the account, with no source set', async () => {
-    const { db, calls } = fakeDb({ data: { id: 'new', name: 'Referrer Two', phone: '+155500000002' } });
-    const out = await createReferrer(db, {
-      accountId: 'acc1',
-      userId: 'u1',
-      name: ' Referrer Two ',
-      phone: ' +155500000002 ',
-    });
+  const base = { accountId: 'acc1', userId: 'u1' };
+
+  it('inserts name and the 91-prefixed phone in the account, with no source set', async () => {
+    const { db, calls } = fakeDb({ data: { id: 'new', name: 'Referrer Two', phone: '919000000002' } });
+    const out = await createReferrer(db, { ...base, name: ' Referrer Two ', phone: ' 90000 00002 ' });
     const row = calls.find((c) => c.method === 'insert')!.args[0] as Record<string, unknown>;
     expect(row).toEqual({
       user_id: 'u1',
       account_id: 'acc1',
       name: 'Referrer Two',
-      phone: '+155500000002',
+      phone: '919000000002',
     });
     expect('source' in row).toBe(false);
-    expect(out).toEqual({ ok: true, referrer: { id: 'new', name: 'Referrer Two', phone: '+155500000002' } });
+    expect(out).toEqual({
+      ok: true,
+      referrer: { id: 'new', name: 'Referrer Two', phone: '919000000002' },
+    });
   });
 
   it('needs a name and a phone', async () => {
     const { db, tables } = fakeDb();
-    const a = await createReferrer(db, { accountId: 'a', userId: 'u', name: '', phone: '1' });
-    const b = await createReferrer(db, { accountId: 'a', userId: 'u', name: 'N', phone: ' ' });
-    expect(a.ok).toBe(false);
-    expect(b.ok).toBe(false);
+    expect((await createReferrer(db, { ...base, name: '', phone: '9000000002' })).ok).toBe(false);
+    expect((await createReferrer(db, { ...base, name: 'N', phone: ' ' })).ok).toBe(false);
     expect(tables).toHaveLength(0);
   });
 
-  it('says the number is taken on a duplicate, without naming anyone', async () => {
+  it('rejects a phone that is not an Indian mobile, without touching the database', async () => {
+    const { db, tables } = fakeDb();
+    const out = await createReferrer(db, { ...base, name: 'N', phone: '12345' });
+    expect(out.ok).toBe(false);
+    expect(tables).toHaveLength(0);
+  });
+
+  it('offers the existing contact for a prefix variant instead of inserting', async () => {
+    // Stored 12-digit 91 form; the user typed the 10-digit form.
+    const existing = { id: 'e1', name: 'Existing', phone: '919000000003' };
+    const { db, calls } = fakeDb({ data: null }, [existing]);
+    const out = await createReferrer(db, { ...base, name: 'N', phone: '9000000003' });
+    expect(calls.some((c) => c.method === 'insert')).toBe(false);
+    expect(out).toMatchObject({ ok: false, existing: { id: 'e1', name: 'Existing' } });
+  });
+
+  it('offers the existing contact when the stored number carries a plus and spaces', async () => {
+    const existing = { id: 'e2', name: null, phone: '+91 90000 00004' };
+    const { db } = fakeDb({ data: null }, [existing]);
+    const out = await createReferrer(db, { ...base, name: 'N', phone: '09000000004' });
+    expect(out).toMatchObject({ ok: false, existing: { id: 'e2' } });
+  });
+
+  it('uses the hidden-duplicate message when the database refuses a number we cannot see', async () => {
     const { db } = fakeDb({ data: null, error: { code: '23505', message: 'dup' } });
-    const out = await createReferrer(db, { accountId: 'a', userId: 'u', name: 'N', phone: '1' });
-    expect(out).toEqual({
-      ok: false,
-      error: 'This number is already in Kuanli. Search for the person by name or phone.',
-    });
+    const out = await createReferrer(db, { ...base, name: 'N', phone: '9000000005' });
+    expect(out).toEqual({ ok: false, error: HIDDEN_DUPLICATE_MESSAGE });
   });
 });

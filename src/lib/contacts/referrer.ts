@@ -1,6 +1,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-import { isUniqueViolation } from '@/lib/contacts/dedupe';
+import {
+  findExistingContact,
+  HIDDEN_DUPLICATE_MESSAGE,
+  isUniqueViolation,
+} from '@/lib/contacts/dedupe';
+import { normalizeIndianPhone } from '@/lib/admissions/normalize';
 
 /**
  * Referrer lookup for the contact forms (migration 096:
@@ -54,7 +59,7 @@ export async function searchReferrers(
 
 export type CreateReferrerResult =
   | { ok: true; referrer: ReferrerOption }
-  | { ok: false; error: string };
+  | { ok: false; error: string; existing?: ReferrerOption };
 
 /**
  * "New person": a plain contact (name + phone) in the same account. The
@@ -66,9 +71,33 @@ export async function createReferrer(
   input: { accountId: string; userId: string; name: string; phone: string },
 ): Promise<CreateReferrerResult> {
   const name = input.name.trim();
-  const phone = input.phone.trim();
   if (!name) return { ok: false, error: 'Name is required' };
-  if (!phone) return { ok: false, error: 'Phone is required' };
+  if (!input.phone.trim()) return { ok: false, error: 'Phone is required' };
+
+  // Kuanli stores the 91-prefixed 12-digit form; imports that skip this
+  // silently duplicate contacts.
+  const { phone } = normalizeIndianPhone(input.phone);
+  if (!phone) {
+    return {
+      ok: false,
+      error: 'Enter an Indian mobile number: 10 digits, or with 91 in front',
+    };
+  }
+
+  // Same check the contact form uses: a match in any number format means
+  // link that person, not create a second one. Visible contacts only (RLS).
+  const existing = await findExistingContact(db, input.accountId, phone);
+  if (existing) {
+    return {
+      ok: false,
+      error: 'This number is already a contact. Link that person instead.',
+      existing: {
+        id: existing.id,
+        name: (existing.name as string | null) ?? null,
+        phone: existing.phone,
+      },
+    };
+  }
 
   const { data, error } = await db
     .from('contacts')
@@ -82,12 +111,10 @@ export async function createReferrer(
     .single();
 
   if (error || !data) {
+    // A number we could not see above but the database refuses: it belongs
+    // to a contact hidden from this user. Say no more than that.
     if (isUniqueViolation(error)) {
-      return {
-        ok: false,
-        error:
-          'This number is already in Kuanli. Search for the person by name or phone.',
-      };
+      return { ok: false, error: HIDDEN_DUPLICATE_MESSAGE };
     }
     return { ok: false, error: 'Could not add this person' };
   }
