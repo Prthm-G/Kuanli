@@ -26,6 +26,7 @@ import {
   type PaymentMethod,
   type ReceivedBy,
 } from '@/lib/payments/types';
+import { receiptUploadFailure } from '@/lib/payments/receipt-message';
 import { formatCurrency } from '@/lib/currency';
 import {
   Dialog,
@@ -203,6 +204,7 @@ export function PaymentDialog({
         receipt,
       });
 
+      let receiptFailed = false;
       if (receipt) {
         // Upload after the row exists, so a failed upload leaves a payment
         // without a receipt rather than an orphaned file with no payment.
@@ -221,15 +223,14 @@ export function PaymentDialog({
             receipt.type || null
           );
         } catch (e) {
-          toast.warning(
-            `Payment recorded, but the receipt did not upload: ${
-              e instanceof Error ? e.message : 'unknown error'
-            }`
-          );
+          const f = receiptUploadFailure(method, e);
+          receiptFailed = f.level === 'error';
+          if (f.level === 'error') toast.error(f.message);
+          else toast.warning(f.message);
         }
       }
 
-      toast.success('Payment recorded, awaiting verification');
+      if (!receiptFailed) toast.success('Payment recorded, awaiting verification');
       onOpenChange(false);
       onRecorded();
     } catch (e) {

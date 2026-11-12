@@ -121,17 +121,23 @@ ALTER TABLE public.payments ADD COLUMN IF NOT EXISTS received_by public.payment_
 ALTER TABLE public.payments ADD COLUMN IF NOT EXISTS collected_by uuid REFERENCES auth.users(id) ON DELETE SET NULL;
 
 CREATE OR REPLACE FUNCTION public.default_payment_collected_by() RETURNS trigger
-LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 BEGIN
-  -- A logged-in caller below admin may only name themselves (or leave it empty). Owner and admin may name any member.
-  -- No auth.uid() (service role, imports): unchecked.
-  IF auth.uid() IS NOT NULL AND NEW.collected_by IS NOT NULL AND NEW.collected_by IS DISTINCT FROM auth.uid()
-     AND NOT public.is_account_member(NEW.account_id, 'admin') THEN
-    RAISE EXCEPTION 'collected_by must be you unless you are an owner or admin' USING ERRCODE = '42501';
+  -- A logged-in caller below admin may only name themselves (or leave it empty). Owner and admin may name a member of
+  -- this account. No auth.uid() (service role, imports): unchecked. SECURITY DEFINER so the profiles read is not
+  -- filtered by the caller's RLS.
+  IF auth.uid() IS NOT NULL AND NEW.collected_by IS NOT NULL AND NEW.collected_by IS DISTINCT FROM auth.uid() THEN
+    IF NOT public.is_account_member(NEW.account_id, 'admin') THEN
+      RAISE EXCEPTION 'collected_by must be you unless you are an owner or admin' USING ERRCODE = '42501';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM public.profiles WHERE user_id = NEW.collected_by AND account_id = NEW.account_id) THEN
+      RAISE EXCEPTION 'collected_by must be a member of this account' USING ERRCODE = '42501';
+    END IF;
   END IF;
   IF NEW.collected_by IS NULL THEN NEW.collected_by := NEW.logged_by; END IF;
   RETURN NEW;
 END $$;
+REVOKE ALL ON FUNCTION public.default_payment_collected_by() FROM PUBLIC, anon, authenticated, service_role;
 DROP TRIGGER IF EXISTS payments_collected_by ON public.payments;
 CREATE TRIGGER payments_collected_by BEFORE INSERT ON public.payments
   FOR EACH ROW EXECUTE FUNCTION public.default_payment_collected_by();
@@ -518,3 +524,107 @@ CREATE TRIGGER applications_guard_retain_files BEFORE INSERT OR UPDATE ON public
   FOR EACH ROW EXECUTE FUNCTION public.guard_retain_files();
 
 -- ===== end of Task 14 (SQL). Tasks 15-17 append their sections below this line. =====
+
+-- ===== Task 16 fix 1: payment_ledger "in hand" ignores reversed payments =====
+-- The live 094 body, unchanged except the hop join, which now skips rejected and reversed payments so a reversed payment's
+-- settled hops leave the account-wide In hand figure. Task 17's rollback must restore the 094 body (MD5 guard).
+CREATE OR REPLACE FUNCTION public.payment_ledger(p_account_id uuid)
+ RETURNS TABLE(contact_id uuid, name text, phone text, roll_number text, university text, program text, payment_option text, currency text, plan_id uuid, agreed_total numeric, received numeric, reported numeric, discounts numeric, pending_discounts numeric, outstanding numeric, in_hand numeric, next_due_label text, next_due_date date, next_due_amount numeric, last_payment_at timestamp with time zone)
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+DECLARE
+  v_all_contacts boolean;
+BEGIN
+  IF auth.uid() IS NULL THEN
+    RAISE EXCEPTION 'Unauthorized' USING ERRCODE = '42501';
+  END IF;
+
+  IF NOT is_account_member(p_account_id, 'viewer'::account_role_enum) THEN
+    RAISE EXCEPTION 'This action requires membership in this account'
+      USING ERRCODE = '42501';
+  END IF;
+
+  -- 094: contacts that arrived through a counsellor number, unless the caller is an admin or the owner.
+  v_all_contacts := can_see_counsellor_chats(p_account_id);
+
+  RETURN QUERY
+  SELECT
+    ct.id,
+    ct.name,
+    ct.phone,
+    ct.roll_number,
+    COALESCE(pl.university, ct.university),
+    pl.program,
+    pl.payment_option::text,
+    COALESCE(pl.currency, acc.default_currency, 'INR'),
+    pl.id,
+    COALESCE(pl.agreed_total, 0),
+    COALESCE(pay.verified_sum, 0),
+    COALESCE(pay.reported_sum, 0),
+    COALESCE(disc.live_sum, 0),
+    COALESCE(disc.pending_sum, 0),
+    GREATEST(
+      COALESCE(pl.agreed_total, 0)
+        - COALESCE(pay.verified_sum, 0)
+        - COALESCE(disc.live_sum, 0),
+      0),
+    -- Money that reached us and has not gone out again. Derived on every read
+    -- so a corrected hop cannot leave a stale figure behind.
+    COALESCE(hop.inbound, 0) - COALESCE(hop.outbound, 0),
+    nxt.label,
+    nxt.due_date,
+    nxt.amount,
+    pay.last_at
+  FROM contacts ct
+  JOIN accounts acc ON acc.id = ct.account_id
+  LEFT JOIN student_fee_plans pl ON pl.contact_id = ct.id
+  LEFT JOIN LATERAL (
+    SELECT
+      sum(p.amount) FILTER (WHERE p.status = 'verified') AS verified_sum,
+      sum(p.amount) FILTER (WHERE p.status = 'reported') AS reported_sum,
+      max(p.paid_at) AS last_at
+    FROM payments p WHERE p.contact_id = ct.id
+  ) pay ON true
+  LEFT JOIN LATERAL (
+    SELECT
+      -- Not-rejected, so a pending discount already counts. That is the
+      -- immediate-effect behaviour the operator chose.
+      sum(fd.amount) FILTER (WHERE fd.status <> 'rejected') AS live_sum,
+      sum(fd.amount) FILTER (WHERE fd.status = 'pending') AS pending_sum
+    FROM fee_discounts fd WHERE fd.contact_id = ct.id
+  ) disc ON true
+  LEFT JOIN LATERAL (
+    SELECT
+      sum(h.amount) FILTER (WHERE h.status = 'settled' AND h.to_party = 'skeure')
+        AS inbound,
+      sum(h.amount) FILTER (WHERE h.status = 'settled' AND h.from_party = 'skeure')
+        AS outbound
+    FROM payment_hops h
+    JOIN payments p2 ON p2.id = h.payment_id
+    WHERE p2.contact_id = ct.id
+      AND p2.status::text NOT IN ('rejected', 'reversed')
+  ) hop ON true
+  LEFT JOIN LATERAL (
+    SELECT fi.label, fi.due_date, fi.amount
+    FROM student_fee_installments fi
+    WHERE fi.plan_id = pl.id
+      AND NOT EXISTS (
+        SELECT 1 FROM payments p2
+        WHERE p2.installment_id = fi.id AND p2.status = 'verified')
+    ORDER BY fi.due_date NULLS LAST, fi.position
+    LIMIT 1
+  ) nxt ON true
+  WHERE ct.account_id = p_account_id
+    AND (v_all_contacts OR NOT ct.counsellor_number_only)
+    AND (pl.id IS NOT NULL OR pay.last_at IS NOT NULL OR disc.live_sum IS NOT NULL)
+  ORDER BY
+    GREATEST(
+      COALESCE(pl.agreed_total, 0)
+        - COALESCE(pay.verified_sum, 0)
+        - COALESCE(disc.live_sum, 0),
+      0) DESC,
+    ct.name;
+END;
+$function$;
