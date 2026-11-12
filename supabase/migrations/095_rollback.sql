@@ -11,7 +11,16 @@
 --      (record_conversion_from_deal) and 094 (application_tracker, capture_application_document).
 --   5. stage_position is dropped LAST, after no restored body can call it.
 -- Re-applying 095 after this puts a kept (position 100+) stage back in place, same row and id: 095 reuses existing names.
+--
+-- EFFECT OF A KEPT STAGE (known, accepted): funnel_analytics (093) and pipeline_funnel (093) take each deal's furthest stage
+-- from its stage-history positions. A kept stage sits at 100+, so every deal that ever touched Provisional ID, Form & Documents
+-- or Fee Submitted counts as having reached Enrolled and above, and the kept stage shows as a funnel row and as an empty board
+-- column at the end, until 095 is re-applied (re-apply restores the positions). Positions stay 100+ on purpose: a negative
+-- position would make a kept stage the board's default "Add deal" stage.
 
+SET LOCAL lock_timeout = '5s';
+-- No concurrent stage edit or new board between the deal moves and the position shifts.
+LOCK TABLE public.pipeline_stages IN SHARE ROW EXCLUSIVE MODE;
 
 DO $$
 DECLARE

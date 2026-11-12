@@ -2,6 +2,8 @@
 -- Admissions Release 0. Idempotent: every statement is safe to run twice.
 -- Task 1: three new stages on every admissions board, and a position lookup by stage name.
 
+SET LOCAL lock_timeout = '5s';
+
 -- Callers compare stage positions through this helper, never against a literal number.
 CREATE OR REPLACE FUNCTION public.stage_position(p_pipeline_id uuid, p_name text)
 RETURNS int LANGUAGE sql STABLE SET search_path = public, pg_temp AS $$
@@ -12,6 +14,8 @@ GRANT EXECUTE ON FUNCTION public.stage_position(uuid, text) TO authenticated, se
 
 -- Provisional ID, Form & Documents and Fee Submitted go between Application Started and Enrolled on every board that
 -- has an Application Started stage. Deals keep their stage rows (they point at stage ids); only positions shift.
+-- The lock keeps a concurrent stage edit or a new board from interleaving with the shift.
+LOCK TABLE public.pipeline_stages IN SHARE ROW EXCLUSIVE MODE;
 DO $$
 -- A board that already has some or all of the three names (095_rollback.sql keeps a stage with history at position 100+)
 -- gets those rows back in place, same ids; only missing names are inserted. A board already correct is left alone.
@@ -165,7 +169,8 @@ END;
 $function$;
 
 -- Task 3: the application tracker lists every deal from Application Started through Enrolled (so the three new stages too).
--- Body copied from 094_counsellor_number_privacy.sql; only the stage test differs (a position range, not a name list).
+-- Body copied from 094_counsellor_number_privacy.sql; the stage test differs (a position range, not a name list) and rows are
+-- ordered by the stage's position, not its name (the app shows the server order; by name, Enrolled would sort before the new stages).
 CREATE OR REPLACE FUNCTION public.application_tracker(p_account_id uuid)
  RETURNS jsonb
  LANGUAGE plpgsql
@@ -191,7 +196,7 @@ BEGIN
                    ELSE counsellor_phone_number_ids() END;
   v_all_contacts := can_see_counsellor_chats(p_account_id);
 
-  SELECT COALESCE(jsonb_agg(row ORDER BY row->>'stage', row->>'name'), '[]'::jsonb)
+  SELECT COALESCE(jsonb_agg(row ORDER BY sort_pos, row->>'name'), '[]'::jsonb)
   INTO v_result
   FROM (
     SELECT jsonb_build_object(
@@ -234,7 +239,7 @@ BEGIN
         WHERE ad.contact_id = ct.id AND ad.doc_type IS NULL
           AND ad.status <> 'rejected'
       ), '[]'::jsonb)
-    ) AS row
+    ) AS row, ps.position AS sort_pos
     FROM deals d
     JOIN pipeline_stages ps ON ps.id = d.stage_id
       AND ps.position BETWEEN public.stage_position(ps.pipeline_id, 'Application Started')
