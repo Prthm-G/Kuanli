@@ -30,6 +30,7 @@ import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { hasMinRole } from '@/lib/auth/roles';
+import { showsApplicationPanel } from '@/lib/applications/panel-rules';
 import {
   Select,
   SelectContent,
@@ -41,15 +42,6 @@ import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { format } from 'date-fns';
 import { whatsappChatUrl } from '@/lib/inbox/wa-link';
-
-/** Stages a student is in once the application has begun (Application Started through Enrolled). */
-const STUDENT_STAGES = new Set([
-  'Application Started',
-  'Provisional ID',
-  'Form & Documents',
-  'Fee Submitted',
-  'Enrolled',
-]);
 
 interface ContactSidebarProps {
   contact: Contact | null;
@@ -380,31 +372,27 @@ export function ContactSidebar({
                 </div>
               </div>
 
-              {/* Application (migration 096): from Application Started onwards */}
-              {accountId &&
-                user &&
-                deals.some(
-                  (d) => d.stage && STUDENT_STAGES.has(d.stage.name)
-                ) && (
-                  <>
-                    <div className="border-border my-4 border-t" />
-                    <div>
-                      <div className="text-muted-foreground flex items-center gap-2 px-1 text-xs font-medium tracking-wider uppercase">
-                        Application
-                      </div>
-                      <div className="mt-2">
-                        <ApplicationPanel
-                          key={contact.id}
-                          contactId={contact.id}
-                          accountId={accountId}
-                          userId={user.id}
-                          canEdit={canEditStage}
-                          onSaved={fetchContactData}
-                        />
-                      </div>
+              {/* Application (migration 096): every board with an Application Started stage, except Lost / Not Interested */}
+              {accountId && user && showsApplicationPanel(deals, stages) && (
+                <>
+                  <div className="border-border my-4 border-t" />
+                  <div>
+                    <div className="text-muted-foreground flex items-center gap-2 px-1 text-xs font-medium tracking-wider uppercase">
+                      Application
                     </div>
-                  </>
-                )}
+                    <div className="mt-2">
+                      <ApplicationPanel
+                        key={contact.id}
+                        contactId={contact.id}
+                        accountId={accountId}
+                        userId={user.id}
+                        canEdit={canEditStage}
+                        onSaved={fetchContactData}
+                      />
+                    </div>
+                  </div>
+                </>
+              )}
 
               {/* Divider */}
               <div className="border-border my-4 border-t" />

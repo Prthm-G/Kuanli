@@ -493,4 +493,22 @@ DROP POLICY IF EXISTS document_access_log_select ON public.document_access_log;
 CREATE POLICY document_access_log_select ON public.document_access_log FOR SELECT
   USING (public.is_account_member(account_id, 'admin'::public.account_role_enum));
 
+-- "Keep files" is an owner / admin decision; applications_insert / _update are agent+, so the column is gated here. Calls with no
+-- auth.uid() (service role, backfill, triggers) pass.
+CREATE OR REPLACE FUNCTION public.guard_retain_files() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+BEGIN
+  IF auth.uid() IS NOT NULL
+     AND ((TG_OP = 'INSERT' AND NEW.retain_files IS TRUE)
+          OR (TG_OP = 'UPDATE' AND NEW.retain_files IS DISTINCT FROM OLD.retain_files))
+     AND NOT public.is_account_member(NEW.account_id, 'admin'::public.account_role_enum) THEN
+    RAISE EXCEPTION 'Only an owner or admin can change Keep files' USING ERRCODE = '42501';
+  END IF;
+  RETURN NEW;
+END $$;
+REVOKE ALL ON FUNCTION public.guard_retain_files() FROM PUBLIC, anon, authenticated;
+DROP TRIGGER IF EXISTS applications_guard_retain_files ON public.applications;
+CREATE TRIGGER applications_guard_retain_files BEFORE INSERT OR UPDATE ON public.applications
+  FOR EACH ROW EXECUTE FUNCTION public.guard_retain_files();
+
 -- ===== end of Task 14 (SQL). Tasks 15-17 append their sections below this line. =====

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
 
@@ -13,6 +13,7 @@ import {
   saveApplication,
   type ApplicationRecord,
 } from '@/lib/applications/application-queries';
+import { mergeServerFields } from '@/lib/applications/panel-rules';
 
 interface ApplicationPanelProps {
   contactId: string;
@@ -66,12 +67,18 @@ export function ApplicationPanel({
   const [fields, setFields] = useState<Fields>(EMPTY);
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
+  /** What the form last loaded from the server: a field that differs is unsaved typing. */
+  const baseline = useRef<Fields>(EMPTY);
 
   const load = useCallback(async () => {
     try {
       const a = await loadApplication(createClient(), contactId);
+      const fresh = fieldsOf(a);
+      const base = baseline.current;
+      baseline.current = fresh;
       setApp(a);
-      setFields(fieldsOf(a));
+      // Unsaved typing survives a button's save and reload.
+      setFields((cur) => mergeServerFields(cur, base, fresh));
       setLoaded(true);
     } catch (e) {
       console.error('Failed to load application:', e);
