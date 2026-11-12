@@ -1,5 +1,5 @@
 -- 096_admissions_applications.sql  (KB-ADMISSIONS-R1)
--- Release 1 of the admissions pipeline. Safe to run twice. Rollback: 096_rollback.sql (added with the apply script).
+-- Release 1 of the admissions pipeline. Safe to run twice. Rollback: 096_rollback.sql, run by devtools/apply-kuanli-096.mjs --rollback-db.
 --
 -- Task 9: one application per student (keyed by contact, ruling R-1), its RLS, the registration-number mirror into
 -- contacts.university_roll_number, and backfill_applications(account). The migration does NOT call the backfill: the
@@ -246,6 +246,13 @@ GRANT EXECUTE ON FUNCTION public.duplicate_payment_reference(uuid, text) TO auth
 ALTER TABLE public.student_portal_credentials
   ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'registration'
   CONSTRAINT student_portal_credentials_kind_check CHECK (kind IN ('provisional', 'registration', 'other'));
+-- A student with two logins from before the kinds existed (production has none; this happens when 096 is re-applied after a
+-- rollback that dropped the kinds): the oldest stays the registration login, the others become "other", so the index can be built.
+-- Nothing to do once the index exists: it already allows one registration login per student.
+UPDATE public.student_portal_credentials c SET kind = 'other'
+ WHERE c.kind = 'registration'
+   AND EXISTS (SELECT 1 FROM public.student_portal_credentials o
+                WHERE o.contact_id = c.contact_id AND o.kind = 'registration' AND (o.created_at, o.id) < (c.created_at, c.id));
 -- One provisional and one registration login per student; any number of "other".
 CREATE UNIQUE INDEX IF NOT EXISTS uq_portal_credentials_contact_kind
   ON public.student_portal_credentials (contact_id, kind) WHERE kind <> 'other';
@@ -628,3 +635,52 @@ BEGIN
     ct.name;
 END;
 $function$;
+
+-- ===== Task 17: queue_lost_restore treats the three new stages like Application Started (ruling R-2) =====
+-- The live 091 body, unchanged except the prior-stage join. 091 left a Lost deal alone when its prior stage was named
+-- Application Started, Enrolled or Lost; since 095 the stages from Provisional ID to Fee Submitted sit between those two, so the
+-- test is now by position on the deal's own board: a prior stage from Application Started through Enrolled is excluded.
+-- Everything else is as 091: Lost is still excluded by name, an exit above Enrolled (Not Interested) is still not excluded, and
+-- a board without those stages (stage_position is NULL) excludes nothing by position. CREATE OR REPLACE keeps the owner and
+-- the grants 091 set (closed to the app roles). 096_rollback.sql restores the 091 body; apply-kuanli-096.mjs guards its md5.
+CREATE OR REPLACE FUNCTION public.queue_lost_restore(p_account_id uuid, p_as_of timestamp with time zone, p_window_days integer DEFAULT 60, p_min_replies integer DEFAULT 3)
+ RETURNS integer
+ LANGUAGE plpgsql
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE v_n integer;
+BEGIN
+  IF EXISTS (SELECT 1 FROM lost_restore_queue q WHERE q.account_id = p_account_id) THEN RETURN 0; END IF;
+  WITH inbound AS (
+    SELECT cv.contact_id, max(m.created_at) AS last_at, count(*) AS n
+      FROM conversations cv JOIN messages m ON m.conversation_id = cv.id
+     WHERE cv.account_id = p_account_id AND m.sender_type = 'customer'
+     GROUP BY cv.contact_id
+  ), ins AS (
+    INSERT INTO lost_restore_queue (deal_id, account_id, contact_id, conversation_id, prior_stage_id, last_customer_at)
+    SELECT d.id, d.account_id, d.contact_id,
+           coalesce(d.conversation_id, (SELECT cv.id FROM conversations cv WHERE cv.contact_id = d.contact_id ORDER BY cv.last_message_at DESC NULLS LAST LIMIT 1)),
+           ev.from_stage_id, i.last_at
+      FROM deals d
+      JOIN pipeline_stages s ON s.id = d.stage_id AND s.name = 'Lost'
+      JOIN inbound i ON i.contact_id = d.contact_id
+      JOIN LATERAL (SELECT e.from_stage_id, e.changed_by, e.changed_at FROM deal_stage_events e
+                     WHERE e.deal_id = d.id AND e.to_stage_id = d.stage_id AND e.from_stage_id IS NOT NULL
+                     ORDER BY e.changed_at DESC LIMIT 1) ev ON true
+      JOIN pipeline_stages prior ON prior.id = ev.from_stage_id AND prior.name <> 'Lost'
+           AND NOT coalesce(prior.position BETWEEN public.stage_position(prior.pipeline_id, 'Application Started')
+                                               AND public.stage_position(prior.pipeline_id, 'Enrolled'), false)
+     WHERE d.account_id = p_account_id
+       AND i.n >= p_min_replies
+       AND i.last_at > p_as_of - make_interval(days => p_window_days)
+       AND ev.changed_by IS NULL
+       AND ev.changed_at >= i.last_at + interval '13 days'
+       AND NOT EXISTS (SELECT 1 FROM conversations cv JOIN messages m ON m.conversation_id = cv.id
+                        WHERE cv.contact_id = d.contact_id AND m.sender_type = 'customer'
+                          AND m.content_text ~* '(\mstop\M|unsubscribe|not interested|don.?t (message|contact|call|text)|do not (message|contact|call|text)|remove me|no need|wrong number|nahi chahiye|nhi chahiye|mat (bhejo|karo|bhej)|band karo|interested nahi|interested nhi|already (admitted|enrolled|done|taken)|not required|\mspam\M)')
+    ON CONFLICT (deal_id) DO NOTHING
+    RETURNING 1
+  )
+  SELECT count(*) INTO v_n FROM ins;
+  RETURN v_n;
+END $function$;
