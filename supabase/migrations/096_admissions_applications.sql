@@ -106,3 +106,119 @@ REVOKE ALL ON FUNCTION public.backfill_applications(uuid) FROM PUBLIC, anon, aut
 GRANT EXECUTE ON FUNCTION public.backfill_applications(uuid) TO service_role;
 
 -- ===== end of Task 9. Tasks 10-17 append their sections below this line. =====
+
+-- ===== Task 10: payment columns, frozen ledger, reversal, payment events =====
+-- 'reversed' is added first. A new enum value cannot be used in the transaction that adds it, so the literal appears only
+-- inside plpgsql bodies below (parsed when they run, not when they are created).
+ALTER TYPE public.payment_status_enum ADD VALUE IF NOT EXISTS 'reversed';
+
+-- Existing payments (the imported opening balances) count as course fees: head 'other' (ruling R-3). received_by stays
+-- NULL on them: nobody recorded who held the money.
+ALTER TABLE public.payments ADD COLUMN IF NOT EXISTS head public.fee_head_enum NOT NULL DEFAULT 'other';
+ALTER TABLE public.payments ADD COLUMN IF NOT EXISTS received_by public.payment_party_enum;
+ALTER TABLE public.payments ADD COLUMN IF NOT EXISTS collected_by uuid REFERENCES auth.users(id) ON DELETE SET NULL;
+
+CREATE OR REPLACE FUNCTION public.default_payment_collected_by() RETURNS trigger
+LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
+BEGIN
+  IF NEW.collected_by IS NULL THEN NEW.collected_by := NEW.logged_by; END IF;
+  RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS payments_collected_by ON public.payments;
+CREATE TRIGGER payments_collected_by BEFORE INSERT ON public.payments
+  FOR EACH ROW EXECUTE FUNCTION public.default_payment_collected_by();
+
+-- Frozen ledger: once a payment is verified or reversed its money fields never change (reverse it and log a new one), and
+-- a reversed payment never goes back. Applies to every role, the service role included.
+CREATE OR REPLACE FUNCTION public.freeze_acknowledged_payment() RETURNS trigger
+LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
+BEGIN
+  IF OLD.status::text IN ('verified', 'reversed')
+     AND (NEW.amount, NEW.head, NEW.paid_at, NEW.contact_id, NEW.method, NEW.reference)
+         IS DISTINCT FROM (OLD.amount, OLD.head, OLD.paid_at, OLD.contact_id, OLD.method, OLD.reference) THEN
+    RAISE EXCEPTION 'payment % is acknowledged: reverse it and log a new one', OLD.id USING ERRCODE = 'P0001';
+  END IF;
+  IF OLD.status::text = 'reversed' AND NEW.status::text <> 'reversed' THEN
+    RAISE EXCEPTION 'payment % is reversed', OLD.id USING ERRCODE = 'P0001';
+  END IF;
+  RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS payments_freeze ON public.payments;
+CREATE TRIGGER payments_freeze BEFORE UPDATE ON public.payments
+  FOR EACH ROW EXECUTE FUNCTION public.freeze_acknowledged_payment();
+
+-- One row per status change (and one for the first status of a new payment). Written only by the trigger below.
+CREATE TABLE IF NOT EXISTS public.payment_events (
+  id bigserial PRIMARY KEY,
+  account_id uuid NOT NULL REFERENCES public.accounts(id) ON DELETE CASCADE,
+  payment_id uuid NOT NULL REFERENCES public.payments(id) ON DELETE CASCADE,
+  old_status public.payment_status_enum,
+  new_status public.payment_status_enum NOT NULL,
+  actor uuid,
+  note text,
+  at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_payment_events_payment ON public.payment_events (payment_id, at);
+ALTER TABLE public.payment_events ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.payment_events FROM PUBLIC, anon, authenticated, service_role;
+GRANT SELECT ON public.payment_events TO authenticated, service_role;
+REVOKE ALL ON SEQUENCE public.payment_events_id_seq FROM PUBLIC, anon, authenticated, service_role;
+DROP POLICY IF EXISTS "Members read payment events" ON public.payment_events;
+CREATE POLICY "Members read payment events" ON public.payment_events FOR SELECT
+  USING (public.is_account_member(account_id));
+-- Follows the payment's own visibility (counsellor-number chats stay hidden), like payment_receipts.
+DROP POLICY IF EXISTS hide_counsellor_number_contacts ON public.payment_events;
+CREATE POLICY hide_counsellor_number_contacts ON public.payment_events AS RESTRICTIVE FOR ALL
+  USING (EXISTS (SELECT 1 FROM public.payments p WHERE p.id = payment_events.payment_id))
+  WITH CHECK (EXISTS (SELECT 1 FROM public.payments p WHERE p.id = payment_events.payment_id));
+
+CREATE OR REPLACE FUNCTION public.log_payment_event() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+BEGIN
+  IF TG_OP = 'UPDATE' AND OLD.status IS NOT DISTINCT FROM NEW.status THEN RETURN NULL; END IF;
+  INSERT INTO public.payment_events (account_id, payment_id, old_status, new_status, actor, note)
+  VALUES (NEW.account_id, NEW.id, CASE WHEN TG_OP = 'UPDATE' THEN OLD.status END, NEW.status, auth.uid(), NEW.decision_note);
+  RETURN NULL;
+END $$;
+REVOKE ALL ON FUNCTION public.log_payment_event() FROM PUBLIC, anon, authenticated;
+DROP TRIGGER IF EXISTS payments_log_event ON public.payments;
+CREATE TRIGGER payments_log_event AFTER INSERT OR UPDATE OF status ON public.payments
+  FOR EACH ROW EXECUTE FUNCTION public.log_payment_event();
+
+-- Payments and their receipts are never deleted through the API (a cascade from a deleted contact still works).
+REVOKE DELETE ON public.payments, public.payment_receipts FROM authenticated;
+
+-- verified -> reversed, admin and above, note required. The only way a verified payment leaves the books.
+CREATE OR REPLACE FUNCTION public.reverse_payment(p_payment_id uuid, p_note text) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+DECLARE v_account uuid; v_status text;
+BEGIN
+  IF auth.uid() IS NULL THEN RAISE EXCEPTION 'Unauthorized' USING ERRCODE = '42501'; END IF;
+  SELECT account_id, status::text INTO v_account, v_status FROM public.payments WHERE id = p_payment_id;
+  IF v_account IS NULL THEN RAISE EXCEPTION 'Payment not found' USING ERRCODE = '42704'; END IF;
+  IF NOT public.is_account_member(v_account, 'admin'::public.account_role_enum) THEN
+    RAISE EXCEPTION 'Reversing a payment requires admin in this account' USING ERRCODE = '42501';
+  END IF;
+  IF p_note IS NULL OR btrim(p_note) = '' THEN
+    RAISE EXCEPTION 'A reason is required to reverse a payment' USING ERRCODE = '22023';
+  END IF;
+  IF v_status <> 'verified' THEN
+    RAISE EXCEPTION 'Only a verified payment can be reversed (this one is %)', v_status USING ERRCODE = '22023';
+  END IF;
+  UPDATE public.payments SET status = 'reversed', decision_note = btrim(p_note) WHERE id = p_payment_id;
+END $$;
+REVOKE ALL ON FUNCTION public.reverse_payment(uuid, text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.reverse_payment(uuid, text) TO authenticated;
+
+-- How many live payments in the account carry this reference (a possible double entry). Runs as the caller, so RLS
+-- applies; rejected and reversed payments do not count; a blank reference never matches.
+CREATE OR REPLACE FUNCTION public.duplicate_payment_reference(p_account_id uuid, p_reference text) RETURNS int
+LANGUAGE sql STABLE SET search_path = public, pg_temp AS $$
+  SELECT CASE WHEN p_reference IS NULL OR btrim(p_reference) = '' THEN 0 ELSE
+    (SELECT count(*)::int FROM public.payments p
+      WHERE p.account_id = p_account_id AND p.status::text NOT IN ('rejected', 'reversed')
+        AND lower(btrim(p.reference)) = lower(btrim(p_reference))) END $$;
+REVOKE ALL ON FUNCTION public.duplicate_payment_reference(uuid, text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.duplicate_payment_reference(uuid, text) TO authenticated;
+
+-- ===== end of Task 10. Tasks 11-17 append their sections below this line. =====
