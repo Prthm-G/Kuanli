@@ -13,10 +13,20 @@ import type { PortalCredential } from '@/types';
 
 /** Metadata columns the routes are allowed to select and return. */
 export const CREDENTIAL_SELECT_COLUMNS =
-  'id, contact_id, label, portal_url, username, notes, created_by, created_at, updated_at';
+  'id, contact_id, label, kind, portal_url, username, notes, created_by, created_at, updated_at';
+
+export const CREDENTIAL_KINDS = ['provisional', 'registration', 'other'] as const;
+export type CredentialKind = (typeof CREDENTIAL_KINDS)[number];
+
+export const CREDENTIAL_KIND_LABELS: Record<CredentialKind, string> = {
+  provisional: 'Provisional',
+  registration: 'Registration',
+  other: 'Other',
+};
 
 export interface CredentialInput {
   label?: string;
+  kind?: CredentialKind;
   portal_url?: string | null;
   username?: string | null;
   password?: string;
@@ -61,6 +71,18 @@ export function validateCredentialInput(
     value.label = b.label.trim();
   } else if (!opts.partial) {
     return { ok: false, error: 'Label is required' };
+  }
+
+  if (b.kind !== undefined) {
+    if (
+      typeof b.kind !== 'string' ||
+      !(CREDENTIAL_KINDS as readonly string[]).includes(b.kind)
+    ) {
+      return { ok: false, error: 'Kind must be provisional, registration or other' };
+    }
+    value.kind = b.kind as CredentialKind;
+  } else if (!opts.partial) {
+    value.kind = 'other';
   }
 
   if (b.portal_url !== undefined && b.portal_url !== null && b.portal_url !== '') {
@@ -114,6 +136,9 @@ export function toMetadata(row: Record<string, unknown>): PortalCredential {
     id: String(row.id),
     contact_id: String(row.contact_id),
     label: String(row.label ?? ''),
+    kind: (CREDENTIAL_KINDS as readonly string[]).includes(row.kind as string)
+      ? (row.kind as CredentialKind)
+      : 'other',
     portal_url: (row.portal_url as string | null) ?? null,
     username: (row.username as string | null) ?? null,
     notes: (row.notes as string | null) ?? null,
@@ -121,4 +146,19 @@ export function toMetadata(row: Record<string, unknown>): PortalCredential {
     created_at: String(row.created_at ?? ''),
     updated_at: String(row.updated_at ?? ''),
   };
+}
+
+/**
+ * A second provisional or registration login for the same student hits the
+ * partial unique index (migration 096) and comes back as 23505. Returns the
+ * message to show, or null when the error is something else.
+ */
+export function duplicateLoginMessage(
+  error: unknown,
+  kind: CredentialKind | undefined,
+): string | null {
+  if (!error || typeof error !== 'object') return null;
+  if ((error as { code?: string }).code !== '23505') return null;
+  if (kind !== 'provisional' && kind !== 'registration') return null;
+  return `This student already has a ${kind} login`;
 }

@@ -3,6 +3,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import type { PortalCredential } from '@/types';
+import {
+  CREDENTIAL_KINDS,
+  CREDENTIAL_KIND_LABELS,
+  type CredentialKind,
+} from '@/lib/contacts/portal-credentials';
 import { useCan } from '@/hooks/use-can';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -41,6 +46,7 @@ export function PortalCredentialsTab({ contactId }: PortalCredentialsTabProps) {
   // Add form
   const [showForm, setShowForm] = useState(false);
   const [label, setLabel] = useState('');
+  const [kind, setKind] = useState<CredentialKind>('other');
   const [portalUrl, setPortalUrl] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -93,6 +99,7 @@ export function PortalCredentialsTab({ contactId }: PortalCredentialsTabProps) {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           label,
+          kind,
           portal_url: portalUrl,
           username,
           password,
@@ -106,6 +113,7 @@ export function PortalCredentialsTab({ contactId }: PortalCredentialsTabProps) {
       toast.success('Credential saved');
       setShowForm(false);
       setLabel('');
+      setKind('other');
       setPortalUrl('');
       setUsername('');
       setPassword('');
@@ -202,6 +210,21 @@ export function PortalCredentialsTab({ contactId }: PortalCredentialsTabProps) {
             />
           </div>
           <div className="space-y-1.5">
+            <Label className="text-muted-foreground text-xs">Kind</Label>
+            <select
+              value={kind}
+              onChange={(e) => setKind(e.target.value as CredentialKind)}
+              aria-label="Login kind"
+              className="bg-muted border-border text-foreground h-8 w-full rounded-md border px-2 text-sm"
+            >
+              {CREDENTIAL_KINDS.map((k) => (
+                <option key={k} value={k}>
+                  {CREDENTIAL_KIND_LABELS[k]}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="space-y-1.5">
             <Label className="text-muted-foreground text-xs">Portal URL</Label>
             <Input
               value={portalUrl}
@@ -271,6 +294,11 @@ export function PortalCredentialsTab({ contactId }: PortalCredentialsTabProps) {
               <div className="flex items-center justify-between gap-2">
                 <p className="text-sm font-medium text-foreground">
                   {cred.label}
+                  {cred.kind !== 'other' && (
+                    <span className="bg-muted text-muted-foreground ml-2 rounded px-1.5 py-0.5 text-[10px] font-normal">
+                      {CREDENTIAL_KIND_LABELS[cred.kind]}
+                    </span>
+                  )}
                 </p>
                 <div className="flex items-center gap-1">
                   {cred.portal_url && (

@@ -128,6 +128,9 @@ export interface Contact {
   source?: ContactSource;
   /** Referrer's name when source is 'reference' (free text). */
   source_detail?: string;
+  /** The contact who referred this one (migration 096). Same account only;
+   *  null when unset or the referrer was deleted. */
+  referred_by_contact_id?: string | null;
 }
 
 export type ContactSource = 'organic' | 'ads' | 'reference' | 'walkin';
@@ -143,6 +146,8 @@ export interface PortalCredential {
   id: string;
   contact_id: string;
   label: string;
+  /** Which login this is (migration 096): provisional, registration or other. */
+  kind: 'provisional' | 'registration' | 'other';
   portal_url: string | null;
   username: string | null;
   notes: string | null;

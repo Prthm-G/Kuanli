@@ -15,6 +15,7 @@ import type {
   Deal,
 } from '@/types';
 import { CONTACT_SOURCES } from '@/lib/contacts/source';
+import { ReferrerPicker } from '@/components/contacts/referrer-picker';
 import {
   Sheet,
   SheetContent,
@@ -74,6 +75,7 @@ export function ContactDetailView({
   const [editUniversityRoll, setEditUniversityRoll] = useState('');
   const [editSource, setEditSource] = useState<ContactSource>('organic');
   const [editSourceDetail, setEditSourceDetail] = useState('');
+  const [editReferrerId, setEditReferrerId] = useState<string | null>(null);
   const [savingDetails, setSavingDetails] = useState(false);
 
   // Tags tab
@@ -132,6 +134,7 @@ export function ContactDetailView({
       setEditUniversityRoll(data.university_roll_number ?? '');
       setEditSource(data.source ?? 'organic');
       setEditSourceDetail(data.source_detail ?? '');
+      setEditReferrerId(data.referred_by_contact_id ?? null);
     }
     setLoading(false);
   }, [contactId, supabase]);
@@ -245,6 +248,7 @@ export function ContactDetailView({
         source: editSource,
         source_detail:
           editSource === 'reference' ? editSourceDetail.trim() || null : null,
+        referred_by_contact_id: editSource === 'reference' ? editReferrerId : null,
         updated_at: new Date().toISOString(),
       })
       .eq('id', contactId);
@@ -579,17 +583,15 @@ export function ContactDetailView({
                     </select>
                   </div>
                   {editSource === 'reference' && (
-                    <div className="space-y-1.5">
-                      <Label className="text-muted-foreground text-xs">
-                        Referred by
-                      </Label>
-                      <Input
-                        value={editSourceDetail}
-                        onChange={(e) => setEditSourceDetail(e.target.value)}
-                        placeholder="Name of the person who referred them"
-                        className="bg-muted border-border text-foreground h-8 text-sm"
-                      />
-                    </div>
+                    <ReferrerPicker
+                      compact
+                      value={{ id: editReferrerId, name: editSourceDetail }}
+                      onChange={(v) => {
+                        setEditReferrerId(v.id);
+                        setEditSourceDetail(v.name);
+                      }}
+                      excludeContactId={contactId ?? undefined}
+                    />
                   )}
                   <Button
                     onClick={saveDetails}
