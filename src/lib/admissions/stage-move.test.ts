@@ -10,9 +10,12 @@ const stage = (name: string, position: number) => ({ name, position });
 const NEW_LEAD = stage('New Lead', 0);
 const QUALIFIED = stage('Qualified', 2);
 const APP_STARTED = stage('Application Started', 4);
-const ENROLLED = stage('Enrolled', 5);
-const LOST = stage('Lost', 6);
-const NOT_INTERESTED = stage('Not Interested', 7);
+const PROVISIONAL_ID = stage('Provisional ID', 5);
+const FORM_DOCS = stage('Form & Documents', 6);
+const FEE_SUBMITTED = stage('Fee Submitted', 7);
+const ENROLLED = stage('Enrolled', 8);
+const LOST = stage('Lost', 9);
+const NOT_INTERESTED = stage('Not Interested', 10);
 
 describe('importMovesDeal', () => {
   it('moves an open card forward only', () => {
@@ -21,6 +24,25 @@ describe('importMovesDeal', () => {
     expect(importMovesDeal(APP_STARTED, ENROLLED)).toBe(true);
     expect(importMovesDeal(ENROLLED, APP_STARTED)).toBe(false);
     expect(importMovesDeal(ENROLLED, ENROLLED)).toBe(false);
+  });
+
+  it('follows the 11-stage board: the three new stages sit between Application Started and Enrolled', () => {
+    expect(
+      importMovesDeal(
+        { name: 'Provisional ID', position: 5 },
+        { name: 'Application Started', position: 4 }
+      )
+    ).toBe(false);
+    expect(
+      importMovesDeal(
+        { name: 'Fee Submitted', position: 7 },
+        { name: 'Enrolled', position: 8 }
+      )
+    ).toBe(true);
+    expect(importMovesDeal(APP_STARTED, PROVISIONAL_ID)).toBe(true);
+    expect(importMovesDeal(FORM_DOCS, FEE_SUBMITTED)).toBe(true);
+    expect(importMovesDeal(FEE_SUBMITTED, APP_STARTED)).toBe(false);
+    expect(importMovesDeal(ENROLLED, FEE_SUBMITTED)).toBe(false);
   });
 
   it('never moves a Lost or Not Interested card, for any target', () => {
