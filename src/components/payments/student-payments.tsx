@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
-import { Check, FileText, Plus, X } from 'lucide-react';
+import { Check, FileText, Plus, Undo2, X } from 'lucide-react';
 
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
@@ -17,8 +17,10 @@ import {
   loadStudentAccount,
   proposeDiscount,
   receiptUrl,
+  reversePayment,
 } from '@/lib/payments/queries';
 import {
+  countsAsMoney,
   isSettled,
   nextUnsettled,
   overdueInstallments,
@@ -30,6 +32,7 @@ import {
   HEAD_LABEL,
   METHOD_LABEL,
   OPTION_LABEL,
+  PARTY_LABEL,
   STATUS_LABEL,
   TERM_NOUN,
   type FeeDiscount,
@@ -140,6 +143,8 @@ export function StudentPayments({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [reversingId, setReversingId] = useState<string | null>(null);
+  const [reverseNote, setReverseNote] = useState('');
   const [recording, setRecording] = useState(false);
   const [reload, setReload] = useState(0);
 
@@ -254,6 +259,25 @@ export function StudentPayments({
       toast.error(
         e instanceof Error ? e.message : 'Could not update the payment'
       );
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function submitReverse(p: Payment) {
+    if (!reverseNote.trim()) {
+      toast.error('Say why the payment is being reversed');
+      return;
+    }
+    setBusy(p.id);
+    try {
+      await reversePayment(createClient(), p.id, reverseNote);
+      toast.success('Payment reversed');
+      setReversingId(null);
+      setReverseNote('');
+      refresh();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Could not reverse');
     } finally {
       setBusy(null);
     }
@@ -499,7 +523,9 @@ export function StudentPayments({
                         ? 'bg-emerald-500/15 text-emerald-500'
                         : p.status === 'rejected'
                           ? 'bg-red-500/15 text-red-400'
-                          : 'bg-amber-500/15 text-amber-500')
+                          : p.status === 'reversed'
+                            ? 'bg-muted text-muted-foreground line-through'
+                            : 'bg-amber-500/15 text-amber-500')
                     }
                   >
                     {STATUS_LABEL[p.status]}
@@ -510,9 +536,20 @@ export function StudentPayments({
                     </span>
                   )}
                 </div>
-                {(p.reference || p.note) && (
+                <p className="text-muted-foreground text-xs">
+                  {[
+                    HEAD_LABEL[p.head],
+                    p.receivedBy ? `paid to ${PARTY_LABEL[p.receivedBy]}` : null,
+                    p.collectedByName ? `collected by ${p.collectedByName}` : null,
+                    p.reference,
+                    p.note,
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')}
+                </p>
+                {p.status === 'reversed' && p.decisionNote && (
                   <p className="text-muted-foreground text-xs">
-                    {[p.reference, p.note].filter(Boolean).join(' · ')}
+                    Reversed: {p.decisionNote}
                   </p>
                 )}
                 <div className="flex flex-wrap items-center gap-2">
@@ -547,10 +584,42 @@ export function StudentPayments({
                       </button>
                     </>
                   )}
+                  {canVerify && p.status === 'verified' && (
+                    <button
+                      onClick={() => {
+                        setReversingId(reversingId === p.id ? null : p.id);
+                        setReverseNote('');
+                      }}
+                      disabled={busy === p.id}
+                      className="inline-flex items-center rounded-md border border-red-500/40 px-2 py-0.5 text-xs font-medium text-red-400 hover:bg-red-500/10"
+                    >
+                      <Undo2 className="mr-1 h-3 w-3" />
+                      Reverse
+                    </button>
+                  )}
                 </div>
+                {canVerify && reversingId === p.id && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Input
+                      aria-label="Reason for reversing"
+                      className="min-w-[14rem] flex-1"
+                      placeholder="Why is it being reversed? (required)"
+                      value={reverseNote}
+                      onChange={(e) => setReverseNote(e.target.value)}
+                    />
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => void submitReverse(p)}
+                      disabled={busy === p.id || !reverseNote.trim()}
+                    >
+                      Confirm reverse
+                    </Button>
+                  </div>
+                )}
                 {/* Where this money actually went. Only meaningful once it is
-                    real money, so hidden for a rejected payment. */}
-                {showMoney && p.status !== 'rejected' && (
+                    real money, so hidden for a rejected or reversed payment. */}
+                {showMoney && countsAsMoney(p.status) && (
                   <RouteEditor
                     paymentId={p.id}
                     paymentAmount={p.amount}

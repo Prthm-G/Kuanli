@@ -3,6 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import type {
   DiscountStatus,
   FeeDiscount,
+  FeeHead,
   FeeInstallment,
   FeePlan,
   FeeTemplate,
@@ -204,8 +205,8 @@ export async function loadStudentAccount(
       .from('payments')
       .select(
         'id, contact_id, plan_id, installment_id, paid_at, amount, currency, ' +
-          'method, reference, note, status, logged_by, verified_by, verified_at, ' +
-          'decision_note, ' +
+          'method, reference, note, head, received_by, collected_by, status, ' +
+          'logged_by, verified_by, verified_at, decision_note, ' +
           'receipts:payment_receipts(id, storage_path, mime_type, created_at)'
       )
       .eq('contact_id', contactId)
@@ -235,7 +236,7 @@ export async function loadStudentAccount(
   const payRows = (payRes.data ?? []) as unknown as RawPay[];
   const names = await namesByUserId(
     supabase,
-    payRows.map((r) => String(r.logged_by))
+    payRows.flatMap((r) => [String(r.logged_by), String(r.collected_by ?? '')])
   );
   const payments: Payment[] = payRows.map((r) => {
     return {
@@ -249,6 +250,10 @@ export async function loadStudentAccount(
       method: r.method as PaymentMethod,
       reference: (r.reference as string) ?? null,
       note: (r.note as string) ?? null,
+      head: (r.head as FeeHead) ?? 'other',
+      receivedBy: (r.received_by as RouteParty) ?? null,
+      collectedBy: (r.collected_by as string) ?? null,
+      collectedByName: names.get(String(r.collected_by ?? '')) ?? null,
       status: r.status as PaymentStatus,
       loggedBy: String(r.logged_by),
       loggedByName: names.get(String(r.logged_by)) ?? null,
@@ -294,6 +299,11 @@ export async function applyFeeTemplate(
 /**
  * Record a payment. It always lands as `reported`: the RLS INSERT policy
  * rejects any other status, so an agent cannot file money as already checked.
+ *
+ * Type, paid-to and collected-by are set here, in the insert, because no user
+ * role can UPDATE a payment afterwards (prod grants SELECT and INSERT only).
+ * `collected_by` defaults to the caller; the database refuses a different
+ * person unless the caller is an owner or admin (migration 096).
  */
 export async function recordPayment(
   supabase: SupabaseClient,
@@ -301,6 +311,10 @@ export async function recordPayment(
   userId: string,
   payment: NewPayment
 ): Promise<string> {
+  if (payment.method === 'cash' && !payment.receipt) {
+    throw new Error('A cash payment needs a receipt file');
+  }
+
   const { data, error } = await supabase
     .from('payments')
     .insert({
@@ -314,6 +328,9 @@ export async function recordPayment(
       method: payment.method,
       reference: payment.reference?.trim() || null,
       note: payment.note?.trim() || null,
+      head: payment.head,
+      received_by: payment.receivedBy,
+      collected_by: payment.collectedBy || userId,
       logged_by: userId,
     })
     .select('id')
@@ -321,6 +338,67 @@ export async function recordPayment(
 
   if (error) throw new Error(`Could not record the payment: ${error.message}`);
   return String((data as unknown as { id: string }).id);
+}
+
+/**
+ * Reverse a verified payment via `reverse_payment` (admin and owner only, a
+ * note is required). The money stops counting as received; the row stays.
+ */
+export async function reversePayment(
+  supabase: SupabaseClient,
+  paymentId: string,
+  note: string
+): Promise<void> {
+  const trimmed = note.trim();
+  if (!trimmed) throw new Error('A note is required to reverse a payment');
+
+  const { error } = await supabase.rpc('reverse_payment', {
+    p_payment_id: paymentId,
+    p_note: trimmed,
+  });
+
+  if (error) throw new Error(`Could not reverse the payment: ${error.message}`);
+}
+
+/**
+ * How many other live payments in the account carry this reference, via
+ * `duplicate_payment_reference`. Only UPI and bank transfers have a reference
+ * worth checking; any other method, or an empty reference, is 0 with no call.
+ */
+export async function duplicateReference(
+  supabase: SupabaseClient,
+  accountId: string,
+  method: PaymentMethod,
+  reference: string | null | undefined
+): Promise<number> {
+  const ref = reference?.trim();
+  if ((method !== 'upi' && method !== 'bank_transfer') || !ref) return 0;
+
+  const { data, error } = await supabase.rpc('duplicate_payment_reference', {
+    p_account_id: accountId,
+    p_reference: ref,
+  });
+
+  if (error)
+    throw new Error(`Reference check failed: ${error.message}`);
+  return n(data);
+}
+
+/** Members of the account, for the "Collected by" picker (owner and admin). */
+export async function loadAccountMembers(
+  supabase: SupabaseClient,
+  accountId: string
+): Promise<{ userId: string; name: string }[]> {
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('user_id, full_name')
+    .eq('account_id', accountId)
+    .order('full_name');
+
+  if (error) throw new Error(`Members query failed: ${error.message}`);
+  return ((data ?? []) as unknown as { user_id: string; full_name: string | null }[]).map(
+    (p) => ({ userId: p.user_id, name: p.full_name || 'Member' })
+  );
 }
 
 /**
@@ -626,8 +704,8 @@ export async function loadPendingPayments(
     .from('payments')
     .select(
       'id, contact_id, plan_id, installment_id, paid_at, amount, currency, ' +
-        'method, reference, note, status, logged_by, verified_by, verified_at, ' +
-        'decision_note, ' +
+        'method, reference, note, head, received_by, collected_by, status, ' +
+        'logged_by, verified_by, verified_at, decision_note, ' +
         'contact:contacts(name), ' +
         'receipts:payment_receipts(id, storage_path, mime_type, created_at)'
     )
@@ -641,7 +719,7 @@ export async function loadPendingPayments(
   const rows = (data ?? []) as unknown as Raw[];
   const names = await namesByUserId(
     supabase,
-    rows.map((r) => String(r.logged_by))
+    rows.flatMap((r) => [String(r.logged_by), String(r.collected_by ?? '')])
   );
   return rows.map((r) => {
     const contact = Array.isArray(r.contact) ? r.contact[0] : r.contact;
@@ -656,6 +734,10 @@ export async function loadPendingPayments(
       method: r.method as PaymentMethod,
       reference: (r.reference as string) ?? null,
       note: (r.note as string) ?? null,
+      head: (r.head as FeeHead) ?? 'other',
+      receivedBy: (r.received_by as RouteParty) ?? null,
+      collectedBy: (r.collected_by as string) ?? null,
+      collectedByName: names.get(String(r.collected_by ?? '')) ?? null,
       status: r.status as PaymentStatus,
       loggedBy: String(r.logged_by),
       loggedByName: names.get(String(r.logged_by)) ?? null,

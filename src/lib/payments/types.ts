@@ -18,7 +18,7 @@ export const PAYMENT_METHODS = [
 export type PaymentMethod = (typeof PAYMENT_METHODS)[number];
 
 /** Mirrors `payment_status_enum`. */
-export type PaymentStatus = 'reported' | 'verified' | 'rejected';
+export type PaymentStatus = 'reported' | 'verified' | 'rejected' | 'reversed';
 
 /** Mirrors `fee_head_enum`. */
 export type FeeHead =
@@ -59,6 +59,26 @@ export const STATUS_LABEL: Record<PaymentStatus, string> = {
   reported: 'Awaiting check',
   verified: 'Verified',
   rejected: 'Rejected',
+  reversed: 'Reversed',
+};
+
+/** What a logged payment is for, in the order the dialog lists them. */
+export const PAYMENT_HEADS: readonly FeeHead[] = [
+  'application',
+  'semester',
+  'exam',
+  'study_material',
+  'registration',
+  'other',
+];
+
+/** Who first received the money: the university directly, or us. */
+export const RECEIVED_BY_OPTIONS = ['university', 'skeure'] as const;
+export type ReceivedBy = (typeof RECEIVED_BY_OPTIONS)[number];
+
+export const RECEIVED_BY_LABEL: Record<ReceivedBy, string> = {
+  university: 'University directly',
+  skeure: 'Us',
 };
 
 export const HEAD_LABEL: Record<FeeHead, string> = {
@@ -126,6 +146,12 @@ export interface Payment {
   method: PaymentMethod;
   reference: string | null;
   note: string | null;
+  /** What the money is for (migration 096). */
+  head: FeeHead;
+  /** Null on the imported opening balances. */
+  receivedBy: RouteParty | null;
+  collectedBy: string | null;
+  collectedByName: string | null;
   status: PaymentStatus;
   loggedBy: string;
   loggedByName: string | null;
@@ -249,4 +275,10 @@ export interface NewPayment {
   method: PaymentMethod;
   reference?: string | null;
   note?: string | null;
+  head: FeeHead;
+  receivedBy: ReceivedBy;
+  /** Defaults to the person logging it. Owner and admin may name a member. */
+  collectedBy?: string | null;
+  /** The receipt the dialog will upload; a cash payment cannot be saved without one. */
+  receipt?: File | null;
 }

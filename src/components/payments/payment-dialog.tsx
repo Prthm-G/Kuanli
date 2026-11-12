@@ -7,14 +7,24 @@ import { Paperclip } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
 import { uploadAccountMedia } from '@/lib/storage/upload-media';
-import { attachReceipt, recordPayment } from '@/lib/payments/queries';
+import {
+  attachReceipt,
+  duplicateReference,
+  loadAccountMembers,
+  recordPayment,
+} from '@/lib/payments/queries';
 import {
   HEAD_LABEL,
   METHOD_LABEL,
+  PAYMENT_HEADS,
   PAYMENT_METHODS,
+  RECEIVED_BY_LABEL,
+  RECEIVED_BY_OPTIONS,
+  type FeeHead,
   type FeeInstallment,
   type FeePlan,
   type PaymentMethod,
+  type ReceivedBy,
 } from '@/lib/payments/types';
 import { formatCurrency } from '@/lib/currency';
 import {
@@ -56,6 +66,8 @@ interface PaymentDialogProps {
   installments: FeeInstallment[];
   currency: string;
   onRecorded: () => void;
+  /** A receipt already in hand, e.g. the image of the WhatsApp message it was logged from. */
+  initialReceipt?: File | null;
 }
 
 /**
@@ -72,8 +84,10 @@ export function PaymentDialog({
   installments,
   currency,
   onRecorded,
+  initialReceipt = null,
 }: PaymentDialogProps) {
-  const { accountId, user } = useAuth();
+  const { accountId, accountRole, user } = useAuth();
+  const canPickCollector = accountRole === 'owner' || accountRole === 'admin';
 
   const [paidAt, setPaidAt] = useState('');
   const [amount, setAmount] = useState('');
@@ -82,6 +96,13 @@ export function PaymentDialog({
   const [reference, setReference] = useState('');
   const [note, setNote] = useState('');
   const [receipt, setReceipt] = useState<File | null>(null);
+  const [head, setHead] = useState<FeeHead | ''>('');
+  const [receivedBy, setReceivedBy] = useState<ReceivedBy | ''>('');
+  const [collectedBy, setCollectedBy] = useState('');
+  const [members, setMembers] = useState<{ userId: string; name: string }[]>(
+    []
+  );
+  const [duplicates, setDuplicates] = useState(0);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -92,8 +113,43 @@ export function PaymentDialog({
     setInstallmentId('');
     setReference('');
     setNote('');
-    setReceipt(null);
+    setReceipt(initialReceipt);
+    setHead('');
+    setReceivedBy('');
+    setCollectedBy(user?.id ?? '');
+    setDuplicates(0);
+    // initialReceipt and user are read when the dialog opens, not tracked.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
+
+  // Owner and admin can say a colleague collected the money.
+  useEffect(() => {
+    if (!open || !accountId || !canPickCollector) return;
+    let cancelled = false;
+    loadAccountMembers(createClient(), accountId)
+      .then((m) => !cancelled && setMembers(m))
+      .catch(() => !cancelled && setMembers([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [open, accountId, canPickCollector]);
+
+  // Warn (not block) when another live payment already carries this reference.
+  useEffect(() => {
+    if (!open || !accountId) return;
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      duplicateReference(createClient(), accountId, method, reference)
+        .then((n) => !cancelled && setDuplicates(n))
+        .catch(() => !cancelled && setDuplicates(0));
+    }, 400);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [open, accountId, method, reference]);
+
+  const needsReference = method === 'upi' || method === 'bank_transfer';
 
   // Picking an installment prefills its amount: the common case is settling a
   // line item exactly, and retyping the figure is how it ends up 100 rupees
@@ -109,6 +165,18 @@ export function PaymentDialog({
     const value = Number(amount);
     if (!Number.isFinite(value) || value <= 0) {
       toast.error('Enter the amount received');
+      return;
+    }
+    if (!head) {
+      toast.error('Choose what the payment is for');
+      return;
+    }
+    if (!receivedBy) {
+      toast.error('Say who received the money');
+      return;
+    }
+    if (method === 'cash' && !receipt) {
+      toast.error('Attach a receipt for a cash payment');
       return;
     }
     if (receipt && receipt.size > RECEIPT_MAX_BYTES) {
@@ -129,6 +197,10 @@ export function PaymentDialog({
         method,
         reference,
         note,
+        head,
+        receivedBy,
+        collectedBy: canPickCollector && collectedBy ? collectedBy : null,
+        receipt,
       });
 
       if (receipt) {
@@ -239,6 +311,68 @@ export function PaymentDialog({
 
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
+              <Label>Type</Label>
+              <Select
+                value={head}
+                onValueChange={(v) => setHead((v ?? '') as FeeHead | '')}
+              >
+                <SelectTrigger className="bg-muted" aria-label="Type">
+                  <SelectValue placeholder="What is it for?" />
+                </SelectTrigger>
+                <SelectContent>
+                  {PAYMENT_HEADS.map((h) => (
+                    <SelectItem key={h} value={h}>
+                      {HEAD_LABEL[h]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Paid to</Label>
+              <Select
+                value={receivedBy}
+                onValueChange={(v) =>
+                  setReceivedBy((v ?? '') as ReceivedBy | '')
+                }
+              >
+                <SelectTrigger className="bg-muted" aria-label="Paid to">
+                  <SelectValue placeholder="Who received it?" />
+                </SelectTrigger>
+                <SelectContent>
+                  {RECEIVED_BY_OPTIONS.map((r) => (
+                    <SelectItem key={r} value={r}>
+                      {RECEIVED_BY_LABEL[r]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          {canPickCollector && members.length > 0 && (
+            <div className="space-y-1.5">
+              <Label>Collected by</Label>
+              <Select
+                value={collectedBy}
+                onValueChange={(v) => setCollectedBy(v ?? '')}
+              >
+                <SelectTrigger className="bg-muted" aria-label="Collected by">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {members.map((m) => (
+                    <SelectItem key={m.userId} value={m.userId}>
+                      {m.userId === user?.id ? `${m.name} (me)` : m.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
               <Label>Method</Label>
               <Select
                 value={method}
@@ -267,14 +401,39 @@ export function PaymentDialog({
             </div>
           </div>
 
+          {needsReference && !reference.trim() && (
+            <p className="text-xs text-amber-500">
+              Add the {method === 'upi' ? 'UPI ref' : 'UTR'}: it is how an admin
+              checks this against the account.
+            </p>
+          )}
+          {duplicates > 0 && (
+            <p className="text-xs text-amber-500" role="alert">
+              {duplicates === 1
+                ? 'Another payment already uses this reference.'
+                : `${duplicates} other payments already use this reference.`}{' '}
+              Check it is not a double entry.
+            </p>
+          )}
+
           <div className="space-y-1.5">
-            <Label htmlFor="pay-receipt">Receipt</Label>
+            <Label htmlFor="pay-receipt">
+              Receipt{method === 'cash' ? ' (required for cash)' : ''}
+            </Label>
             <Input
               id="pay-receipt"
               type="file"
               accept="image/jpeg,image/png,image/webp,application/pdf"
-              onChange={(e) => setReceipt(e.target.files?.[0] ?? null)}
+              onChange={(e) =>
+                setReceipt(e.target.files?.[0] ?? initialReceipt)
+              }
             />
+            {receipt && (
+              <p className="text-foreground text-xs">
+                Attached: {receipt.name}
+                {receipt === initialReceipt && ' (from the chat)'}
+              </p>
+            )}
             <p className="text-muted-foreground flex items-center gap-1 text-xs">
               <Paperclip className="h-3 w-3" />
               Screenshot or bank PDF, up to 16 MB. Stored privately.

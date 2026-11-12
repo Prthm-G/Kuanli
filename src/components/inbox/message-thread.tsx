@@ -123,6 +123,8 @@ interface MessageThreadProps {
   onToggleContactPanel?: () => void;
   /** Phones only: opens the student details the desktop panel shows. */
   onOpenDetails?: () => void;
+  /** Open the payment dialog for this chat's contact with the image as receipt. */
+  onLogPayment?: (message: Message) => void;
 }
 
 function formatDateSeparator(dateStr: string): string {
@@ -183,8 +185,11 @@ export function MessageThread({
   contactPanelOpen,
   onToggleContactPanel,
   onOpenDetails,
+  onLogPayment,
 }: MessageThreadProps) {
-  const { user } = useAuth();
+  const { user, accountRole } = useAuth();
+  const canLogPayment =
+    !!onLogPayment && accountRole !== null && accountRole !== "viewer";
   const { getPresence, getRow, now } = usePresence();
   const [loading, setLoading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -1196,6 +1201,13 @@ export function MessageThread({
                         onReact={(emoji) => {
                           if (emoji) void postReaction(msg.id, emoji);
                         }}
+                        onLogPayment={
+                          canLogPayment &&
+                          msg.content_type === "image" &&
+                          msg.media_url
+                            ? () => onLogPayment?.(msg)
+                            : undefined
+                        }
                       >
                         <MessageBubble
                           message={msg}

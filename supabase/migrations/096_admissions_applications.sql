@@ -123,6 +123,12 @@ ALTER TABLE public.payments ADD COLUMN IF NOT EXISTS collected_by uuid REFERENCE
 CREATE OR REPLACE FUNCTION public.default_payment_collected_by() RETURNS trigger
 LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
 BEGIN
+  -- A logged-in caller below admin may only name themselves (or leave it empty). Owner and admin may name any member.
+  -- No auth.uid() (service role, imports): unchecked.
+  IF auth.uid() IS NOT NULL AND NEW.collected_by IS NOT NULL AND NEW.collected_by IS DISTINCT FROM auth.uid()
+     AND NOT public.is_account_member(NEW.account_id, 'admin') THEN
+    RAISE EXCEPTION 'collected_by must be you unless you are an owner or admin' USING ERRCODE = '42501';
+  END IF;
   IF NEW.collected_by IS NULL THEN NEW.collected_by := NEW.logged_by; END IF;
   RETURN NEW;
 END $$;

@@ -9,6 +9,7 @@ import {
   round,
   sum,
   totalsFor,
+  countsAsMoney,
 } from './totals';
 import type { FeeInstallment, LedgerRow, Payment } from './types';
 
@@ -24,6 +25,10 @@ function pay(over: Partial<Payment> = {}): Payment {
     method: 'upi',
     reference: null,
     note: null,
+    head: 'semester',
+    receivedBy: 'skeure',
+    collectedBy: 'u1',
+    collectedByName: 'Simran',
     status: 'verified',
     loggedBy: 'u1',
     loggedByName: 'Simran',
@@ -103,6 +108,17 @@ describe('totalsFor', () => {
     expect(t.outstanding).toBe(51600);
   });
 
+  it('does not count a reversed payment as received, pending or outstanding relief', () => {
+    const t = totalsFor(66600, [
+      pay({ id: 'a', amount: 15000, status: 'verified' }),
+      pay({ id: 'b', amount: 20000, status: 'reversed' }),
+    ]);
+    expect(t.received).toBe(15000);
+    expect(t.pending).toBe(0);
+    expect(t.reversed).toBe(20000);
+    expect(t.outstanding).toBe(51600);
+  });
+
   it('never reports a negative outstanding', () => {
     const t = totalsFor(10000, [pay({ amount: 12000 })]);
     expect(t.outstanding).toBe(0);
@@ -115,6 +131,7 @@ describe('totalsFor', () => {
       received: 0,
       pending: 0,
       rejected: 0,
+      reversed: 0,
       outstanding: 50000,
     });
   });
@@ -254,5 +271,21 @@ describe('overdueInstallments', () => {
     expect(overdueInstallments([late], claimed, NOW).map((i) => i.id)).toEqual([
       'late',
     ]);
+  });
+});
+
+describe('countsAsMoney', () => {
+  it('is true for reported and verified, false for rejected and reversed', () => {
+    expect(countsAsMoney('reported')).toBe(true);
+    expect(countsAsMoney('verified')).toBe(true);
+    expect(countsAsMoney('rejected')).toBe(false);
+    expect(countsAsMoney('reversed')).toBe(false);
+  });
+});
+
+describe('isSettled with a reversed payment', () => {
+  it('does not settle an installment', () => {
+    const i = inst({ id: 'i9' });
+    expect(isSettled(i, [pay({ installmentId: 'i9', status: 'reversed' })])).toBe(false);
   });
 });

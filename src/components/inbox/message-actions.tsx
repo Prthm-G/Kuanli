@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import { CornerUpLeft, Copy, SmilePlus } from "lucide-react";
+import { CornerUpLeft, Copy, IndianRupee, SmilePlus } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
@@ -19,6 +19,11 @@ interface MessageActionsProps {
   message: Message;
   onReply: () => void;
   onReact: (emoji: string) => void;
+  /**
+   * Present only when the message is an image and the viewer may log a
+   * payment (agent and above): shows a "Log payment" button.
+   */
+  onLogPayment?: () => void;
   children: ReactNode;
 }
 
@@ -31,6 +36,7 @@ export function MessageActions({
   message,
   onReply,
   onReact,
+  onLogPayment,
   children,
 }: MessageActionsProps) {
   // Touch devices have no hover. Long-press fires `contextmenu`; we capture
@@ -65,6 +71,11 @@ export function MessageActions({
   const handlePickEmoji = (emoji: string) => {
     onReact(emoji);
     setPickerOpen(false);
+    setTouchOpen(false);
+  };
+
+  const handleLogPayment = () => {
+    onLogPayment?.();
     setTouchOpen(false);
   };
 
@@ -141,6 +152,17 @@ export function MessageActions({
         >
           <Copy className="h-3.5 w-3.5" />
         </button>
+        {message.content_type === "image" && onLogPayment && (
+          <button
+            type="button"
+            onClick={handleLogPayment}
+            className="flex h-5 w-5 items-center justify-center rounded-full text-popover-foreground hover:bg-muted hover:text-foreground"
+            aria-label="Log payment"
+            title="Log payment"
+          >
+            <IndianRupee className="h-3.5 w-3.5" />
+          </button>
+        )}
       </div>
       </div>
     </div>
