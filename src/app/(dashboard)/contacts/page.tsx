@@ -73,14 +73,14 @@ export default function ContactsPage() {
   const supabase = createClient();
   const canEdit = useCan('send-messages');
   const canEditSettings = useCan('edit-settings');
-  // Lead visibility (098): admins see every lead, counsellors their own,
-  // viewers none.
+  // Lead visibility (098): admins see every lead; below admin, a lead is
+  // visible to its owner, and every lead from before 098 (open_to_team) to all.
   const { accountRole, canManageMembers } = useAuth();
   const visibilityNote =
     accountRole === 'agent'
-      ? 'You see the leads assigned to you.'
+      ? 'You see your own leads and the older shared leads.'
       : accountRole === 'viewer'
-        ? 'Leads are visible to counsellors and admins.'
+        ? 'You see the older shared leads. New leads are visible to their counsellor and admins.'
         : null;
 
   const [contacts, setContacts] = useState<ContactWithTags[]>([]);

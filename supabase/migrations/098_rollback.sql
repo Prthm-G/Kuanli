@@ -896,3 +896,4 @@ DROP FUNCTION IF EXISTS public.my_profile_id();
 DROP TABLE IF EXISTS public.contact_owner_log;
 DROP INDEX IF EXISTS public.contacts_account_owner;
 ALTER TABLE public.contacts DROP COLUMN IF EXISTS owner_profile_id;
+ALTER TABLE public.contacts DROP COLUMN IF EXISTS open_to_team;

@@ -1,6 +1,10 @@
 -- 098_lead_visibility.sql  (KB-BRANCHES-R2)
--- Counsellors see only their own leads; the owner and admins see everything (owner decision 2026-11-12/13). Needs 096
--- (it re-creates 096's readers with the filter added) and 097.
+-- Counsellors see only their own leads, plus every lead that existed before 098; the owner and admins see everything
+-- (owner decisions 2026-11-12/13). Needs 096 (it re-creates 096's readers with the filter added) and 097.
+--
+-- 0. contacts.open_to_team (owner, 2026-11-13: "Let counsellor see all the old leads"): true on every lead that exists
+--    when 098 first runs (ADD COLUMN DEFAULT true, then the default becomes false: no row is rewritten), false on every
+--    lead after. "Own lead" below always means: owner_profile_id = me OR open_to_team. Members cannot change it.
 --
 -- 1. contacts.owner_profile_id: the one owner of a lead (a profiles.id). Backfill (owner's option A): the latest
 --    counsellor assignment's login, else the newest chat's assigned_agent_id, else the newest deal's assigned_to, else
@@ -50,6 +54,9 @@ SELECT set_config('kuanli.k098_first_run', (NOT EXISTS (SELECT 1 FROM informatio
 
 -- 1. the owner column ---------------------------------------------------------------------------------------------------
 ALTER TABLE public.contacts ADD COLUMN IF NOT EXISTS owner_profile_id uuid REFERENCES public.profiles(id) ON DELETE SET NULL;
+-- every lead that exists now stays visible to the whole team; new leads start private (see 0. above)
+ALTER TABLE public.contacts ADD COLUMN IF NOT EXISTS open_to_team boolean NOT NULL DEFAULT true;
+ALTER TABLE public.contacts ALTER COLUMN open_to_team SET DEFAULT false;
 CREATE INDEX IF NOT EXISTS contacts_account_owner ON public.contacts (account_id, owner_profile_id);
 
 CREATE TABLE IF NOT EXISTS public.contact_owner_log (
@@ -114,7 +121,8 @@ GRANT EXECUTE ON FUNCTION public.my_account_ids(public.account_role_enum) TO ano
 
 -- 3. who sets the owner ---------------------------------------------------------------------------------------------------
 -- Trusted writers set kuanli.owner_write (transaction-local) and the reason in kuanli.owner_via. A member below admin
--- writing owner_profile_id any other way is refused; on their own insert it becomes them.
+-- writing owner_profile_id or open_to_team any other way is refused; on their own insert the owner becomes them and the
+-- lead is not open to the team.
 CREATE OR REPLACE FUNCTION public.contact_owner_guard()
 RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
@@ -124,8 +132,11 @@ BEGIN
      AND NOT public.is_account_member(NEW.account_id, 'admin'::public.account_role_enum) THEN
     IF TG_OP = 'INSERT' THEN
       NEW.owner_profile_id := public.my_profile_id();
+      NEW.open_to_team := false;
     ELSIF NEW.owner_profile_id IS DISTINCT FROM OLD.owner_profile_id THEN
       RAISE EXCEPTION 'a lead''s owner is set by assignment or an admin' USING ERRCODE = '42501';
+    ELSIF NEW.open_to_team IS DISTINCT FROM OLD.open_to_team THEN
+      RAISE EXCEPTION 'only an admin can open a lead to the team' USING ERRCODE = '42501';
     END IF;
   END IF;
   IF NEW.owner_profile_id IS NOT NULL AND NOT EXISTS (
@@ -136,7 +147,7 @@ BEGIN
 END $$;
 REVOKE ALL ON FUNCTION public.contact_owner_guard() FROM PUBLIC, anon, authenticated, service_role;
 DROP TRIGGER IF EXISTS contact_owner_guard ON public.contacts;
-CREATE TRIGGER contact_owner_guard BEFORE INSERT OR UPDATE OF owner_profile_id ON public.contacts
+CREATE TRIGGER contact_owner_guard BEFORE INSERT OR UPDATE OF owner_profile_id, open_to_team ON public.contacts
   FOR EACH ROW EXECUTE FUNCTION public.contact_owner_guard();
 
 CREATE OR REPLACE FUNCTION public.contact_owner_audit()
@@ -250,22 +261,22 @@ GRANT EXECUTE ON FUNCTION public.set_contact_owner(uuid, uuid, uuid) TO authenti
 
 -- 4. RLS --------------------------------------------------------------------------------------------------------------------
 -- = is_account_member(account_id[, 'agent']) AND (NOT counsellor_number_only OR can_see_counsellor_chats(account_id))
---   AND (own lead OR admin), with each helper evaluated once per statement. A future branch manager adds one OR here.
+--   AND (own lead OR open to the team OR admin), with each helper evaluated once per statement. A future branch manager adds one OR here.
 DROP POLICY IF EXISTS contacts_select ON public.contacts;
 CREATE POLICY contacts_select ON public.contacts FOR SELECT USING (
   account_id = ANY ((SELECT public.my_account_ids('viewer'))::uuid[])
   AND (NOT counsellor_number_only OR account_id = ANY ((SELECT public.my_account_ids('admin'))::uuid[]))
-  AND (owner_profile_id = (SELECT public.my_profile_id()) OR account_id = ANY ((SELECT public.my_account_ids('admin'))::uuid[])));
+  AND (owner_profile_id = (SELECT public.my_profile_id()) OR open_to_team OR account_id = ANY ((SELECT public.my_account_ids('admin'))::uuid[])));
 DROP POLICY IF EXISTS contacts_update ON public.contacts;
 CREATE POLICY contacts_update ON public.contacts FOR UPDATE USING (
   account_id = ANY ((SELECT public.my_account_ids('agent'))::uuid[])
   AND (NOT counsellor_number_only OR account_id = ANY ((SELECT public.my_account_ids('admin'))::uuid[]))
-  AND (owner_profile_id = (SELECT public.my_profile_id()) OR account_id = ANY ((SELECT public.my_account_ids('admin'))::uuid[])));
+  AND (owner_profile_id = (SELECT public.my_profile_id()) OR open_to_team OR account_id = ANY ((SELECT public.my_account_ids('admin'))::uuid[])));
 DROP POLICY IF EXISTS contacts_delete ON public.contacts;
 CREATE POLICY contacts_delete ON public.contacts FOR DELETE USING (
   account_id = ANY ((SELECT public.my_account_ids('agent'))::uuid[])
   AND (NOT counsellor_number_only OR account_id = ANY ((SELECT public.my_account_ids('admin'))::uuid[]))
-  AND (owner_profile_id = (SELECT public.my_profile_id()) OR account_id = ANY ((SELECT public.my_account_ids('admin'))::uuid[])));
+  AND (owner_profile_id = (SELECT public.my_profile_id()) OR open_to_team OR account_id = ANY ((SELECT public.my_account_ids('admin'))::uuid[])));
 
 -- What hangs off a chat or a deal follows its lead; rows with no lead are for admins only.
 DROP POLICY IF EXISTS own_leads_only ON public.conversations;
@@ -402,7 +413,7 @@ BEGIN
     WHERE d.account_id = p_account_id
       AND (v_all_contacts OR NOT ct.counsellor_number_only)
     -- 098: below admin, only the caller's own leads
-    AND (v_all_contacts OR ct.owner_profile_id = v_me)
+    AND (v_all_contacts OR ct.owner_profile_id = v_me OR ct.open_to_team)
   ) rows;
 
   RETURN v_result;
@@ -468,7 +479,7 @@ BEGIN
   WHERE ct.account_id = p_account_id
     AND (v_all_contacts OR NOT ct.counsellor_number_only)
     -- 098: below admin, only the caller's own leads
-    AND (v_all_contacts OR ct.owner_profile_id = v_me)
+    AND (v_all_contacts OR ct.owner_profile_id = v_me OR ct.open_to_team)
   ORDER BY e.next_due_at ASC;
 END;
 $function$;
@@ -549,7 +560,7 @@ BEGIN
   WHERE d.account_id = p_account_id
     AND (v_all_contacts OR NOT ct.counsellor_number_only)
     -- 098: below admin, only the caller's own leads
-    AND (v_all_contacts OR ct.owner_profile_id = v_me)
+    AND (v_all_contacts OR ct.owner_profile_id = v_me OR ct.open_to_team)
     AND ps.name NOT IN ('Enrolled', 'Lost', 'Not Interested');
 END;
 $function$;
@@ -646,7 +657,7 @@ BEGIN
   WHERE ct.account_id = p_account_id
     AND (v_all_contacts OR NOT ct.counsellor_number_only)
     -- 098: below admin, only the caller's own leads
-    AND (v_all_contacts OR ct.owner_profile_id = v_me)
+    AND (v_all_contacts OR ct.owner_profile_id = v_me OR ct.open_to_team)
     AND (pl.id IS NOT NULL OR pay.last_at IS NOT NULL OR disc.live_sum IS NOT NULL)
   ORDER BY
     GREATEST(
@@ -695,7 +706,7 @@ BEGIN
   WHERE ct.account_id = p_account_id
     AND (v_all_contacts OR NOT ct.counsellor_number_only)
     -- 098: below admin, only the caller's own leads
-    AND (v_all_contacts OR ct.owner_profile_id = v_me);
+    AND (v_all_contacts OR ct.owner_profile_id = v_me OR ct.open_to_team);
 
   RETURN v_count;
 END;
@@ -709,6 +720,7 @@ CREATE OR REPLACE FUNCTION public.apply_fee_template(p_contact_id uuid, p_templa
 AS $function$
 DECLARE
   v_owner uuid;
+  v_open boolean;
   t fee_templates%ROWTYPE;
   v_account_id uuid;
   v_hidden boolean;
@@ -722,11 +734,11 @@ BEGIN
     RAISE EXCEPTION 'Unauthorized' USING ERRCODE = '42501';
   END IF;
 
-  SELECT account_id, counsellor_number_only, owner_profile_id INTO v_account_id, v_hidden, v_owner FROM contacts WHERE id = p_contact_id;
+  SELECT account_id, counsellor_number_only, owner_profile_id, open_to_team INTO v_account_id, v_hidden, v_owner, v_open FROM contacts WHERE id = p_contact_id;
   -- 094: a contact that arrived through a counsellor number is "not found" below admin, like a missing one.
   -- 098: so is a lead the caller does not own, below admin.
   IF v_account_id IS NULL OR (v_hidden AND NOT can_see_counsellor_chats(v_account_id))
-     OR (NOT can_see_counsellor_chats(v_account_id) AND v_owner IS DISTINCT FROM public.my_profile_id()) THEN
+     OR (NOT can_see_counsellor_chats(v_account_id) AND v_owner IS DISTINCT FROM public.my_profile_id() AND NOT v_open) THEN
     RAISE EXCEPTION 'Contact not found' USING ERRCODE = '42704';
   END IF;
 
@@ -828,6 +840,7 @@ CREATE OR REPLACE FUNCTION public.update_contact_enrollment(p_contact_id uuid, p
 AS $function$
 DECLARE
   v_owner uuid;
+  v_open boolean;
   v_account_id UUID;
   v_hidden boolean;
 BEGIN
@@ -835,12 +848,12 @@ BEGIN
     RAISE EXCEPTION 'Unauthorized' USING ERRCODE = '42501';
   END IF;
 
-  SELECT account_id, counsellor_number_only, owner_profile_id INTO v_account_id, v_hidden, v_owner FROM contacts WHERE id = p_contact_id;
+  SELECT account_id, counsellor_number_only, owner_profile_id, open_to_team INTO v_account_id, v_hidden, v_owner, v_open FROM contacts WHERE id = p_contact_id;
 
   -- 094: a contact that arrived through a counsellor number is "not found" below admin, like a missing one.
   -- 098: so is a lead the caller does not own, below admin.
   IF v_account_id IS NULL OR (v_hidden AND NOT can_see_counsellor_chats(v_account_id))
-     OR (NOT can_see_counsellor_chats(v_account_id) AND v_owner IS DISTINCT FROM public.my_profile_id()) THEN
+     OR (NOT can_see_counsellor_chats(v_account_id) AND v_owner IS DISTINCT FROM public.my_profile_id() AND NOT v_open) THEN
     RAISE EXCEPTION 'Contact not found' USING ERRCODE = '22023';
   END IF;
 
@@ -877,7 +890,7 @@ BEGIN
   -- 098: nor about a lead the caller does not own.
   IF NOT can_see_counsellor_chats(p_account_id)
      AND (EXISTS (SELECT 1 FROM contacts WHERE id = p_contact_id AND counsellor_number_only)
-          OR NOT EXISTS (SELECT 1 FROM contacts WHERE id = p_contact_id AND owner_profile_id = public.my_profile_id())) THEN
+          OR NOT EXISTS (SELECT 1 FROM contacts WHERE id = p_contact_id AND (owner_profile_id = public.my_profile_id() OR open_to_team))) THEN
     RETURN;
   END IF;
 
@@ -977,8 +990,8 @@ BEGIN
     ORDER BY c.interest_updated_at DESC LIMIT 1
   ) intr ON true
   WHERE d.account_id = p_account_id
-    -- 098: below admin, the caller's own leads only
-    AND (v_all_leads OR ct.owner_profile_id = v_me);
+    -- 098: below admin, the caller's own leads and open ones, never a counsellor-number lead (094)
+    AND (v_all_leads OR (NOT ct.counsellor_number_only AND (ct.owner_profile_id = v_me OR ct.open_to_team)));
 
   SELECT jsonb_build_object(
     'leads', count(*),
@@ -1059,7 +1072,7 @@ BEGIN
         JOIN conversations c ON c.id = m.conversation_id
         WHERE c.account_id = p_account_id
           AND m.created_at >= now() - INTERVAL '14 days'
-          AND (v_all_leads OR EXISTS (SELECT 1 FROM contacts oc WHERE oc.id = c.contact_id AND oc.owner_profile_id = v_me))
+          AND (v_all_leads OR EXISTS (SELECT 1 FROM contacts oc WHERE oc.id = c.contact_id AND NOT oc.counsellor_number_only AND (oc.owner_profile_id = v_me OR oc.open_to_team)))
         WINDOW w AS (PARTITION BY m.conversation_id ORDER BY m.created_at)
       ) pairs
       WHERE sender_type = 'agent' AND prev_type = 'customer'
@@ -1107,10 +1120,10 @@ BEGIN
     RAISE EXCEPTION 'Pipeline not found in this account' USING ERRCODE = '22023';
   END IF;
 
-  -- 098: below admin, count the caller's own leads only
+  -- 098: below admin, count the caller's own leads and open ones, never a counsellor-number lead (094)
   IF NOT v_all_leads THEN
     v_deals := ARRAY(SELECT d.id FROM deals d JOIN contacts ct ON ct.id = d.contact_id
-                      WHERE d.pipeline_id = p_pipeline_id AND ct.owner_profile_id = v_me);
+                      WHERE d.pipeline_id = p_pipeline_id AND NOT ct.counsellor_number_only AND (ct.owner_profile_id = v_me OR ct.open_to_team));
   END IF;
 
   SELECT COALESCE(jsonb_agg(row ORDER BY (row->>'position')::int), '[]'::jsonb)
@@ -1305,7 +1318,7 @@ BEGIN
                            'follow_up_overdue_count', 'payment_ledger', 'funnel_analytics', 'pipeline_funnel',
                            'update_contact_enrollment', 'apply_fee_template'] LOOP
     IF NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname = f
-                     AND pg_get_functiondef(p.oid) ~ 'owner_profile_id|my_profile_id') THEN
+                     AND pg_get_functiondef(p.oid) ~ 'open_to_team') THEN
       v_missing := v_missing || f;
     END IF;
   END LOOP;
