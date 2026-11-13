@@ -18,6 +18,13 @@
 -- column at the end, until 095 is re-applied (re-apply restores the positions). Positions stay 100+ on purpose: a negative
 -- position would make a kept stage the board's default "Add deal" stage.
 
+-- 096 (applications, the auto-move, the backfill) reads stage_position and the three stages. Covers psql -f; the apply script checks too.
+DO $$ BEGIN
+  IF to_regclass('public.applications') IS NOT NULL THEN
+    RAISE EXCEPTION '095 rollback refused: 096 is live (the applications table exists) and depends on 095. Roll back 096 first: node devtools/apply-kuanli-096.mjs --rollback-db --yes-drop-applications';
+  END IF;
+END $$;
+
 SET LOCAL lock_timeout = '5s';
 -- No concurrent stage edit or new board between the deal moves and the position shifts.
 LOCK TABLE public.pipeline_stages IN SHARE ROW EXCLUSIVE MODE;

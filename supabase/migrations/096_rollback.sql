@@ -22,14 +22,17 @@
 --   functions (replaced)  payment_ledger (094 body), queue_lost_restore (091 body)                -> restored byte for byte (apply script checks md5)
 --   payment_status_enum 'reversed'  cannot be dropped from an enum. Every reversed payment is set back to 'verified' with a note
 --                     (it was exported first). The label stays; nothing reads it. 096 re-applied finds it (ADD VALUE IF NOT EXISTS).
---   grants            096's REVOKE DELETE on payments / payment_receipts changed nothing in production (the app role never held
---                     DELETE there: ACL is SELECT, INSERT), so there is nothing to restore and this file grants nothing. The apply
---                     script prints the ACLs before and after so a database that did hold DELETE can be fixed by hand.
+--   grants            096's REVOKE DELETE on payments / payment_receipts: production's app role (authenticated) holds SELECT, INSERT there
+--                     and never held DELETE, so the REVOKE changed nothing and this file grants nothing. apply-kuanli-096.mjs refuses to
+--                     apply when authenticated already holds DELETE on either table, so "nothing to restore" is checked, not assumed;
+--                     it also prints the ACLs before and after a rollback.
 --
 -- NOT undone, on purpose:
 --   * cards the auto-move advanced stay where they are (their stage events stay). 095_rollback.sql owns the stages.
 --   * files in the application-docs storage bucket stay (this file cannot see storage).
 --   * Meta conversion events queued by auto-moves stay (they were true when reported).
+--   * login kinds: after a re-apply every existing login is a registration login again (a second login of one student becomes
+--     'other'). Restore the real kinds from portal-credential-kinds.csv in the rollback export folder.
 -- Order matters: the triggers go first so nothing fires while rows are rewritten and dropped; reversed payments are
 -- rewritten next (no freeze trigger left to stop it); functions that read what is about to go are dropped before it.
 

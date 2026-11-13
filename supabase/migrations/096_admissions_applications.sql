@@ -640,8 +640,9 @@ $function$;
 -- The live 091 body, unchanged except the prior-stage join. 091 left a Lost deal alone when its prior stage was named
 -- Application Started, Enrolled or Lost; since 095 the stages from Provisional ID to Fee Submitted sit between those two, so the
 -- test is now by position on the deal's own board: a prior stage from Application Started through Enrolled is excluded.
--- Everything else is as 091: Lost is still excluded by name, an exit above Enrolled (Not Interested) is still not excluded, and
--- a board without those stages (stage_position is NULL) excludes nothing by position. CREATE OR REPLACE keeps the owner and
+-- Everything else is as 091: the 091 name test (Application Started, Enrolled, Lost) is kept, so this is a strict superset of 091
+-- (a board with Enrolled but no Application Started still excludes Enrolled); an exit above Enrolled (Not Interested) is still not
+-- excluded, and a board without those stages (stage_position is NULL) excludes nothing by position. CREATE OR REPLACE keeps the owner and
 -- the grants 091 set (closed to the app roles). 096_rollback.sql restores the 091 body; apply-kuanli-096.mjs guards its md5.
 CREATE OR REPLACE FUNCTION public.queue_lost_restore(p_account_id uuid, p_as_of timestamp with time zone, p_window_days integer DEFAULT 60, p_min_replies integer DEFAULT 3)
  RETURNS integer
@@ -667,7 +668,7 @@ BEGIN
       JOIN LATERAL (SELECT e.from_stage_id, e.changed_by, e.changed_at FROM deal_stage_events e
                      WHERE e.deal_id = d.id AND e.to_stage_id = d.stage_id AND e.from_stage_id IS NOT NULL
                      ORDER BY e.changed_at DESC LIMIT 1) ev ON true
-      JOIN pipeline_stages prior ON prior.id = ev.from_stage_id AND prior.name <> 'Lost'
+      JOIN pipeline_stages prior ON prior.id = ev.from_stage_id AND prior.name NOT IN ('Application Started', 'Enrolled', 'Lost')
            AND NOT coalesce(prior.position BETWEEN public.stage_position(prior.pipeline_id, 'Application Started')
                                                AND public.stage_position(prior.pipeline_id, 'Enrolled'), false)
      WHERE d.account_id = p_account_id
