@@ -180,7 +180,7 @@ export async function POST(request: Request) {
     // number this conversation belongs to, not "the account's config".
     let config
     try {
-      config = await getConfigForConversation(supabase, conversation_id, accountId)
+      config = await getConfigForConversation(supabaseAdmin(), conversation_id, accountId)
     } catch {
       return NextResponse.json(
         { error: 'WhatsApp not configured. Please set up your WhatsApp integration first.' },

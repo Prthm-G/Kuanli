@@ -106,7 +106,7 @@ export async function POST(request: Request) {
       )?.[1];
       if (!mediaId) throw new Error('message has no proxied media');
 
-      const config = await getPrimaryConfig(supabase, doc.account_id);
+      const config = await getPrimaryConfig(supabaseAdmin(), doc.account_id);
       const accessToken = decrypt(config.access_token);
       const mediaInfo = await getMediaUrl({ mediaId, accessToken });
       const { buffer, contentType } = await downloadMedia({

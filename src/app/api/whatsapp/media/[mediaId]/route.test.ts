@@ -10,6 +10,8 @@ const h = vi.hoisted(() => ({
   messageFilters: [] as [string, unknown][],
   getMediaUrl: vi.fn(),
   downloadMedia: vi.fn(),
+  getPrimaryConfig: vi.fn(async () => ({ access_token: 'enc' })),
+  admin: { service: true },
 }));
 
 vi.mock('@/lib/supabase/server', () => ({
@@ -48,8 +50,9 @@ vi.mock('@/lib/supabase/server', () => ({
   }),
 }));
 vi.mock('@/lib/whatsapp/config-resolver', () => ({
-  getPrimaryConfig: async () => ({ access_token: 'enc' }),
+  getPrimaryConfig: h.getPrimaryConfig,
 }));
+vi.mock('@/lib/flows/admin-client', () => ({ supabaseAdmin: () => h.admin }));
 vi.mock('@/lib/whatsapp/encryption', () => ({ decrypt: () => 'token' }));
 vi.mock('@/lib/whatsapp/meta-api', () => ({
   getMediaUrl: h.getMediaUrl,
@@ -111,5 +114,11 @@ describe('GET /api/whatsapp/media/[mediaId]', () => {
       mediaId: '9000000000001',
       accessToken: 'token',
     });
+  });
+
+  it('reads the token with the service client, for the caller\'s own account (099)', async () => {
+    h.visible = [{ id: 'm1' }];
+    await get('9000000000001');
+    expect(h.getPrimaryConfig).toHaveBeenCalledWith(h.admin, 'acc-1');
   });
 });
