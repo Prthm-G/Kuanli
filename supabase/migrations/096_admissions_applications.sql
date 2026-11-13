@@ -6,6 +6,25 @@
 -- apply script does, in the same transaction as the rest of 096.
 -- Later tasks append their sections below the marked line.
 
+-- 0. locks, up front ------------------------------------------------------------------------------------------------------
+-- Every existing table this file alters, indexes, adds triggers to or references is locked once, here, in one statement and one
+-- order: waiting (up to 5 s, then the apply script retries) happens before anything is held, and no lock is upgraded halfway
+-- (the contacts / auth.users foreign keys below would otherwise take SHARE ROW EXCLUSIVE first and ACCESS EXCLUSIVE later).
+-- applications, payment_events and document_access_log are only locked when a re-run finds them. A bare statement would fail
+-- on a first run, so the list is built first. Same pattern as 098.
+SET LOCAL lock_timeout = '5s';
+DO $k096lock$
+DECLARE v text;
+BEGIN
+  SELECT string_agg(t, ', ' ORDER BY t) INTO v FROM (
+    SELECT unnest(ARRAY['public.contacts', 'public.payments', 'public.student_portal_credentials', 'public.application_documents',
+                        'public.student_fee_plans', 'auth.users']) AS t
+    UNION
+    SELECT t FROM unnest(ARRAY['public.applications', 'public.payment_events', 'public.document_access_log']) AS t
+     WHERE to_regclass(t) IS NOT NULL) x;
+  EXECUTE 'LOCK TABLE ' || v || ' IN ACCESS EXCLUSIVE MODE';
+END $k096lock$;
+
 -- 1. applications ---------------------------------------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS public.applications (
   id uuid PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
@@ -60,7 +79,7 @@ CREATE TRIGGER set_updated_at BEFORE UPDATE ON public.applications
 -- 2. registration number -> contacts.university_roll_number ---------------------------------------------------------------
 -- SECURITY DEFINER: an agent saves the application; the contact write must not depend on that agent's contact policies.
 CREATE OR REPLACE FUNCTION public.mirror_registration_number()
-RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 BEGIN
   UPDATE public.contacts SET university_roll_number = NEW.registration_number
    WHERE id = NEW.contact_id AND NEW.registration_number IS NOT NULL
@@ -389,7 +408,7 @@ GRANT EXECUTE ON FUNCTION public.application_checklist(uuid, uuid) TO authentica
 --   * positions come from the cards' own board (stage_position / pipeline_stages), never a literal
 --   * moves are logged with a NULL changed_by (app.automation = 'on' while it moves, as 095's stage-log trigger expects)
 --   * does nothing while app.suppress_automation = 'on' (backfills, imports)
---   * locks the contact's deals on admissions boards in the application's account first (not its other deals: a fee plan or
+--   * locks the application row, then the contact's deals on admissions boards in the application's account first (not its other deals: a fee plan or
 --     a Sales card of the same contact must not wait, and fewer locks means less deadlock exposure against lifecycle_sweep),
 --     then reads the checklist and the stages in LATER statements, so a Lost move that committed while it waited
 --     (lifecycle_sweep, a person) is seen and respected
@@ -399,7 +418,9 @@ DECLARE
   v_acct uuid; c record; v_target text; v_moved int; v_prev_auto text;
 BEGIN
   IF current_setting('app.suppress_automation', true) = 'on' THEN RETURN; END IF;
-  SELECT account_id INTO v_acct FROM public.applications WHERE contact_id = p_contact_id;
+  -- The application row first, then the deals: a save of the application locks its row and then (through its trigger) the deals,
+  -- so taking them in the other order here could deadlock with it (40P01).
+  SELECT account_id INTO v_acct FROM public.applications WHERE contact_id = p_contact_id FOR UPDATE;
   IF NOT FOUND THEN RETURN; END IF;
   -- Lock first, read after: a second input committing at the same time waits here and then reads the first one's rows
   -- (every later statement takes a new snapshot), so two inputs together are never seen as half each.

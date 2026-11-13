@@ -77,7 +77,7 @@ export function DocumentsTab({
       onChanged?.();
     } catch (e) {
       console.error(failure, e);
-      toast.error(failure);
+      toast.error(e instanceof Error && e.message ? e.message : failure);
     } finally {
       setBusy(false);
     }

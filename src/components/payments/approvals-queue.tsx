@@ -13,6 +13,7 @@ import {
   loadPendingDiscounts,
   loadPendingPayments,
 } from '@/lib/payments/queries';
+import { paymentWhoWhat } from '@/lib/payments/payment-detail';
 import {
   METHOD_LABEL,
   type FeeDiscount,
@@ -164,7 +165,7 @@ export function ApprovalsQueue({
                   </span>
                   <span className="text-muted-foreground ml-2 text-xs">
                     {p.contactName ?? 'Unnamed'} · {METHOD_LABEL[p.method]} ·{' '}
-                    {formatDate(p.paidAt)}
+                    {formatDate(p.paidAt)} · {paymentWhoWhat(p)}
                     {p.reference && ` · ${p.reference}`}
                     {p.loggedByName && ` · by ${p.loggedByName}`}
                     {p.receipts.length > 0 &&

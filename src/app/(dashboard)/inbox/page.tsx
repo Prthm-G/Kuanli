@@ -13,6 +13,7 @@ import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { WifiOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { sortConversationsByActivity } from "@/lib/inbox/conversation-order";
+import { paymentMessageForConversation } from "@/lib/payments/log-from-image";
 import {
   numberLabelsFor,
   type CounsellorNumberRow,
@@ -74,6 +75,11 @@ export default function InboxPage() {
   const [mobileDetailsOpen, setMobileDetailsOpen] = useState(false);
   // The image message a payment is being logged from ("Log payment" on a bubble).
   const [paymentMessage, setPaymentMessage] = useState<Message | null>(null);
+  // A receipt image belongs to the chat it was opened from: drop it when the
+  // active chat changes so it can never attach to another student.
+  useEffect(() => {
+    setPaymentMessage(null);
+  }, [activeConversation?.id]);
   useEffect(() => {
     try {
       const stored = localStorage.getItem(CONTACT_PANEL_STORAGE_KEY);
@@ -728,7 +734,10 @@ export default function InboxPage() {
 
       <LogPaymentFromImage
         key={paymentMessage?.id ?? "none"}
-        message={paymentMessage}
+        message={paymentMessageForConversation(
+          paymentMessage,
+          activeConversation?.id
+        )}
         contact={activeContact}
         onClose={() => setPaymentMessage(null)}
       />
