@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import type { Pipeline, PipelineStage, Deal, ContactSource } from '@/types';
 import { CONTACT_SOURCES } from '@/lib/contacts/source';
+import { loadCardStatuses, type CardStatus } from '@/lib/applications/card-status';
 import { PipelineBoard } from '@/components/pipelines/pipeline-board';
 import { PipelineSettings } from '@/components/pipelines/pipeline-settings';
 import { DealForm } from '@/components/pipelines/deal-form';
@@ -101,6 +102,9 @@ export default function PipelinesPage() {
   // keyed by contact_id from the lead_queue RPC. Enrolled, Lost and Not
   // Interested contacts are outside the queue's scope and have no insight row.
   const [insights, setInsights] = useState<Map<string, QueueLead>>(new Map());
+  // Checklist chips for admissions boards (a board with an Application Started
+  // stage), keyed by contact_id from the application_card_status RPC.
+  const [cardStatuses, setCardStatuses] = useState<Map<string, CardStatus>>(new Map());
   const [search, setSearch] = useState('');
   const [awaitingOnly, setAwaitingOnly] = useState(false);
   const [sourceFilter, setSourceFilter] = useState<'all' | ContactSource>(
@@ -124,6 +128,28 @@ export default function PipelinesPage() {
       cancelled = true;
     };
   }, [accountId, supabase]);
+
+  const isAdmissionsBoard = stages.some((s) => s.name === 'Application Started');
+  useEffect(() => {
+    if (!accountId || !selectedPipelineId || !isAdmissionsBoard) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setCardStatuses(new Map());
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const statuses = await loadCardStatuses(supabase, accountId);
+        if (!cancelled) setCardStatuses(statuses);
+      } catch {
+        // The board works without chips.
+        if (!cancelled) setCardStatuses(new Map());
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [accountId, selectedPipelineId, isAdmissionsBoard, supabase]);
 
   const filteredDeals = deals.filter((deal) => {
     const insight = deal.contact_id ? insights.get(deal.contact_id) : undefined;
@@ -598,6 +624,7 @@ export default function PipelinesPage() {
                 stages={stages}
                 deals={filteredDeals}
                 insights={insights}
+                cardStatuses={cardStatuses}
                 onDealMoved={handleDealMoved}
                 onAddDeal={handleAddDeal}
                 onEditDeal={handleEditDeal}

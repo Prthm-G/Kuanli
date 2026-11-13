@@ -4,6 +4,8 @@ import { requireRole, toErrorResponse } from "@/lib/auth/account";
 import { supabaseAdmin } from "@/lib/automations/admin-client";
 import {
   CREDENTIAL_SELECT_COLUMNS,
+  dbErrorSummary,
+  duplicateLoginMessage,
   toMetadata,
   validateCredentialInput,
 } from "@/lib/contacts/portal-credentials";
@@ -62,7 +64,7 @@ export async function GET(
       .order("created_at", { ascending: true });
 
     if (error) {
-      console.error("[portal-credentials] list failed:", error);
+      console.error("[portal-credentials] list failed:", dbErrorSummary(error));
       return NextResponse.json(
         { error: "Failed to load credentials" },
         { status: 500 },
@@ -119,6 +121,7 @@ export async function POST(
         account_id: contact.account_id,
         contact_id: contactId,
         label: parsed.value.label,
+        kind: parsed.value.kind,
         portal_url: parsed.value.portal_url ?? null,
         username: parsed.value.username ?? null,
         password_ciphertext: ciphertext,
@@ -128,8 +131,12 @@ export async function POST(
       .select(CREDENTIAL_SELECT_COLUMNS)
       .single();
 
+    const duplicate = duplicateLoginMessage(error, parsed.value.kind);
+    if (duplicate) {
+      return NextResponse.json({ error: duplicate }, { status: 409 });
+    }
     if (error || !data) {
-      console.error("[portal-credentials] insert failed:", error);
+      console.error("[portal-credentials] insert failed:", dbErrorSummary(error));
       return NextResponse.json(
         { error: "Failed to save credential" },
         { status: 500 },

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { toMetadata, validateCredentialInput } from './portal-credentials';
+import { duplicateLoginMessage, toMetadata, validateCredentialInput } from './portal-credentials';
 
 describe('validateCredentialInput (create)', () => {
   const opts = { partial: false };
@@ -20,6 +20,7 @@ describe('validateCredentialInput (create)', () => {
       ok: true,
       value: {
         label: 'LPU UMS',
+        kind: 'other',
         portal_url: 'https://ums.lpu.in',
         username: '12203456',
         password: 'hunter2!',
@@ -137,5 +138,59 @@ describe('toMetadata', () => {
     expect(meta).not.toHaveProperty('account_id');
     expect(meta.label).toBe('UMS');
     expect(JSON.stringify(meta)).not.toContain('iv:ct:tag');
+  });
+});
+
+describe('login kind', () => {
+  it('defaults to other on create', () => {
+    const r = validateCredentialInput({ label: 'L', password: 'x' }, { partial: false });
+    expect(r).toMatchObject({ ok: true, value: { kind: 'other' } });
+  });
+
+  it.each(['provisional', 'registration', 'other'])('accepts %s', (kind) => {
+    const r = validateCredentialInput({ label: 'L', password: 'x', kind }, { partial: false });
+    expect(r).toMatchObject({ ok: true, value: { kind } });
+  });
+
+  it('rejects anything else', () => {
+    for (const kind of ['admin', '', 'Provisional', 7, null]) {
+      expect(
+        validateCredentialInput({ label: 'L', password: 'x', kind }, { partial: false }).ok,
+      ).toBe(false);
+    }
+  });
+
+  it('leaves kind out of a partial update unless sent', () => {
+    expect(validateCredentialInput({ label: 'L' }, { partial: true })).toEqual({
+      ok: true,
+      value: { label: 'L' },
+    });
+    expect(validateCredentialInput({ kind: 'provisional' }, { partial: true })).toEqual({
+      ok: true,
+      value: { kind: 'provisional' },
+    });
+  });
+
+  it('toMetadata returns the kind and never the ciphertext', () => {
+    const m = toMetadata({ id: 'a', contact_id: 'b', kind: 'provisional', password_ciphertext: 'zzz' });
+    expect(m.kind).toBe('provisional');
+    expect(JSON.stringify(m)).not.toContain('zzz');
+    expect(toMetadata({ id: 'a', contact_id: 'b' }).kind).toBe('other');
+  });
+});
+
+describe('duplicateLoginMessage', () => {
+  it('maps 23505 to a friendly message by kind', () => {
+    expect(duplicateLoginMessage({ code: '23505' }, 'provisional')).toBe(
+      'This student already has a provisional login',
+    );
+    expect(duplicateLoginMessage({ code: '23505' }, 'registration')).toBe(
+      'This student already has a registration login',
+    );
+  });
+  it('returns null for other errors', () => {
+    expect(duplicateLoginMessage({ code: '42501' }, 'provisional')).toBeNull();
+    expect(duplicateLoginMessage(null, 'provisional')).toBeNull();
+    expect(duplicateLoginMessage({ code: '23505' }, 'other')).toBeNull();
   });
 });

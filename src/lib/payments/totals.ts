@@ -31,6 +31,8 @@ export interface PaymentTotals {
   pending: number;
   /** Rejected. Shown so a disputed payment does not simply vanish. */
   rejected: number;
+  /** Reversed after being verified. Like rejected, never money received. */
+  reversed: number;
   outstanding: number;
 }
 
@@ -46,11 +48,17 @@ export function totalsFor(
     received,
     pending: byStatus('reported'),
     rejected: byStatus('rejected'),
+    reversed: byStatus('reversed'),
     // Never negative: an overpayment is a credit, not a negative debt, and a
     // minus sign in an "outstanding" column reads as a data bug to whoever
     // sees it. `overpayment()` reports the excess separately.
     outstanding: Math.max(0, round((Number(agreedTotal) || 0) - received)),
   };
+}
+
+/** Whether a payment of this status is, or may yet become, money in hand. */
+export function countsAsMoney(status: Payment['status']): boolean {
+  return status !== 'rejected' && status !== 'reversed';
 }
 
 /** How much verified money exceeds the agreed total, if any. */

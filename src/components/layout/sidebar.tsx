@@ -15,6 +15,7 @@ import {
   FileCheck,
   Crown,
   GitBranch,
+  Landmark,
   LayoutDashboard,
   ListOrdered,
   LogOut,
@@ -28,7 +29,7 @@ import {
   UsersRound,
   X,
 } from 'lucide-react';
-import { canViewGrowth, type AccountRole } from '@/lib/auth/roles';
+import { canViewGrowth, canViewMoney, type AccountRole } from '@/lib/auth/roles';
 import { displayLogin } from '@/lib/auth/username';
 
 // Per-role chip metadata used in the sidebar's account strip + the
@@ -84,6 +85,8 @@ interface NavItem {
   beta?: boolean;
   /** Shown only to the account owner (see `canViewGrowth`). */
   ownerOnly?: boolean;
+  /** Shown only to owner and admin (see `canViewMoney`). */
+  adminOnly?: boolean;
 }
 
 const navItems: NavItem[] = [
@@ -94,6 +97,7 @@ const navItems: NavItem[] = [
   { href: '/contacts', label: 'Contacts', icon: Users },
   { href: '/pipelines', label: 'Pipelines', icon: GitBranch },
   { href: '/applications', label: 'Applications', icon: FileCheck },
+  { href: '/money', label: 'Money', icon: Landmark, adminOnly: true },
   { href: '/reports', label: 'EOD Report', icon: ClipboardList },
   { href: '/analytics', label: 'Analytics', icon: BarChart3 },
   { href: '/growth', label: 'Growth', icon: TrendingUp, ownerOnly: true },
@@ -217,8 +221,9 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
             {navItems
               .filter(
                 (item) =>
-                  !item.ownerOnly ||
-                  (accountRole !== null && canViewGrowth(accountRole))
+                  (!item.ownerOnly ||
+                    (accountRole !== null && canViewGrowth(accountRole))) &&
+                  (!item.adminOnly || canViewMoney(accountRole))
               )
               .map((item) => {
               const isActive =

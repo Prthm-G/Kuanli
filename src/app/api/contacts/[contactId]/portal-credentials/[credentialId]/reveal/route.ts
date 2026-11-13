@@ -21,7 +21,20 @@ const UUID_RE =
  * is impossible by construction. Rate-limited per user to bound bulk
  * exfiltration from a compromised counsellor session.
  */
+/** Every response from this route, errors included, is uncacheable. */
+function noStore(res: Response): Response {
+  res.headers.set("Cache-Control", "no-store");
+  return res;
+}
+
 export async function POST(
+  request: Request,
+  ctx: { params: Promise<{ contactId: string; credentialId: string }> },
+) {
+  return noStore(await reveal(request, ctx));
+}
+
+async function reveal(
   _request: Request,
   { params }: { params: Promise<{ contactId: string; credentialId: string }> },
 ) {

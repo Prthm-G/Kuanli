@@ -4,7 +4,7 @@ import type { DocStatus, TrackerContact } from './types';
 
 /**
  * Load the application tracker via the `application_tracker` RPC
- * (migration 046): contacts at Application Started / Enrolled with their
+ * (migration 046): students from Application Started through Enrolled (including Provisional ID, Form & Documents and Fee Submitted) with their
  * checklist state and unsorted captured documents.
  */
 export async function loadApplicationTracker(

@@ -25,6 +25,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Loader2, AlertTriangle } from 'lucide-react';
+import { ReferrerPicker } from '@/components/contacts/referrer-picker';
 
 interface ContactFormProps {
   open: boolean;
@@ -55,6 +56,7 @@ export function ContactForm({
   const [company, setCompany] = useState('');
   const [source, setSource] = useState<ContactSource>('organic');
   const [sourceDetail, setSourceDetail] = useState('');
+  const [referrerId, setReferrerId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   // Duplicate-phone detection for NEW contacts. `exact` (same digits)
@@ -79,6 +81,7 @@ export function ContactForm({
       setCompany(contact?.company ?? '');
       setSource(contact?.source ?? 'organic');
       setSourceDetail(contact?.source_detail ?? '');
+      setReferrerId(contact?.referred_by_contact_id ?? null);
       setSelectedTagIds(contactTags.map((ct) => ct.tag_id));
       setDupMatch(null);
       fetchTags();
@@ -168,6 +171,7 @@ export function ContactForm({
             source,
             source_detail:
               source === 'reference' ? sourceDetail.trim() || null : null,
+            referred_by_contact_id: source === 'reference' ? referrerId : null,
             updated_at: new Date().toISOString(),
           })
           .eq('id', contactId);
@@ -185,6 +189,7 @@ export function ContactForm({
             source,
             source_detail:
               source === 'reference' ? sourceDetail.trim() || null : null,
+            referred_by_contact_id: source === 'reference' ? referrerId : null,
           })
           .select('id')
           .single();
@@ -375,21 +380,14 @@ export function ContactForm({
           </div>
 
           {source === 'reference' && (
-            <div className="space-y-2">
-              <Label
-                htmlFor="cf-source-detail"
-                className="text-muted-foreground"
-              >
-                Referred by
-              </Label>
-              <Input
-                id="cf-source-detail"
-                value={sourceDetail}
-                onChange={(e) => setSourceDetail(e.target.value)}
-                placeholder="Name of the person who referred them"
-                className="bg-muted border-border text-foreground placeholder:text-muted-foreground"
-              />
-            </div>
+            <ReferrerPicker
+              value={{ id: referrerId, name: sourceDetail }}
+              onChange={(v) => {
+                setReferrerId(v.id);
+                setSourceDetail(v.name);
+              }}
+              excludeContactId={contact?.id}
+            />
           )}
 
           <div className="space-y-2">

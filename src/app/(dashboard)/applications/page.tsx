@@ -22,7 +22,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 
 /**
- * Application tracker: every lead at Application Started / Enrolled with
+ * Application tracker: every student from Application Started through Enrolled (including Provisional ID, Form & Documents and Fee Submitted) with
  * their document checklist. Inbound images/documents from these leads are
  * captured automatically (migration 045); counsellors classify them onto a
  * checklist slot, then verify (which archives the bytes into private

@@ -2,6 +2,7 @@
 
 import type { Deal, PipelineStage } from "@/types";
 import type { QueueLead } from "@/lib/queue/types";
+import { cardChips, type CardStatus } from "@/lib/applications/card-status";
 import { courseLine } from "@/lib/pipelines/course-line";
 import { Calendar, Check, X } from "lucide-react";
 import {
@@ -23,7 +24,15 @@ interface DealCardProps {
   stages?: PipelineStage[];
   /** Advance/move this deal to another stage without dragging. */
   onMoveToStage?: (dealId: string, stageId: string) => void;
+  /** Application checklist for this contact (admissions boards only); drives the chips under the title. */
+  status?: CardStatus;
 }
+
+const CHIP_TONE = {
+  done: "bg-primary/15 text-primary",
+  todo: "bg-muted-foreground/15 text-muted-foreground",
+  warn: "bg-amber-500/15 text-amber-500",
+} as const;
 
 function formatDate(dateStr: string) {
   return new Date(dateStr).toLocaleDateString("en-US", {
@@ -50,10 +59,11 @@ function initials(name?: string, fallback?: string) {
   return source.charAt(0).toUpperCase();
 }
 
-export function DealCard({ deal, stage, onEdit, isOverlay, insight, stages, onMoveToStage }: DealCardProps) {
+export function DealCard({ deal, stage, onEdit, isOverlay, insight, stages, onMoveToStage, status }: DealCardProps) {
   const contactLabel = deal.contact?.name || deal.contact?.phone || "No contact";
   const assigneeLabel = deal.assignee?.full_name || null;
   const course = courseLine(deal.contact, insight);
+  const chips = status && stage ? cardChips(status, stage.name) : [];
 
   return (
     <div
@@ -105,6 +115,19 @@ export function DealCard({ deal, stage, onEdit, isOverlay, insight, stages, onMo
           </span>
         )}
       </div>
+
+      {chips.length > 0 && (
+        <div className="mt-1.5 flex flex-wrap items-center gap-1">
+          {chips.map((chip) => (
+            <span
+              key={chip.label}
+              className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${CHIP_TONE[chip.tone]}`}
+            >
+              {chip.label}
+            </span>
+          ))}
+        </div>
+      )}
 
       {/* Contact row */}
       <div className="mt-2 flex items-center gap-2">

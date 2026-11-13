@@ -8,6 +8,7 @@ import { useRealtime } from "@/hooks/use-realtime";
 import { ConversationList } from "@/components/inbox/conversation-list";
 import { MessageThread } from "@/components/inbox/message-thread";
 import { ContactSidebar } from "@/components/inbox/contact-sidebar";
+import { LogPaymentFromImage } from "@/components/inbox/log-payment-from-image";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { WifiOff } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -71,6 +72,8 @@ export default function InboxPage() {
   const [contactPanelOpen, setContactPanelOpen] = useState(true);
   // Phones have no room for the panel, so it opens as a sheet from the header.
   const [mobileDetailsOpen, setMobileDetailsOpen] = useState(false);
+  // The image message a payment is being logged from ("Log payment" on a bubble).
+  const [paymentMessage, setPaymentMessage] = useState<Message | null>(null);
   useEffect(() => {
     try {
       const stored = localStorage.getItem(CONTACT_PANEL_STORAGE_KEY);
@@ -694,6 +697,7 @@ export default function InboxPage() {
             contactPanelOpen={contactPanelOpen}
             onToggleContactPanel={handleToggleContactPanel}
             onOpenDetails={() => setMobileDetailsOpen(true)}
+            onLogPayment={setPaymentMessage}
           />
         </div>
 
@@ -721,6 +725,13 @@ export default function InboxPage() {
           </div>
         )}
       </div>
+
+      <LogPaymentFromImage
+        key={paymentMessage?.id ?? "none"}
+        message={paymentMessage}
+        contact={activeContact}
+        onClose={() => setPaymentMessage(null)}
+      />
 
       {/* The same panel on a phone. */}
       <Sheet open={mobileDetailsOpen} onOpenChange={setMobileDetailsOpen}>

@@ -4,6 +4,8 @@ import { requireRole, toErrorResponse } from "@/lib/auth/account";
 import { supabaseAdmin } from "@/lib/automations/admin-client";
 import {
   CREDENTIAL_SELECT_COLUMNS,
+  dbErrorSummary,
+  duplicateLoginMessage,
   toMetadata,
   validateCredentialInput,
 } from "@/lib/contacts/portal-credentials";
@@ -73,6 +75,7 @@ export async function PATCH(
       updated_at: new Date().toISOString(),
     };
     if (parsed.value.label !== undefined) update.label = parsed.value.label;
+    if (parsed.value.kind !== undefined) update.kind = parsed.value.kind;
     if (parsed.value.portal_url !== undefined)
       update.portal_url = parsed.value.portal_url;
     if (parsed.value.username !== undefined)
@@ -97,8 +100,12 @@ export async function PATCH(
       .select(CREDENTIAL_SELECT_COLUMNS)
       .single();
 
+    const duplicate = duplicateLoginMessage(error, parsed.value.kind);
+    if (duplicate) {
+      return NextResponse.json({ error: duplicate }, { status: 409 });
+    }
     if (error || !data) {
-      console.error("[portal-credentials] update failed:", error);
+      console.error("[portal-credentials] update failed:", dbErrorSummary(error));
       return NextResponse.json(
         { error: "Failed to update credential" },
         { status: 500 },
@@ -130,7 +137,7 @@ export async function DELETE(
       .eq("id", credentialId);
 
     if (error) {
-      console.error("[portal-credentials] delete failed:", error);
+      console.error("[portal-credentials] delete failed:", dbErrorSummary(error));
       return NextResponse.json(
         { error: "Failed to delete credential" },
         { status: 500 },

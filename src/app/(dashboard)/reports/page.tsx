@@ -136,7 +136,7 @@ export default function ReportsPage() {
             <CalendarDays className="h-3.5 w-3.5" />
             {view === 'eod'
               ? `New conversations · ${rangeLabel}`
-              : 'Application Started and Enrolled students, by university and intake'}
+              : 'Students from Application Started through Enrolled, by university and intake'}
           </p>
         </div>
         {view === 'eod' && (
