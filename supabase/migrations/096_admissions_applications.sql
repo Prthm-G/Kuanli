@@ -7,10 +7,14 @@
 -- Later tasks append their sections below the marked line.
 
 -- 0. locks, up front ------------------------------------------------------------------------------------------------------
--- Every existing table this file alters, indexes, adds triggers to or references is locked once, here, in one statement and one
--- order: waiting (up to 5 s, then the apply script retries) happens before anything is held, and no lock is upgraded halfway
--- (the contacts / auth.users foreign keys below would otherwise take SHARE ROW EXCLUSIVE first and ACCESS EXCLUSIVE later).
--- applications, payment_events and document_access_log are only locked when a re-run finds them. A bare statement would fail
+-- Every existing table this file changes is locked here, before anything else, in a fixed order, each in the weakest mode its
+-- statements take, so no lock is upgraded halfway (the contacts FK would otherwise take SHARE ROW EXCLUSIVE first and ACCESS
+-- EXCLUSIVE later). Waiting (up to 5 s, then the apply script retries) happens before anything is held.
+--   * ACCESS EXCLUSIVE: the tables 096 ALTERs (ADD COLUMN, ENABLE RLS) or whose triggers / policies it DROPs and creates
+--     (DROP TRIGGER and DROP POLICY take ACCESS EXCLUSIVE). Not blocking readers matters less here: these are short.
+--   * SHARE ROW EXCLUSIVE: auth.users only. The foreign keys to it (payments.collected_by, application_documents.uploaded_to_portal_by)
+--     need exactly that, and it lets reads through: GoTrue reads auth.users on every login and token refresh.
+-- applications, payment_events and document_access_log are only locked when a re-run finds them; a bare statement would fail
 -- on a first run, so the list is built first. Same pattern as 098.
 SET LOCAL lock_timeout = '5s';
 DO $k096lock$
@@ -18,11 +22,12 @@ DECLARE v text;
 BEGIN
   SELECT string_agg(t, ', ' ORDER BY t) INTO v FROM (
     SELECT unnest(ARRAY['public.contacts', 'public.payments', 'public.student_portal_credentials', 'public.application_documents',
-                        'public.student_fee_plans', 'auth.users']) AS t
+                        'public.student_fee_plans']) AS t
     UNION
     SELECT t FROM unnest(ARRAY['public.applications', 'public.payment_events', 'public.document_access_log']) AS t
      WHERE to_regclass(t) IS NOT NULL) x;
   EXECUTE 'LOCK TABLE ' || v || ' IN ACCESS EXCLUSIVE MODE';
+  EXECUTE 'LOCK TABLE auth.users IN SHARE ROW EXCLUSIVE MODE';
 END $k096lock$;
 
 -- 1. applications ---------------------------------------------------------------------------------------------------------
