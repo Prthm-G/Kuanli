@@ -1173,7 +1173,7 @@ CREATE POLICY "Chat media readable by uploader and admins" ON storage.objects FO
 -- 7. Option 1: Kuanli's Add member creates or links the rotation entry -----------------------------------------------------
 -- New number: a counsellor row, inactive, with a Telegram join code returned once. A number the R1 staff script seeded
 -- with no login yet: link that row (same id; its branch, Telegram join and active state kept) and give the login the
--- row's unowned leads. Refused: a number already on another login, a row in another branch, a login already linked.
+-- row's unowned leads. A linked row or a retry returns the join code only while that counsellor has not joined Telegram. Refused: a number already on another login, a row in another branch, a login already linked.
 CREATE OR REPLACE FUNCTION public.add_counsellor(p_profile uuid, p_branch uuid, p_wa_number text, p_display_name text)
 RETURNS TABLE (counsellor_id uuid, telegram_start_code text, linked boolean)
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
@@ -1196,8 +1196,8 @@ BEGIN
 
   SELECT * INTO v_row FROM public.counsellors WHERE account_id = v_acc AND wa_number = v_num FOR UPDATE;
   IF FOUND THEN
-    IF v_row.profile_id = p_profile THEN
-      RETURN QUERY SELECT v_row.id, NULL::text, true; RETURN;
+    IF v_row.profile_id = p_profile THEN   -- a retry: the join code again while they have not joined Telegram
+      RETURN QUERY SELECT v_row.id, CASE WHEN v_row.telegram_chat_id IS NULL THEN v_row.telegram_start_code END, true; RETURN;
     ELSIF v_row.profile_id IS NOT NULL THEN
       RAISE EXCEPTION 'that WhatsApp number is already on another login' USING ERRCODE = '23505';
     ELSIF v_row.branch_id <> p_branch THEN
@@ -1219,7 +1219,7 @@ BEGIN
         PERFORM public.set_owner_trusted(c.lead, p_profile, 'counsellor_linked', true);
       END IF;
     END LOOP;
-    RETURN QUERY SELECT v_row.id, NULL::text, true; RETURN;
+    RETURN QUERY SELECT v_row.id, CASE WHEN v_row.telegram_chat_id IS NULL THEN v_row.telegram_start_code END, true; RETURN;
   END IF;
 
   IF length(v_name) NOT BETWEEN 1 AND 40 THEN
