@@ -39,6 +39,15 @@ BEGIN
   END IF;
 END $$;
 
+-- Every table whose policies or triggers change, locked once, up front, in one order: waiting (up to 5 s, then the apply
+-- script retries) happens before anything is held, not halfway through. About a second on prod's size.
+LOCK TABLE public.contacts, public.conversations, public.deals, public.counsellor_assignments, public.meta_conversion_events,
+  public.flow_runs, public.automation_logs, public.automations, public.automation_steps, public.flows, public.flow_nodes,
+  public.payment_receipts, public.application_documents, storage.objects IN ACCESS EXCLUSIVE MODE;
+-- the backfill runs only the first time (a re-run must not re-own leads an admin has unowned since)
+SELECT set_config('kuanli.k098_first_run', (NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public'
+  AND table_name = 'contacts' AND column_name = 'owner_profile_id'))::text, true);
+
 -- 1. the owner column ---------------------------------------------------------------------------------------------------
 ALTER TABLE public.contacts ADD COLUMN IF NOT EXISTS owner_profile_id uuid REFERENCES public.profiles(id) ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS contacts_account_owner ON public.contacts (account_id, owner_profile_id);
@@ -63,21 +72,23 @@ GRANT SELECT ON public.contact_owner_log TO authenticated;
 GRANT SELECT, INSERT ON public.contact_owner_log TO service_role;
 REVOKE ALL ON SEQUENCE public.contact_owner_log_id_seq FROM PUBLIC, anon, authenticated;
 
--- Backfill (option A). Replica mode: no updated_at and no row triggers on thousands of rows (logical decoding still
--- sees each change). The joins on profiles drop stale ids (assigned_agent_id has no foreign key).
+-- Backfill (option A), first run only. Replica mode: no updated_at and no row triggers on thousands of rows (logical
+-- decoding still sees each change). The lead's LATEST counsellor decides: their login, or nobody yet if they have no
+-- login (add_counsellor hands those over when it links one). The joins on profiles drop stale ids (assigned_agent_id
+-- has no foreign key).
 SET LOCAL session_replication_role = replica;
 UPDATE public.contacts ct SET owner_profile_id = coalesce(
-    (SELECT c.profile_id FROM public.counsellor_assignments a
-       JOIN public.counsellors c ON c.id = a.counsellor_id
-       JOIN public.profiles p ON p.id = c.profile_id AND p.account_id = ct.account_id
-      WHERE a.contact_id = ct.id ORDER BY a.assigned_at DESC LIMIT 1),
+    (SELECT p.id FROM (SELECT a.counsellor_id FROM public.counsellor_assignments a
+                        WHERE a.contact_id = ct.id ORDER BY a.assigned_at DESC LIMIT 1) l
+       JOIN public.counsellors c ON c.id = l.counsellor_id
+       JOIN public.profiles p ON p.id = c.profile_id AND p.account_id = ct.account_id),
     (SELECT cv.assigned_agent_id FROM public.conversations cv
        JOIN public.profiles p ON p.id = cv.assigned_agent_id AND p.account_id = ct.account_id
       WHERE cv.contact_id = ct.id ORDER BY cv.updated_at DESC NULLS LAST LIMIT 1),
     (SELECT d.assigned_to FROM public.deals d
        JOIN public.profiles p ON p.id = d.assigned_to AND p.account_id = ct.account_id
       WHERE d.contact_id = ct.id ORDER BY d.created_at DESC NULLS LAST LIMIT 1))
- WHERE ct.owner_profile_id IS NULL;
+ WHERE ct.owner_profile_id IS NULL AND current_setting('kuanli.k098_first_run', true) = 'true';
 SET LOCAL session_replication_role = origin;
 
 -- 2. the visibility rule --------------------------------------------------------------------------------------------------
@@ -171,7 +182,9 @@ RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE v_profile uuid;
 BEGIN
-  SELECT c.profile_id INTO v_profile FROM public.counsellors c WHERE c.id = NEW.counsellor_id;
+  SELECT c.profile_id INTO v_profile FROM public.counsellors c
+    JOIN public.profiles p ON p.id = c.profile_id AND p.account_id = NEW.account_id   -- never abort the bot's handover
+   WHERE c.id = NEW.counsellor_id;
   IF v_profile IS NULL OR EXISTS (SELECT 1 FROM public.counsellor_assignments a
                                    WHERE a.contact_id = NEW.contact_id AND a.counsellor_id = NEW.counsellor_id AND a.id <> NEW.id) THEN
     RETURN NULL;
@@ -1167,7 +1180,9 @@ AS $function$
 -- 6. storage ---------------------------------------------------------------------------------------------------------------
 -- A stored document or receipt is readable through the API only with a visible row for it (the subqueries run under
 -- RLS, so they follow ownership), or by the person who uploaded it (a receipt is uploaded before its row exists, and an
--- upload reads its own object back). Signed links the server makes with the service role are unchanged.
+-- upload reads its own object back). Signed links the server makes with the service role are unchanged. Folder names
+-- are compared as text: a file outside an account folder (prod has brochure/ files in chat-media) must not make the
+-- policy error for everyone.
 CREATE INDEX IF NOT EXISTS application_documents_storage_path ON public.application_documents (storage_path);
 -- unique: one receipt row per stored file, so a member cannot add a receipt row naming somebody else's file to read it
 CREATE UNIQUE INDEX IF NOT EXISTS payment_receipts_storage_path ON public.payment_receipts (storage_path);
@@ -1175,14 +1190,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS payment_receipts_storage_path ON public.paymen
 DROP POLICY IF EXISTS "Members read application docs" ON storage.objects;
 CREATE POLICY "Members read application docs" ON storage.objects FOR SELECT USING (
   bucket_id = 'application-docs'
-  AND public.is_account_member((NULLIF(replace(split_part(name, '/', 1), 'account-', ''), ''))::uuid)
+  AND EXISTS (SELECT 1 FROM unnest((SELECT public.my_account_ids('viewer'))) a WHERE split_part(name, '/', 1) = 'account-' || a::text)
   AND (owner_id = (auth.uid())::text
        OR EXISTS (SELECT 1 FROM public.application_documents d WHERE d.storage_path = objects.name)));
 
 DROP POLICY IF EXISTS "Members read payment receipts storage" ON storage.objects;
 CREATE POLICY "Members read payment receipts storage" ON storage.objects FOR SELECT USING (
   bucket_id = 'payment-receipts'
-  AND public.is_account_member((NULLIF(replace(split_part(name, '/', 1), 'account-', ''), ''))::uuid)
+  AND EXISTS (SELECT 1 FROM unnest((SELECT public.my_account_ids('viewer'))) a WHERE split_part(name, '/', 1) = 'account-' || a::text)
   AND (owner_id = (auth.uid())::text
        OR EXISTS (SELECT 1 FROM public.payment_receipts r WHERE r.storage_path = objects.name)));
 
@@ -1195,7 +1210,7 @@ DROP POLICY IF EXISTS "Chat media readable by uploader and admins" ON storage.ob
 CREATE POLICY "Chat media readable by uploader and admins" ON storage.objects FOR SELECT USING (
   bucket_id = 'chat-media'
   AND (owner_id = (auth.uid())::text
-       OR (NULLIF(replace(split_part(name, '/', 1), 'account-', ''), ''))::uuid = ANY ((SELECT public.my_account_ids('admin'))::uuid[])));
+       OR EXISTS (SELECT 1 FROM unnest((SELECT public.my_account_ids('admin'))) a WHERE split_part(name, '/', 1) = 'account-' || a::text)));
 
 -- 7. Option 1: Kuanli's Add member creates or links the rotation entry -----------------------------------------------------
 -- New number: a counsellor row, inactive, with a Telegram join code returned once. A number the R1 staff script seeded
@@ -1211,6 +1226,9 @@ BEGIN
   SELECT account_id INTO v_acc FROM public.profiles WHERE id = p_profile;
   IF v_acc IS NULL OR auth.uid() IS NULL OR NOT public.is_account_member(v_acc, 'admin'::public.account_role_enum) THEN
     RAISE EXCEPTION 'only an admin can add a counsellor' USING ERRCODE = '42501';
+  END IF;
+  IF (SELECT account_role FROM public.profiles WHERE id = p_profile) = 'viewer' THEN
+    RAISE EXCEPTION 'a viewer cannot take leads: make them a counsellor first' USING ERRCODE = '22023';
   END IF;
   IF length(v_num) = 10 THEN v_num := '91' || v_num; END IF;
   IF v_num !~ '^91[6-9][0-9]{9}$' THEN
