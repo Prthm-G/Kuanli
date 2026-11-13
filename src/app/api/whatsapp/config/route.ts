@@ -91,7 +91,7 @@ export async function GET() {
     // for the existing "Test API Connection" button.
     let config
     try {
-      config = await getPrimaryConfig(supabase, accountId)
+      config = await getPrimaryConfig(supabaseAdmin(), accountId)
     } catch {
       return NextResponse.json(
         {

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import { getPrimaryConfig } from '@/lib/whatsapp/config-resolver'
+import { supabaseAdmin } from '@/lib/flows/admin-client'
 import {
   deleteMessageTemplate,
   editMessageTemplate,
@@ -143,7 +144,7 @@ export async function PATCH(
       // account's numbers), so the primary config's token is sufficient.
       let config
       try {
-        config = await getPrimaryConfig(supabase, accountId)
+        config = await getPrimaryConfig(supabaseAdmin(), accountId)
       } catch {
         return NextResponse.json(
           { error: 'WhatsApp not configured.' },
@@ -282,7 +283,7 @@ export async function DELETE(
       // Multi-number (034): WABA-level delete uses the primary config's token.
       let config
       try {
-        config = await getPrimaryConfig(supabase, accountId)
+        config = await getPrimaryConfig(supabaseAdmin(), accountId)
       } catch {
         config = null
       }

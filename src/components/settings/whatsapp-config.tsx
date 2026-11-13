@@ -96,9 +96,11 @@ export function WhatsAppConfig() {
       // remains accurate.
       // Multi-number (034): an account may own several numbers. This form edits
       // the primary number; a full numbers-list UI is a follow-up.
+      // Not `*`: since 099 the browser cannot read access_token or verify_token
+      // (a `*` select fails outright). The form never showed them anyway.
       const { data, error } = await supabase
         .from('whatsapp_config')
-        .select('*')
+        .select('id, user_id, phone_number_id, waba_id, status, connected_at, registered_at, subscribed_apps_at, last_registration_error, meta_business_id, onboarding_method, token_expires_at')
         .eq('account_id', acctId)
         .order('is_primary', { ascending: false })
         .order('created_at', { ascending: true })

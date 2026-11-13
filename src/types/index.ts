@@ -314,8 +314,7 @@ export interface WhatsAppConfig {
   user_id: string;
   phone_number_id: string;
   waba_id?: string;
-  access_token: string;
-  verify_token?: string;
+  // access_token and verify_token are server-only since migration 099.
   status: 'connected' | 'disconnected';
   connected_at?: string;
   /**
