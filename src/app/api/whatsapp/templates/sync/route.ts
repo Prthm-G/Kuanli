@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import { getPrimaryConfig } from '@/lib/whatsapp/config-resolver'
+import { supabaseAdmin } from '@/lib/flows/admin-client'
 import { normalizeStatus } from '@/lib/whatsapp/template-status-normalize'
 import type { TemplateButton, TemplateSampleValues } from '@/types'
 
@@ -155,7 +156,7 @@ export async function POST() {
     // token.
     let config
     try {
-      config = await getPrimaryConfig(supabase, accountId)
+      config = await getPrimaryConfig(supabaseAdmin(), accountId)
     } catch {
       return NextResponse.json(
         {

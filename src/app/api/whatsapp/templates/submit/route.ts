@@ -3,6 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { createClient } from '@/lib/supabase/server'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import { getPrimaryConfig } from '@/lib/whatsapp/config-resolver'
+import { supabaseAdmin } from '@/lib/flows/admin-client'
 import { submitMessageTemplate } from '@/lib/whatsapp/meta-api'
 import {
   validateTemplatePayload,
@@ -154,7 +155,7 @@ export async function POST(request: Request) {
       // config's token.
       let config
       try {
-        config = await getPrimaryConfig(supabase, accountId)
+        config = await getPrimaryConfig(supabaseAdmin(), accountId)
       } catch {
         return NextResponse.json(
           {

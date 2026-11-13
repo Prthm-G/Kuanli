@@ -6,6 +6,30 @@
 -- apply script does, in the same transaction as the rest of 096.
 -- Later tasks append their sections below the marked line.
 
+-- 0. locks, up front ------------------------------------------------------------------------------------------------------
+-- Every existing table this file changes is locked here, before anything else, in a fixed order, each in the weakest mode its
+-- statements take, so no lock is upgraded halfway (the contacts FK would otherwise take SHARE ROW EXCLUSIVE first and ACCESS
+-- EXCLUSIVE later). Waiting (up to 5 s, then the apply script retries) happens before anything is held.
+--   * ACCESS EXCLUSIVE: the tables 096 ALTERs (ADD COLUMN, ENABLE RLS) or whose triggers / policies it DROPs and creates
+--     (DROP TRIGGER and DROP POLICY take ACCESS EXCLUSIVE). Not blocking readers matters less here: these are short.
+--   * SHARE ROW EXCLUSIVE: auth.users only. The foreign keys to it (payments.collected_by, application_documents.uploaded_to_portal_by)
+--     need exactly that, and it lets reads through: GoTrue reads auth.users on every login and token refresh.
+-- applications, payment_events and document_access_log are only locked when a re-run finds them; a bare statement would fail
+-- on a first run, so the list is built first. Same pattern as 098.
+SET LOCAL lock_timeout = '5s';
+DO $k096lock$
+DECLARE v text;
+BEGIN
+  SELECT string_agg(t, ', ' ORDER BY t) INTO v FROM (
+    SELECT unnest(ARRAY['public.contacts', 'public.payments', 'public.student_portal_credentials', 'public.application_documents',
+                        'public.student_fee_plans']) AS t
+    UNION
+    SELECT t FROM unnest(ARRAY['public.applications', 'public.payment_events', 'public.document_access_log']) AS t
+     WHERE to_regclass(t) IS NOT NULL) x;
+  EXECUTE 'LOCK TABLE ' || v || ' IN ACCESS EXCLUSIVE MODE';
+  EXECUTE 'LOCK TABLE auth.users IN SHARE ROW EXCLUSIVE MODE';
+END $k096lock$;
+
 -- 1. applications ---------------------------------------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS public.applications (
   id uuid PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
@@ -60,7 +84,7 @@ CREATE TRIGGER set_updated_at BEFORE UPDATE ON public.applications
 -- 2. registration number -> contacts.university_roll_number ---------------------------------------------------------------
 -- SECURITY DEFINER: an agent saves the application; the contact write must not depend on that agent's contact policies.
 CREATE OR REPLACE FUNCTION public.mirror_registration_number()
-RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 BEGIN
   UPDATE public.contacts SET university_roll_number = NEW.registration_number
    WHERE id = NEW.contact_id AND NEW.registration_number IS NOT NULL
@@ -389,7 +413,7 @@ GRANT EXECUTE ON FUNCTION public.application_checklist(uuid, uuid) TO authentica
 --   * positions come from the cards' own board (stage_position / pipeline_stages), never a literal
 --   * moves are logged with a NULL changed_by (app.automation = 'on' while it moves, as 095's stage-log trigger expects)
 --   * does nothing while app.suppress_automation = 'on' (backfills, imports)
---   * locks the contact's deals on admissions boards in the application's account first (not its other deals: a fee plan or
+--   * locks the application row, then the contact's deals on admissions boards in the application's account first (not its other deals: a fee plan or
 --     a Sales card of the same contact must not wait, and fewer locks means less deadlock exposure against lifecycle_sweep),
 --     then reads the checklist and the stages in LATER statements, so a Lost move that committed while it waited
 --     (lifecycle_sweep, a person) is seen and respected
@@ -399,7 +423,9 @@ DECLARE
   v_acct uuid; c record; v_target text; v_moved int; v_prev_auto text;
 BEGIN
   IF current_setting('app.suppress_automation', true) = 'on' THEN RETURN; END IF;
-  SELECT account_id INTO v_acct FROM public.applications WHERE contact_id = p_contact_id;
+  -- The application row first, then the deals: a save of the application locks its row and then (through its trigger) the deals,
+  -- so taking them in the other order here could deadlock with it (40P01).
+  SELECT account_id INTO v_acct FROM public.applications WHERE contact_id = p_contact_id FOR UPDATE;
   IF NOT FOUND THEN RETURN; END IF;
   -- Lock first, read after: a second input committing at the same time waits here and then reads the first one's rows
   -- (every later statement takes a new snapshot), so two inputs together are never seen as half each.
@@ -640,8 +666,9 @@ $function$;
 -- The live 091 body, unchanged except the prior-stage join. 091 left a Lost deal alone when its prior stage was named
 -- Application Started, Enrolled or Lost; since 095 the stages from Provisional ID to Fee Submitted sit between those two, so the
 -- test is now by position on the deal's own board: a prior stage from Application Started through Enrolled is excluded.
--- Everything else is as 091: Lost is still excluded by name, an exit above Enrolled (Not Interested) is still not excluded, and
--- a board without those stages (stage_position is NULL) excludes nothing by position. CREATE OR REPLACE keeps the owner and
+-- Everything else is as 091: the 091 name test (Application Started, Enrolled, Lost) is kept, so this is a strict superset of 091
+-- (a board with Enrolled but no Application Started still excludes Enrolled); an exit above Enrolled (Not Interested) is still not
+-- excluded, and a board without those stages (stage_position is NULL) excludes nothing by position. CREATE OR REPLACE keeps the owner and
 -- the grants 091 set (closed to the app roles). 096_rollback.sql restores the 091 body; apply-kuanli-096.mjs guards its md5.
 CREATE OR REPLACE FUNCTION public.queue_lost_restore(p_account_id uuid, p_as_of timestamp with time zone, p_window_days integer DEFAULT 60, p_min_replies integer DEFAULT 3)
  RETURNS integer
@@ -667,7 +694,7 @@ BEGIN
       JOIN LATERAL (SELECT e.from_stage_id, e.changed_by, e.changed_at FROM deal_stage_events e
                      WHERE e.deal_id = d.id AND e.to_stage_id = d.stage_id AND e.from_stage_id IS NOT NULL
                      ORDER BY e.changed_at DESC LIMIT 1) ev ON true
-      JOIN pipeline_stages prior ON prior.id = ev.from_stage_id AND prior.name <> 'Lost'
+      JOIN pipeline_stages prior ON prior.id = ev.from_stage_id AND prior.name NOT IN ('Application Started', 'Enrolled', 'Lost')
            AND NOT coalesce(prior.position BETWEEN public.stage_position(prior.pipeline_id, 'Application Started')
                                                AND public.stage_position(prior.pipeline_id, 'Enrolled'), false)
      WHERE d.account_id = p_account_id

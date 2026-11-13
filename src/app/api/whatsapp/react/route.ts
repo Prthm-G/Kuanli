@@ -4,6 +4,7 @@ import { canSendWhatsApp, isAccountRole } from '@/lib/auth/roles';
 import { sendReactionMessage } from '@/lib/whatsapp/meta-api';
 import { decrypt } from '@/lib/whatsapp/encryption';
 import { getConfigForConversation } from '@/lib/whatsapp/config-resolver';
+import { supabaseAdmin } from '@/lib/flows/admin-client';
 import { sanitizePhoneForMeta } from '@/lib/whatsapp/phone-utils';
 import {
   checkRateLimit,
@@ -123,7 +124,7 @@ export async function POST(request: Request) {
     // number this conversation belongs to.
     let config;
     try {
-      config = await getConfigForConversation(supabase, conversation.id, accountId);
+      config = await getConfigForConversation(supabaseAdmin(), conversation.id, accountId);
     } catch {
       return NextResponse.json(
         { error: 'WhatsApp not configured.' },

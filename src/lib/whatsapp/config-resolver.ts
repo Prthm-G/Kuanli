@@ -31,7 +31,9 @@ export interface WhatsappConfigRow {
  *
  * `db` must be a service-role client (these call sites bypass RLS by design);
  * `accountId` is still passed and matched so a config from another tenant can
- * never be selected.
+ * never be selected. Since migration 099 a signed-in user's client cannot read
+ * access_token or verify_token, so a user client here fails every lookup.
+ * Callers derive `accountId` from the caller's own profile first.
  */
 export async function getConfigForConversation(
   db: SupabaseClient,

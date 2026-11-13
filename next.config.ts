@@ -62,6 +62,12 @@ const SECURITY_HEADERS = [
 
 const nextConfig: NextConfig = {
   /**
+   * Next caps request bodies that pass through the proxy (middleware) at
+   * 10 MB. Document uploads allow 16 MB (api/applications/documents), so
+   * lift the cap just above that to leave room for multipart overhead.
+   */
+  experimental: { proxyClientMaxBodySize: "17mb" },
+  /**
    * Cache-Control policy.
    *
    * Why this exists:
