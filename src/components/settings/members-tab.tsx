@@ -17,7 +17,9 @@
 //
 // Lead rotation (R2): for a member with a counsellors row, admins see
 // the branch and a Takes leads toggle (set_counsellor_active). It can
-// only be turned on after they join the Telegram leads bot.
+// only be turned on after they join the Telegram leads bot. A
+// Counsellor with no entry gets "Add to rotation". The rotation is
+// re-read when the window regains focus, so a Telegram join shows up.
 // ============================================================
 
 import { useCallback, useEffect, useState } from 'react';
@@ -27,6 +29,7 @@ import {
   KeyRound,
   Loader2,
   Plus,
+  UserPlus,
   Trash2,
 } from 'lucide-react';
 
@@ -77,11 +80,13 @@ import {
   type IssuedCredentials,
 } from './add-member-dialog';
 import { SettingsPanelHead } from './settings-panel-head';
+import { AddToRotationDialog } from './rotation-form';
 import { ROLE_META, roleLabel } from './role-meta';
 
 interface Member {
   user_id: string;
-  profile_id: string;
+  /** Admin+ only (the roster leaves it out for others). */
+  profile_id?: string;
   full_name: string;
   username: string | null;
   email: string | null;
@@ -143,9 +148,14 @@ export function MembersTab() {
   const [branchNames, setBranchNames] = useState<Map<string, string>>(
     () => new Map(),
   );
+  const [rotationLoaded, setRotationLoaded] = useState(false);
   const [togglingId, setTogglingId] = useState<string | null>(null);
+  const [rotationMember, setRotationMember] = useState<{
+    profile_id: string;
+    full_name: string;
+  } | null>(null);
 
-  const loadRotation = useCallback(async () => {
+  const loadRotation = useCallback(async (quiet = false) => {
     const supabase = createClient();
     const [cres, bres] = await Promise.all([
       supabase
@@ -155,7 +165,7 @@ export function MembersTab() {
     ]);
     if (cres.error || bres.error) {
       console.error('[MembersTab] rotation load error:', cres.error ?? bres.error);
-      toast.error('Could not load the lead rotation');
+      if (!quiet) toast.error('Could not load the lead rotation');
       return;
     }
     const entries = (cres.data ?? []) as RotationEntry[];
@@ -169,6 +179,7 @@ export function MembersTab() {
         ((bres.data ?? []) as { id: string; name: string }[]).map((b) => [b.id, b.name]),
       ),
     );
+    setRotationLoaded(true);
   }, []);
 
   const loadEverything = useCallback(async () => {
@@ -195,7 +206,12 @@ export function MembersTab() {
   }, [loadEverything]);
 
   useEffect(() => {
-    if (canManageMembers) void loadRotation();
+    if (!canManageMembers) return;
+    void loadRotation();
+    // A counsellor joins Telegram outside Kuanli; pick it up on return.
+    const onFocus = () => void loadRotation(true);
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
   }, [canManageMembers, loadRotation]);
 
   async function handleTakesLeads(entry: RotationEntry, on: boolean) {
@@ -206,11 +222,17 @@ export function MembersTab() {
         toast.error(out.error);
         return;
       }
-      setRotation((prev) => {
-        const next = new Map(prev);
-        if (entry.profile_id) next.set(entry.profile_id, { ...entry, active: on });
-        return next;
-      });
+      const key = entry.profile_id;
+      if (key) {
+        // Merge onto the current entry: a refetch may have landed meanwhile.
+        setRotation((prev) => {
+          const current = prev.get(key);
+          if (!current) return prev;
+          const next = new Map(prev);
+          next.set(key, { ...current, active: on });
+          return next;
+        });
+      }
       toast.success(on ? 'Takes leads: on' : 'Takes leads: off');
     } catch (err) {
       console.error('[MembersTab] takes leads error:', err);
@@ -442,11 +464,32 @@ export function MembersTab() {
                         </p>
                       )}
                       {(() => {
-                        const entry = canManageMembers
-                          ? rotation.get(member.profile_id)
-                          : undefined;
-                        if (!entry) return null;
+                        if (!canManageMembers || !rotationLoaded || !member.profile_id) {
+                          return null;
+                        }
+                        const entry = rotation.get(member.profile_id);
+                        if (!entry) {
+                          if (member.role !== 'agent') return null;
+                          const profileId = member.profile_id;
+                          return (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="mt-1 h-7 text-xs"
+                              onClick={() =>
+                                setRotationMember({
+                                  profile_id: profileId,
+                                  full_name: member.full_name,
+                                })
+                              }
+                            >
+                              <UserPlus className="size-3.5" />
+                              Add to rotation
+                            </Button>
+                          );
+                        }
                         const joined = entry.telegram_chat_id != null;
+                        const hintId = `telegram-hint-${entry.id}`;
                         return (
                           <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
                             {entry.branch_id && branchNames.get(entry.branch_id) && (
@@ -460,12 +503,15 @@ export function MembersTab() {
                                 onCheckedChange={(checked) =>
                                   void handleTakesLeads(entry, checked === true)
                                 }
-                                aria-label="Takes leads"
+                                aria-label={`Takes leads for ${member.full_name || 'this counsellor'}`}
+                                aria-describedby={joined ? undefined : hintId}
                               />
                               Takes leads
                             </label>
                             {!joined && (
-                              <span className="text-amber-400">Telegram not joined</span>
+                              <span id={hintId} className="text-amber-400">
+                                Telegram not joined
+                              </span>
                             )}
                           </div>
                         );
@@ -499,6 +545,7 @@ export function MembersTab() {
                         }
                       >
                         <SelectTrigger
+                          aria-label={`Role for ${member.full_name || 'this member'}`}
                           className="w-32 bg-muted border-border text-foreground"
                           disabled={isBusy}
                         >
@@ -568,6 +615,14 @@ export function MembersTab() {
           </ul>
         </CardContent>
       </Card>
+
+      <AddToRotationDialog
+        member={rotationMember}
+        onOpenChange={(open) => {
+          if (!open) setRotationMember(null);
+        }}
+        onAdded={() => void loadRotation()}
+      />
 
       <AddMemberDialog
         open={addOpen}

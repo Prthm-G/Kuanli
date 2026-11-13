@@ -73,9 +73,15 @@ export default function ContactsPage() {
   const supabase = createClient();
   const canEdit = useCan('send-messages');
   const canEditSettings = useCan('edit-settings');
-  // Lead visibility (098): admins see every lead, counsellors their own.
+  // Lead visibility (098): admins see every lead, counsellors their own,
+  // viewers none.
   const { accountRole, canManageMembers } = useAuth();
-  const isCounsellorView = !!accountRole && !canManageMembers;
+  const visibilityNote =
+    accountRole === 'agent'
+      ? 'You see the leads assigned to you.'
+      : accountRole === 'viewer'
+        ? 'Leads are visible to counsellors and admins.'
+        : null;
 
   const [contacts, setContacts] = useState<ContactWithTags[]>([]);
   const [loading, setLoading] = useState(true);
@@ -392,7 +398,7 @@ export default function ContactsPage() {
         <div>
           <h1 className="text-2xl font-bold text-foreground">Contacts</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            {isCounsellorView ? 'You see the leads assigned to you.' : 'Manage your contact list.'}{' '}
+            {visibilityNote ?? 'Manage your contact list.'}{' '}
             {totalCount > 0 &&
               (hasActiveFilters
                 ? `${totalCount} matching contacts.`

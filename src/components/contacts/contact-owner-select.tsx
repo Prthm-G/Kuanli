@@ -39,7 +39,9 @@ export function ContactOwnerSelect({
   onChanged,
 }: ContactOwnerSelectProps) {
   const [members, setMembers] = useState<AccountMember[]>([]);
-  const [branchName, setBranchName] = useState<string | null>(null);
+  const [membersLoaded, setMembersLoaded] = useState(false);
+  // Keyed by id, so a stale name never shows against another branch.
+  const [branch, setBranch] = useState<{ id: string; name: string } | null>(null);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -52,6 +54,9 @@ export function ContactOwnerSelect({
       .catch((err: unknown) => {
         console.error('[ContactOwnerSelect] members load error:', err);
         if (!cancelled) toast.error('Could not load members');
+      })
+      .finally(() => {
+        if (!cancelled) setMembersLoaded(true);
       });
     return () => {
       cancelled = true;
@@ -61,14 +66,21 @@ export function ContactOwnerSelect({
   useEffect(() => {
     if (!branchId) return;
     let cancelled = false;
-    void createClient()
+    createClient()
       .from('branches')
       .select('name')
       .eq('id', branchId)
       .maybeSingle()
-      .then(({ data }) => {
-        if (!cancelled) setBranchName((data as { name: string } | null)?.name ?? null);
-      });
+      .then(
+        ({ data, error }) => {
+          if (cancelled) return;
+          // The branch label is a nicety: on error, log and show none.
+          if (error) console.error('[ContactOwnerSelect] branch load error:', error);
+          const name = (data as { name: string } | null)?.name;
+          setBranch(name ? { id: branchId, name } : null);
+        },
+        (err: unknown) => console.error('[ContactOwnerSelect] branch load error:', err),
+      );
     return () => {
       cancelled = true;
     };
@@ -77,7 +89,11 @@ export function ContactOwnerSelect({
   const options = useMemo(
     () =>
       ownerCandidates(
-        members.map((m) => ({ ...m, full_name: m.full_name || 'Unnamed' })),
+        members.flatMap((m) =>
+          m.profile_id
+            ? [{ ...m, profile_id: m.profile_id, full_name: m.full_name || 'Unnamed' }]
+            : []
+        ),
         ownerProfileId
       ),
     [members, ownerProfileId]
@@ -115,8 +131,10 @@ export function ContactOwnerSelect({
           aria-label="Owner"
           className="bg-muted border-border text-foreground min-w-40"
         >
-          {/* Until the roster loads, an owner id has no label yet. */}
-          <SelectValue>{known ? undefined : () => 'Loading...'}</SelectValue>
+          {/* An owner id with no roster row has no label of its own. */}
+          <SelectValue>
+            {known ? undefined : () => (membersLoaded ? 'Unknown owner' : 'Loading...')}
+          </SelectValue>
         </SelectTrigger>
         <SelectContent>
           <SelectItem value={UNOWNED}>Unowned</SelectItem>
@@ -127,9 +145,9 @@ export function ContactOwnerSelect({
           ))}
         </SelectContent>
       </Select>
-      {branchId && branchName && (
+      {branchId && branch?.id === branchId && (
         <span className="text-muted-foreground">
-          Branch: <span className="text-foreground">{branchName}</span>
+          Branch: <span className="text-foreground">{branch.name}</span>
         </span>
       )}
     </div>

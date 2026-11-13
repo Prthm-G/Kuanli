@@ -12,7 +12,9 @@
 //   Sensitive fields (email) are returned only when the caller is
 //   admin+. Agents and viewers see name + avatar + role + joined
 //   date only. This mirrors the design decision from the planning
-//   phase: "agent/viewer sees names only". Usernames are admin+ too.
+//   phase: "agent/viewer sees names only". Usernames and profile_id
+//   (profiles.id, for the Owner selector and lead rotation) are admin+
+//   too.
 //
 // POST { username, fullName, role } → { login, password, profileId }
 //   Creates the login with a one-time password, shown to the admin
@@ -94,7 +96,8 @@ export async function GET() {
       return [
         {
           user_id: row.user_id,
-          profile_id: row.id,
+          // Admin+ only, like email: the Owner selector and rotation need it.
+          ...(canSeeEmails ? { profile_id: row.id } : {}),
           full_name: row.full_name ?? "",
           username: emailToUsername(loginEmails.get(row.user_id)),
           // A username member's profile email is their internal login address.

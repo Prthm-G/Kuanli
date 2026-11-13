@@ -65,7 +65,7 @@ export type AddCounsellorResult =
   | {
       ok: true;
       counsellorId: string;
-      /** Null when an existing entry was linked: it keeps its Telegram join. */
+      /** The Telegram join code; null once a linked entry has joined. */
       startCode: string | null;
       linked: boolean;
     }
@@ -135,6 +135,7 @@ export async function setCounsellorActive(
   if (error.code === '42501') {
     return { ok: false, error: 'Only an admin can change who takes leads.' };
   }
+  // 098 raises it as SQLSTATE 22023; the message is what tells it apart.
   if (/has not joined Telegram/i.test(error.message ?? '')) {
     return {
       ok: false,

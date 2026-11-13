@@ -13,12 +13,14 @@
 // Reset password flow in the Members tab.
 //
 // Counsellor (R2, Option 1): the dialog also asks for Branch and
-// WhatsApp number, and once the login exists calls add_counsellor for
-// the lead rotation entry. That entry stays inactive until they join
-// the Telegram leads bot, so the join link is shown here, once.
+// WhatsApp number (rotation-form.tsx), and once the login exists calls
+// add_counsellor for the lead rotation entry. If that fails the login
+// stays made and the dialog holds a "Finish adding to rotation" step
+// with a Retry. The entry stays inactive until they join the Telegram
+// leads bot, so the join link is shown here, once.
 // ============================================================
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { toast } from 'sonner';
 import { Copy, Loader2, MessageCircle, Sparkles } from 'lucide-react';
 
@@ -40,15 +42,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { createClient } from '@/lib/supabase/client';
-import {
-  addCounsellor,
-  defaultDisplayName,
-  isValidDisplayName,
-  normalizeWaNumber,
-  telegramJoinLink,
-} from '@/lib/counsellors/counsellors';
 import { roleLabel } from './role-meta';
+import {
+  isStrayClose,
+  RotationFields,
+  RotationJoin,
+  useRotationForm,
+  type RotationOutcome,
+} from './rotation-form';
 
 type MemberRole = 'admin' | 'agent' | 'viewer';
 
@@ -128,70 +129,6 @@ export function LoginCredentials({ credentials }: { credentials: IssuedCredentia
   );
 }
 
-interface Branch {
-  id: string;
-  code: string;
-  name: string;
-}
-
-/** What happened to the rotation entry after the login was made. */
-type CounsellorOutcome =
-  | { kind: 'code'; code: string }
-  | { kind: 'linked' }
-  | { kind: 'error'; error: string };
-
-// Public on purpose: the bot's username is in every join link. Next inlines
-// NEXT_PUBLIC_* at build time, so the image must be built with it set.
-const LEADS_BOT = process.env.NEXT_PUBLIC_TELEGRAM_LEADS_BOT;
-
-function CounsellorJoin({ outcome }: { outcome: CounsellorOutcome }) {
-  if (outcome.kind === 'linked') {
-    return (
-      <p className="rounded-md border border-border bg-muted px-3 py-2 text-sm text-foreground">
-        Linked to their existing rotation entry. Its branch, Telegram join and
-        Takes leads setting are kept.
-      </p>
-    );
-  }
-  if (outcome.kind === 'error') {
-    return (
-      <div className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300">
-        <strong className="font-semibold">The login was created</strong>, but
-        they were not added to the lead rotation: {outcome.error}
-      </div>
-    );
-  }
-  const link = telegramJoinLink(LEADS_BOT, outcome.code);
-  return (
-    <div className="space-y-2 rounded-md border border-border bg-muted px-3 py-2 text-sm">
-      <p className="text-foreground">
-        <strong className="font-semibold">Telegram join.</strong> They get no
-        leads until they join the leads bot. Send them this, then turn on
-        Takes leads in the Members list.
-      </p>
-      {link ? (
-        <a
-          href={link}
-          target="_blank"
-          rel="noreferrer noopener"
-          className="block break-all font-mono text-primary underline underline-offset-2"
-        >
-          {link}
-        </a>
-      ) : (
-        <p className="text-muted-foreground">
-          Open the Kuanli leads bot on Telegram (the same bot the other
-          counsellors use) and send:{' '}
-          <span className="font-mono text-foreground select-all">
-            /start {outcome.code}
-          </span>
-        </p>
-      )}
-      <p className="text-xs text-muted-foreground">Shown only once.</p>
-    </div>
-  );
-}
-
 interface AddMemberDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -205,42 +142,14 @@ export function AddMemberDialog({ open, onOpenChange, onCreated }: AddMemberDial
   const [role, setRole] = useState<MemberRole>('agent');
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<
-    (IssuedCredentials & { restored: boolean; counsellor: CounsellorOutcome | null }) | null
+    (IssuedCredentials & { restored: boolean; profileId: string | null }) | null
   >(null);
-
-  // Counsellor only: their lead rotation entry.
-  const [branches, setBranches] = useState<Branch[]>([]);
-  const [chosenBranch, setBranchId] = useState<string | null>(null);
-  const [waNumber, setWaNumber] = useState('');
-  const [editedDisplayName, setDisplayName] = useState<string | null>(null);
+  // Counsellor only: the rotation entry, and what add_counsellor did.
   const isCounsellor = role === 'agent';
-  // One branch needs no choice.
-  const branchId = chosenBranch ?? (branches.length === 1 ? branches[0].id : null);
-  const displayName = editedDisplayName ?? defaultDisplayName(fullName);
-  const waValid = normalizeWaNumber(waNumber) !== null;
-  const displayNameValid = isValidDisplayName(displayName.trim());
-  const counsellorReady = !isCounsellor || (!!branchId && waValid && displayNameValid);
-
-  useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-    void createClient()
-      .from('branches')
-      .select('id, code, name')
-      .order('code')
-      .then(({ data, error }) => {
-        if (cancelled) return;
-        if (error) {
-          console.error('[AddMemberDialog] branches load error:', error);
-          toast.error('Could not load branches');
-          return;
-        }
-        setBranches((data ?? []) as Branch[]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [open]);
+  const rotation = useRotationForm(open && isCounsellor, fullName);
+  const [outcome, setOutcome] = useState<RotationOutcome | null>(null);
+  const joined = outcome && outcome.kind !== 'error' ? outcome : null;
+  const needsRetry = !!result && isCounsellor && outcome?.kind === 'error';
 
   function reset() {
     setFullName('');
@@ -248,24 +157,22 @@ export function AddMemberDialog({ open, onOpenChange, onCreated }: AddMemberDial
     setRole('agent');
     setSubmitting(false);
     setResult(null);
-    setBranchId(null);
-    setWaNumber('');
-    setDisplayName(null);
+    setOutcome(null);
+    rotation.reset();
   }
 
-  async function addToRotation(profileId: unknown): Promise<CounsellorOutcome> {
-    if (typeof profileId !== 'string' || !branchId) {
-      return { kind: 'error', error: 'Kuanli could not find the new profile. Add them with the staff script.' };
+  function close() {
+    // The one-time password and join code are never kept across opens.
+    reset();
+    onOpenChange(false);
+  }
+
+  async function addToRotation(profileId: string | null) {
+    const out = await rotation.submit(profileId);
+    setOutcome(out);
+    if (out.kind === 'error') {
+      toast.error('Login created, but not added to the lead rotation');
     }
-    const out = await addCounsellor(createClient(), {
-      profileId,
-      branchId,
-      waNumber,
-      displayName,
-    });
-    if (!out.ok) return { kind: 'error', error: out.error };
-    if (out.linked || !out.startCode) return { kind: 'linked' };
-    return { kind: 'code', code: out.startCode };
   }
 
   async function handleCreate() {
@@ -282,25 +189,15 @@ export function AddMemberDialog({ open, onOpenChange, onCreated }: AddMemberDial
         return;
       }
       // The login exists from here on, whatever the rotation step does.
-      let counsellor: CounsellorOutcome | null = null;
-      if (isCounsellor) {
-        try {
-          counsellor = await addToRotation(payload.profileId);
-        } catch (err) {
-          console.error('[AddMemberDialog] add_counsellor error:', err);
-          counsellor = { kind: 'error', error: 'Could not reach the server' };
-        }
-        if (counsellor.kind === 'error') {
-          toast.error('Login created, but not added to the lead rotation');
-        }
-      }
+      const profileId = typeof payload.profileId === 'string' ? payload.profileId : null;
       setResult({
         login: payload.login,
         password: payload.password,
         restored: payload.restored === true,
-        counsellor,
+        profileId,
       });
       onCreated();
+      if (isCounsellor) await addToRotation(profileId);
     } catch (err) {
       console.error('[AddMemberDialog] create error:', err);
       toast.error('Could not reach the server');
@@ -312,10 +209,14 @@ export function AddMemberDialog({ open, onOpenChange, onCreated }: AddMemberDial
   return (
     <Dialog
       open={open}
-      onOpenChange={(next) => {
-        // The one-time password is never kept across opens.
-        if (!next) reset();
-        onOpenChange(next);
+      onOpenChange={(next, details) => {
+        // A join code is shown once: a stray click or Esc must not drop it.
+        if (!next && joined?.kind === 'code' && isStrayClose(details.reason)) {
+          details.cancel();
+          return;
+        }
+        if (!next) close();
+        else onOpenChange(true);
       }}
     >
       <DialogContent className="bg-popover border-border sm:max-w-md">
@@ -324,7 +225,11 @@ export function AddMemberDialog({ open, onOpenChange, onCreated }: AddMemberDial
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2 text-popover-foreground">
                 <Sparkles className="size-4 text-primary" />
-                {result.restored ? 'Member re-added' : 'Member added'}
+                {needsRetry
+                  ? 'Finish adding to rotation'
+                  : result.restored
+                    ? 'Member re-added'
+                    : 'Member added'}
               </DialogTitle>
               <DialogDescription className="text-muted-foreground">
                 {result.restored
@@ -333,14 +238,51 @@ export function AddMemberDialog({ open, onOpenChange, onCreated }: AddMemberDial
               </DialogDescription>
             </DialogHeader>
             <LoginCredentials credentials={result} />
-            {result.counsellor && <CounsellorJoin outcome={result.counsellor} />}
+            {joined && <RotationJoin outcome={joined} />}
+            {needsRetry && outcome?.kind === 'error' && (
+              <div className="space-y-4">
+                <div className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+                  <strong className="font-semibold">The login was created</strong>, but
+                  they were not added to the lead rotation: {outcome.error}
+                </div>
+                {result.profileId && <RotationFields form={rotation} idPrefix="member-rotation" />}
+              </div>
+            )}
             <DialogFooter className="bg-popover border-border">
-              <Button
-                onClick={() => onOpenChange(false)}
-                className="bg-primary hover:bg-primary/90 text-primary-foreground"
-              >
-                Done
-              </Button>
+              {needsRetry ? (
+                <>
+                  <Button
+                    variant="outline"
+                    onClick={close}
+                    className="border-border text-muted-foreground hover:bg-muted"
+                  >
+                    Skip for now
+                  </Button>
+                  {result.profileId && (
+                    <Button
+                      onClick={() => void addToRotation(result.profileId)}
+                      disabled={!rotation.ready || rotation.submitting}
+                      className="bg-primary hover:bg-primary/90 text-primary-foreground"
+                    >
+                      {rotation.submitting ? (
+                        <>
+                          <Loader2 className="size-4 animate-spin" />
+                          Retrying...
+                        </>
+                      ) : (
+                        'Retry'
+                      )}
+                    </Button>
+                  )}
+                </>
+              ) : (
+                <Button
+                  onClick={close}
+                  className="bg-primary hover:bg-primary/90 text-primary-foreground"
+                >
+                  Done
+                </Button>
+              )}
             </DialogFooter>
           </>
         ) : (
@@ -389,9 +331,14 @@ export function AddMemberDialog({ open, onOpenChange, onCreated }: AddMemberDial
               </div>
 
               <div className="space-y-2">
-                <Label className="text-muted-foreground">Role</Label>
+                <Label id="member-role-label" className="text-muted-foreground">
+                  Role
+                </Label>
                 <Select value={role} onValueChange={(v) => v && setRole(v as MemberRole)}>
-                  <SelectTrigger className="w-full bg-muted border-border text-foreground">
+                  <SelectTrigger
+                    aria-labelledby="member-role-label"
+                    className="w-full bg-muted border-border text-foreground"
+                  >
                     <SelectValue>{roleLabel}</SelectValue>
                   </SelectTrigger>
                   <SelectContent>
@@ -405,59 +352,7 @@ export function AddMemberDialog({ open, onOpenChange, onCreated }: AddMemberDial
 
               {isCounsellor && (
                 <>
-                  <div className="space-y-2">
-                    <Label className="text-muted-foreground">Branch</Label>
-                    <Select value={branchId} onValueChange={(v) => setBranchId(v)}>
-                      <SelectTrigger className="w-full bg-muted border-border text-foreground">
-                        <SelectValue placeholder="Pick a branch" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {branches.map((b) => (
-                          <SelectItem key={b.id} value={b.id}>
-                            {b.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="member-wa" className="text-muted-foreground">
-                      WhatsApp number
-                    </Label>
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm text-muted-foreground">+91</span>
-                      <Input
-                        id="member-wa"
-                        inputMode="numeric"
-                        placeholder="10 digits"
-                        value={waNumber}
-                        onChange={(e) => setWaNumber(e.target.value)}
-                        maxLength={16}
-                        className="bg-muted border-border text-foreground font-mono placeholder:text-muted-foreground"
-                      />
-                    </div>
-                    {waNumber.trim() && !waValid && (
-                      <p className="text-xs text-red-400">Enter a 10-digit Indian mobile number.</p>
-                    )}
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="member-display" className="text-muted-foreground">
-                      Name in lead pings
-                    </Label>
-                    <Input
-                      id="member-display"
-                      value={displayName}
-                      onChange={(e) => setDisplayName(e.target.value)}
-                      maxLength={12}
-                      className="bg-muted border-border text-foreground placeholder:text-muted-foreground"
-                    />
-                    <p className={`text-xs ${displayName && !displayNameValid ? 'text-red-400' : 'text-muted-foreground'}`}>
-                      Up to 12 letters, starting with a letter. Spaces and dots are fine.
-                    </p>
-                  </div>
-
+                  <RotationFields form={rotation} idPrefix="member-rotation" />
                   <p className="text-xs text-muted-foreground">
                     They join the lead rotation switched off. It turns on once
                     they join the Telegram leads bot and you switch on Takes
@@ -470,7 +365,7 @@ export function AddMemberDialog({ open, onOpenChange, onCreated }: AddMemberDial
             <DialogFooter className="bg-popover border-border">
               <Button
                 variant="outline"
-                onClick={() => onOpenChange(false)}
+                onClick={close}
                 className="border-border text-muted-foreground hover:bg-muted"
               >
                 Cancel
@@ -478,7 +373,10 @@ export function AddMemberDialog({ open, onOpenChange, onCreated }: AddMemberDial
               <Button
                 onClick={handleCreate}
                 disabled={
-                  submitting || !fullName.trim() || !username.trim() || !counsellorReady
+                  submitting ||
+                  !fullName.trim() ||
+                  !username.trim() ||
+                  (isCounsellor && !rotation.ready)
                 }
                 className="bg-primary hover:bg-primary/90 text-primary-foreground"
               >

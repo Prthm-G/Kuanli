@@ -60,8 +60,9 @@ export interface Account {
  */
 export interface AccountMember {
   user_id: string;
-  /** profiles.id: what contacts.owner_profile_id and counsellors.profile_id hold. */
-  profile_id: string;
+  /** profiles.id: what contacts.owner_profile_id and counsellors.profile_id
+   *  hold. Admin+ only; absent for agents and viewers. */
+  profile_id?: string;
   full_name: string;
   /** Login username (admin+ only); null for an email login. */
   username: string | null;

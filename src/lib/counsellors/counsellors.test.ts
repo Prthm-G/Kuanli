@@ -94,6 +94,16 @@ describe('addCounsellor', () => {
     });
   });
 
+  it('a linked entry not yet on Telegram comes back with its code', async () => {
+    const { db } = fakeDb({ data: [{ counsellor_id: K, telegram_start_code: 'code2', linked: true }] });
+    expect(await addCounsellor(db, input)).toEqual({
+      ok: true,
+      counsellorId: K,
+      startCode: 'code2',
+      linked: true,
+    });
+  });
+
   it('a linked existing entry comes back with no code', async () => {
     const { db } = fakeDb({ data: [{ counsellor_id: K, telegram_start_code: null, linked: true }] });
     expect(await addCounsellor(db, input)).toEqual({
@@ -145,7 +155,18 @@ describe('setCounsellorActive', () => {
     expect(rpc).toHaveBeenCalledWith('set_counsellor_active', { p_counsellor: K, p_on: true });
   });
 
-  it('explains the Telegram refusal', async () => {
+  it("explains 098's Telegram refusal (22023 + message)", async () => {
+    const { db } = fakeDb({
+      error: { code: '22023', message: 'this counsellor has not joined Telegram yet' },
+    });
+    const out = await setCounsellorActive(db, K, true);
+    expect(out).toEqual({
+      ok: false,
+      error: 'They have not joined the Telegram leads bot yet. Send them their join link first.',
+    });
+  });
+
+  it('explains the Telegram refusal by its message alone', async () => {
     const { db } = fakeDb({
       error: { code: 'P0001', message: 'Counsellor has not joined Telegram yet' },
     });
