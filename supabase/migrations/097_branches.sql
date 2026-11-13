@@ -10,13 +10,19 @@
 -- 2. branch_id on contacts, deals, counsellors (NOT NULL; defaults to the account's PTA), profiles, ad_catalog
 --    (+ ad_account_id, source); counsellor_assignments.pool_branch_id (which pool's turn an assignment used).
 -- 3. Backfill: every existing row is Patiala. Runs with session_replication_role = replica so updated_at and the
---    other row triggers do not fire on tens of thousands of rows (no Realtime or wal2json flood).
+--    other row triggers (094 guards, FK triggers: the values come from a join on account_id) do not fire. Logical
+--    decoding still sees every updated row: Realtime and wal2json get one UPDATE per contact and deal. Apply in a
+--    quiet hour; the ALTERs hold ACCESS EXCLUSIVE on contacts and deals until commit (a few seconds).
+--    A contact created after 097 has no branch until its first assignment (bot-only leads stay NULL).
 -- 4. lead_ad_branch(conv), pick_counsellor(account, contact, branch): sticky, then the ad branch's pool, then the
 --    all-branch pool. Each pool keeps its own turn order (latest assignment IN THAT POOL), so no-ad leads are a true
 --    round robin across both branches however busy one branch's ads are.
 -- 5. assign_counsellor (081), assign_counsellor_silent (090), assign_counsellor_unanswered (087): same signatures,
---    outputs, re-checks and side effects; only the rotation block changes, and a new contact takes the branch of the
---    counsellor who got it (its deals follow).
+--    outputs, re-checks and side effects; only the rotation block changes. A new contact takes its ad's branch, or for
+--    a lead with no ad the branch of the counsellor who got it (its deals follow). So a Mohali ad lead that fell back
+--    to a Patiala counsellor (nobody active in Mohali) is still a Mohali lead.
+-- 6. branch_guard_member: below admin, a logged-in member cannot set or change branch_id on contacts, deals or
+--    profiles (098 trusts these columns). Assignment (service role) and admins can.
 -- Seed data (ad ids, ad accounts) is written by devtools/apply-kuanli-branches-097.mjs, not here: this repo is public.
 -- Run with psql -1. Rollback: 097_rollback.sql.
 
@@ -90,7 +96,8 @@ ALTER TABLE public.profiles ADD CONSTRAINT profiles_branch_fk FOREIGN KEY (accou
   REFERENCES public.branches (account_id, id) ON DELETE SET NULL (branch_id);
 ALTER TABLE public.counsellors DROP CONSTRAINT IF EXISTS counsellors_branch_fk;
 ALTER TABLE public.counsellors ADD CONSTRAINT counsellors_branch_fk FOREIGN KEY (account_id, branch_id)
-  REFERENCES public.branches (account_id, id) ON DELETE RESTRICT;
+  REFERENCES public.branches (account_id, id);  -- NO ACTION: blocks deleting a branch with counsellors, but checked at
+                                                 -- statement end, so an account delete cascading to both is order-free
 ALTER TABLE public.ad_catalog DROP CONSTRAINT IF EXISTS ad_catalog_branch_fk;
 ALTER TABLE public.ad_catalog ADD CONSTRAINT ad_catalog_branch_fk FOREIGN KEY (account_id, branch_id)
   REFERENCES public.branches (account_id, id) ON DELETE SET NULL (branch_id);
@@ -271,7 +278,7 @@ BEGIN
     FROM public.pick_counsellor(v_acc, v_contact, public.lead_ad_branch(p_conversation_id)) p;
   IF v_cid IS NULL THEN RETURN; END IF;  -- nobody active: no row, the bot is still paused
   SELECT * INTO v_c FROM public.counsellors WHERE id = v_cid;
-  PERFORM public.set_lead_branch(v_contact, v_c.branch_id);
+  PERFORM public.set_lead_branch(v_contact, coalesce(public.lead_ad_branch(p_conversation_id), v_c.branch_id));
 
   -- clock_timestamp, not now(): now() is the transaction start, so a call that
   -- waited on the lock would stamp itself earlier than the call before it and
@@ -329,7 +336,7 @@ BEGIN
     FROM public.pick_counsellor(v_acc, v_contact, public.lead_ad_branch(p_conversation_id)) p;
   IF v_cid IS NULL THEN RETURN; END IF;  -- nobody active: no row; the finder offers it again next run
   SELECT * INTO v_c FROM public.counsellors WHERE id = v_cid;
-  PERFORM public.set_lead_branch(v_contact, v_c.branch_id);
+  PERFORM public.set_lead_branch(v_contact, coalesce(public.lead_ad_branch(p_conversation_id), v_c.branch_id));
 
   INSERT INTO public.counsellor_assignments (account_id, conversation_id, contact_id, counsellor_id, assigned_at, assigned_via, pool_branch_id)
   VALUES (v_acc, p_conversation_id, v_contact, v_c.id, clock_timestamp(), 'silent', v_pool)
@@ -375,7 +382,7 @@ BEGIN
     FROM public.pick_counsellor(v_acc, v_contact, public.lead_ad_branch(p_conversation_id)) p;
   IF v_cid IS NULL THEN RETURN; END IF;
   SELECT * INTO v_c FROM public.counsellors WHERE id = v_cid;
-  PERFORM public.set_lead_branch(v_contact, v_c.branch_id);
+  PERFORM public.set_lead_branch(v_contact, coalesce(public.lead_ad_branch(p_conversation_id), v_c.branch_id));
 
   INSERT INTO public.counsellor_assignments (account_id, conversation_id, contact_id, counsellor_id, assigned_at, assigned_via, pool_branch_id)
   VALUES (v_acc, p_conversation_id, v_contact, v_c.id, clock_timestamp(), 'unanswered', v_pool)
@@ -388,3 +395,33 @@ REVOKE ALL ON FUNCTION public.assign_counsellor(uuid), public.assign_counsellor_
                        public.assign_counsellor_unanswered(uuid) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.assign_counsellor(uuid), public.assign_counsellor_silent(uuid),
                           public.assign_counsellor_unanswered(uuid) TO service_role;
+
+-- 6. members below admin cannot set or move a branch -----------------------------------------------------------------
+-- 'role' is the role the request runs as (PostgREST SET ROLE), which SECURITY DEFINER does not change: an admin RPC
+-- passes on the admin check, the service role (n8n, webhook, apply scripts) and psql are never blocked. On insert the
+-- member's value is dropped (a deal then takes its contact's branch: this trigger's name sorts before
+-- deal_default_branch); on update a change is refused.
+CREATE OR REPLACE FUNCTION public.branch_guard_member()
+RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+BEGIN
+  IF current_setting('role', true) IN ('authenticated', 'anon')
+     AND NOT public.is_account_member(NEW.account_id, 'admin'::public.account_role_enum) THEN
+    IF TG_OP = 'INSERT' THEN
+      NEW.branch_id := NULL;
+    ELSIF NEW.branch_id IS DISTINCT FROM OLD.branch_id THEN
+      RAISE EXCEPTION 'branch is set by lead assignment or an admin' USING ERRCODE = '42501';
+    END IF;
+  END IF;
+  RETURN NEW;
+END $$;
+REVOKE ALL ON FUNCTION public.branch_guard_member() FROM PUBLIC, anon, authenticated, service_role;
+DROP TRIGGER IF EXISTS branch_guard_member ON public.contacts;
+CREATE TRIGGER branch_guard_member BEFORE INSERT OR UPDATE OF branch_id ON public.contacts
+  FOR EACH ROW EXECUTE FUNCTION public.branch_guard_member();
+DROP TRIGGER IF EXISTS branch_guard_member ON public.deals;
+CREATE TRIGGER branch_guard_member BEFORE INSERT OR UPDATE OF branch_id ON public.deals
+  FOR EACH ROW EXECUTE FUNCTION public.branch_guard_member();
+DROP TRIGGER IF EXISTS branch_guard_member ON public.profiles;
+CREATE TRIGGER branch_guard_member BEFORE INSERT OR UPDATE OF branch_id ON public.profiles
+  FOR EACH ROW EXECUTE FUNCTION public.branch_guard_member();

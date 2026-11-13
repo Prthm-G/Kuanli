@@ -203,6 +203,10 @@ DROP TRIGGER IF EXISTS deal_default_branch ON public.deals;
 DROP FUNCTION IF EXISTS public.deal_default_branch();
 DROP TRIGGER IF EXISTS counsellor_default_branch ON public.counsellors;
 DROP FUNCTION IF EXISTS public.counsellor_default_branch();
+DROP TRIGGER IF EXISTS branch_guard_member ON public.contacts;
+DROP TRIGGER IF EXISTS branch_guard_member ON public.deals;
+DROP TRIGGER IF EXISTS branch_guard_member ON public.profiles;
+DROP FUNCTION IF EXISTS public.branch_guard_member();
 DROP TRIGGER IF EXISTS seed_account_branches ON public.accounts;
 DROP FUNCTION IF EXISTS public.seed_account_branches();
 
