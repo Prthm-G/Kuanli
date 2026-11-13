@@ -49,3 +49,14 @@ export const ROLE_META: Record<
     className: 'border-border bg-transparent text-muted-foreground',
   },
 };
+
+/**
+ * Label for a role value, for the closed role picker. Base UI's
+ * `<Select.Value>` shows the raw value ("agent") unless given a renderer:
+ * `<SelectValue>{roleLabel}</SelectValue>`. The database value stays `agent`.
+ */
+export function roleLabel(value: unknown): string {
+  return typeof value === 'string' && value in ROLE_META
+    ? ROLE_META[value as AccountRole].label
+    : String(value ?? '');
+}

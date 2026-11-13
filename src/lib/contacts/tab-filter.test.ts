@@ -15,6 +15,10 @@ function recorder() {
       calls.push(['not', column, operator, value]);
       return q;
     },
+    is(column: string, value: null) {
+      calls.push(['is', column, value]);
+      return q;
+    },
   };
   return q;
 }
@@ -36,5 +40,11 @@ describe('applyContactTab', () => {
     const q = recorder();
     applyContactTab(q, 'enrolled');
     expect(q.calls).toEqual([['not', 'university', 'is', null]]);
+  });
+
+  it('filters Unowned on the server to contacts with no owner (098)', () => {
+    const q = recorder();
+    applyContactTab(q, 'unowned');
+    expect(q.calls).toEqual([['is', 'owner_profile_id', null]]);
   });
 });

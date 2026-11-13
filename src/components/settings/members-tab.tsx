@@ -14,6 +14,10 @@
 //   agent or viewer sees the roster read-only. The server-side
 //   RPCs (set_member_role, remove_account_member) double-check
 //   the role anyway.
+//
+// Lead rotation (R2): for a member with a counsellors row, admins see
+// the branch and a Takes leads toggle (set_counsellor_active). It can
+// only be turned on after they join the Telegram leads bot.
 // ============================================================
 
 import { useCallback, useEffect, useState } from 'react';
@@ -55,11 +59,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { Switch } from '@/components/ui/switch';
 import { RequireRole } from '@/components/auth/require-role';
 import { useAuth } from '@/hooks/use-auth';
 import { usePresence } from '@/hooks/use-presence';
 import type { AccountRole } from '@/lib/auth/roles';
 import { presenceLabel, summarize } from '@/lib/presence';
+import { createClient } from '@/lib/supabase/client';
+import { setCounsellorActive } from '@/lib/counsellors/counsellors';
 import {
   PRESENCE_DOT_CLASS,
   PresenceDot,
@@ -70,16 +77,26 @@ import {
   type IssuedCredentials,
 } from './add-member-dialog';
 import { SettingsPanelHead } from './settings-panel-head';
-import { ROLE_META } from './role-meta';
+import { ROLE_META, roleLabel } from './role-meta';
 
 interface Member {
   user_id: string;
+  profile_id: string;
   full_name: string;
   username: string | null;
   email: string | null;
   avatar_url: string | null;
   role: AccountRole;
   joined_at: string;
+}
+
+/** A counsellors row, as admins read it (migration 098). */
+interface RotationEntry {
+  id: string;
+  profile_id: string | null;
+  active: boolean;
+  branch_id: string | null;
+  telegram_chat_id: string | number | null;
 }
 
 // Editable roles in the inline dropdown. Owner is never an option —
@@ -119,6 +136,40 @@ export function MembersTab() {
   const [pendingMemberAction, setPendingMemberAction] = useState<string | null>(
     null,
   );
+  // Admin only: profile id -> rotation entry, branch id -> name.
+  const [rotation, setRotation] = useState<Map<string, RotationEntry>>(
+    () => new Map(),
+  );
+  const [branchNames, setBranchNames] = useState<Map<string, string>>(
+    () => new Map(),
+  );
+  const [togglingId, setTogglingId] = useState<string | null>(null);
+
+  const loadRotation = useCallback(async () => {
+    const supabase = createClient();
+    const [cres, bres] = await Promise.all([
+      supabase
+        .from('counsellors')
+        .select('id, profile_id, active, branch_id, telegram_chat_id'),
+      supabase.from('branches').select('id, name'),
+    ]);
+    if (cres.error || bres.error) {
+      console.error('[MembersTab] rotation load error:', cres.error ?? bres.error);
+      toast.error('Could not load the lead rotation');
+      return;
+    }
+    const entries = (cres.data ?? []) as RotationEntry[];
+    setRotation(
+      new Map(
+        entries.flatMap((e) => (e.profile_id ? [[e.profile_id, e] as const] : [])),
+      ),
+    );
+    setBranchNames(
+      new Map(
+        ((bres.data ?? []) as { id: string; name: string }[]).map((b) => [b.id, b.name]),
+      ),
+    );
+  }, []);
 
   const loadEverything = useCallback(async () => {
     try {
@@ -142,6 +193,32 @@ export function MembersTab() {
   useEffect(() => {
     void loadEverything();
   }, [loadEverything]);
+
+  useEffect(() => {
+    if (canManageMembers) void loadRotation();
+  }, [canManageMembers, loadRotation]);
+
+  async function handleTakesLeads(entry: RotationEntry, on: boolean) {
+    setTogglingId(entry.id);
+    try {
+      const out = await setCounsellorActive(createClient(), entry.id, on);
+      if (!out.ok) {
+        toast.error(out.error);
+        return;
+      }
+      setRotation((prev) => {
+        const next = new Map(prev);
+        if (entry.profile_id) next.set(entry.profile_id, { ...entry, active: on });
+        return next;
+      });
+      toast.success(on ? 'Takes leads: on' : 'Takes leads: off');
+    } catch (err) {
+      console.error('[MembersTab] takes leads error:', err);
+      toast.error('Could not reach the server');
+    } finally {
+      setTogglingId(null);
+    }
+  }
 
   async function handleRoleChange(member: Member, nextRole: AccountRole) {
     if (member.role === nextRole) return;
@@ -176,7 +253,7 @@ export function MembersTab() {
         toast.error(payload.error || 'Failed to update role');
         return;
       }
-      toast.success(`Updated ${member.full_name || 'member'} to ${nextRole}`);
+      toast.success(`Updated ${member.full_name || 'member'} to ${roleLabel(nextRole)}`);
     } catch (err) {
       // Same revert on network failure.
       setMembers((prev) =>
@@ -364,6 +441,35 @@ export function MembersTab() {
                           {member.username ? `@${member.username}` : member.email}
                         </p>
                       )}
+                      {(() => {
+                        const entry = canManageMembers
+                          ? rotation.get(member.profile_id)
+                          : undefined;
+                        if (!entry) return null;
+                        const joined = entry.telegram_chat_id != null;
+                        return (
+                          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                            {entry.branch_id && branchNames.get(entry.branch_id) && (
+                              <span>{branchNames.get(entry.branch_id)}</span>
+                            )}
+                            <label className="inline-flex items-center gap-1.5">
+                              <Switch
+                                checked={entry.active}
+                                // Turning off is always allowed; on waits for Telegram.
+                                disabled={togglingId === entry.id || (!joined && !entry.active)}
+                                onCheckedChange={(checked) =>
+                                  void handleTakesLeads(entry, checked === true)
+                                }
+                                aria-label="Takes leads"
+                              />
+                              Takes leads
+                            </label>
+                            {!joined && (
+                              <span className="text-amber-400">Telegram not joined</span>
+                            )}
+                          </div>
+                        );
+                      })()}
                     </div>
                   </div>
 
@@ -396,7 +502,7 @@ export function MembersTab() {
                           className="w-32 bg-muted border-border text-foreground"
                           disabled={isBusy}
                         >
-                          <SelectValue />
+                          <SelectValue>{roleLabel}</SelectValue>
                         </SelectTrigger>
                         <SelectContent>
                           {EDITABLE_ROLES.map((r) => (
@@ -466,7 +572,10 @@ export function MembersTab() {
       <AddMemberDialog
         open={addOpen}
         onOpenChange={setAddOpen}
-        onCreated={loadEverything}
+        onCreated={() => {
+          void loadEverything();
+          if (canManageMembers) void loadRotation();
+        }}
       />
 
       <Dialog

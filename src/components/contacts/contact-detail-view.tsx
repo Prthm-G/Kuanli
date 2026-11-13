@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
-import { canViewMoney } from '@/lib/auth/roles';
+import { canManageMembers, canViewMoney } from '@/lib/auth/roles';
 import { formatCurrency } from '@/lib/currency';
 import { toast } from 'sonner';
 import type {
@@ -16,6 +16,7 @@ import type {
 } from '@/types';
 import { CONTACT_SOURCES } from '@/lib/contacts/source';
 import { ReferrerPicker } from '@/components/contacts/referrer-picker';
+import { ContactOwnerSelect } from '@/components/contacts/contact-owner-select';
 import {
   Sheet,
   SheetContent,
@@ -62,6 +63,8 @@ export function ContactDetailView({
   const { accountId, defaultCurrency, accountRole } = useAuth();
   // Deal values are admin-only: counsellors don't get the Deals tab (KB-SP3B-MONEY).
   const showMoney = canViewMoney(accountRole);
+  // Lead owner (098): admins and the owner set it; counsellors see only their own.
+  const showOwner = !!accountRole && canManageMembers(accountRole);
 
   const [contact, setContact] = useState<Contact | null>(null);
   const [loading, setLoading] = useState(false);
@@ -432,6 +435,17 @@ export function ContactDetailView({
                       </span>
                     )}
                   </div>
+                  {showOwner && (
+                    <ContactOwnerSelect
+                      contactId={contact.id}
+                      ownerProfileId={contact.owner_profile_id ?? null}
+                      branchId={contact.branch_id ?? null}
+                      onChanged={(owner) => {
+                        setContact((c) => (c ? { ...c, owner_profile_id: owner } : c));
+                        onUpdated();
+                      }}
+                    />
+                  )}
                 </div>
               </div>
             </SheetHeader>

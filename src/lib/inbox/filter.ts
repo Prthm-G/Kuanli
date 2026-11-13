@@ -9,7 +9,27 @@ import type { Conversation, ConversationStatus } from '@/types';
  * keep a closed lead in the list. Closed chats are archived, as in the default
  * "open" view.
  */
-export type InboxFilter = ConversationStatus | 'all' | 'unread' | 'mine';
+export type InboxFilter =
+  | ConversationStatus
+  | 'all'
+  | 'unread'
+  | 'mine'
+  | 'unowned';
+
+/**
+ * "unowned" (admin only, migration 098) = open and pending chats whose lead
+ * has no owner (`contacts.owner_profile_id` null), or that have no contact at
+ * all. Those are visible to the owner and admins only, so they are the queue
+ * to hand out. A chat whose contact has not loaded yet is left out rather
+ * than guessed.
+ */
+export function isUnowned(c: Conversation): boolean {
+  if (!c.contact_id) return true;
+  return !!c.contact && !c.contact.owner_profile_id;
+}
+
+/** Filters offered only to the owner and admins. */
+export const ADMIN_ONLY_FILTERS: ReadonlySet<InboxFilter> = new Set(['unowned']);
 
 /**
  * Counsellors land on their own leads; admins and owners on the whole inbox.
@@ -33,6 +53,9 @@ export function filterConversations(
 ): Conversation[] {
   if (filter === 'all') return list;
   if (filter === 'unread') return list.filter((c) => c.unread_count > 0);
+  if (filter === 'unowned') {
+    return list.filter((c) => c.status !== 'closed' && isUnowned(c));
+  }
   if (filter === 'mine') {
     return profileId
       ? list.filter(

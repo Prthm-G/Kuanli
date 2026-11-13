@@ -91,6 +91,19 @@ export function hiddenDuplicatesNotice(count: number): string {
 }
 
 /**
+ * The CSV broadcast's message when creating its contacts fails. A duplicate
+ * there is a number held by a lead this user cannot see (094, and since 098
+ * every lead a counsellor does not own): same wording as the form, and never
+ * the raw database error, which quotes the number.
+ */
+export function csvContactsInsertError(error: { code?: string; message?: string }): string {
+  if (isUniqueViolation(error)) {
+    return "A number in this file is already in Kuanli. Ask an admin to check it, or remove it from the file.";
+  }
+  return `Failed to create CSV contacts: ${error.message ?? "unknown error"}`;
+}
+
+/**
  * De-duplicate parsed CSV rows by normalized phone, keeping the first
  * occurrence of each. Rows with an empty normalized phone are dropped
  * (they can't be a valid contact). Returns the unique rows plus the

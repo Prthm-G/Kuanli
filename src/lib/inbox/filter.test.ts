@@ -3,6 +3,7 @@ import type { Conversation } from '@/types';
 import {
   defaultInboxFilter,
   filterConversations,
+  isUnowned,
   ownerMap,
   ownersChanged,
 } from './filter';
@@ -72,6 +73,31 @@ describe('filterConversations', () => {
     expect(ids(filterConversations(LIST, 'unread', 'me', assigned))).toEqual([
       'a',
     ]);
+  });
+});
+
+describe('unowned (098)', () => {
+  const contact = (owner_profile_id: string | null) =>
+    ({ id: 'k', owner_profile_id }) as Conversation['contact'];
+  const UNOWNED_LIST = [
+    conv('u1', { contact_id: 'k1', contact: contact(null) }),
+    conv('o1', { contact_id: 'k2', contact: contact('p1') }),
+    conv('n1', { contact_id: '' }),
+    conv('l1', { contact_id: 'k3' }),
+    conv('c1', { contact_id: 'k4', contact: contact(null), status: 'closed' }),
+    conv('p1', { contact_id: 'k5', contact: contact(null), status: 'pending' }),
+  ];
+
+  it('keeps open and pending chats whose lead has no owner, or no contact', () => {
+    expect(ids(filterConversations(UNOWNED_LIST, 'unowned', 'me'))).toEqual([
+      'u1',
+      'n1',
+      'p1',
+    ]);
+  });
+
+  it('a chat whose contact has not loaded is not guessed unowned', () => {
+    expect(isUnowned(conv('x', { contact_id: 'k' }))).toBe(false);
   });
 });
 

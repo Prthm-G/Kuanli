@@ -14,9 +14,11 @@
 //   date only. This mirrors the design decision from the planning
 //   phase: "agent/viewer sees names only". Usernames are admin+ too.
 //
-// POST { username, fullName, role } → { login, password }
+// POST { username, fullName, role } → { login, password, profileId }
 //   Creates the login with a one-time password, shown to the admin
-//   once. A removed member's username brings their old login back
+//   once. `profileId` lets the dialog add a Counsellor to the lead
+//   rotation next (add_counsellor, migration 098); null if the lookup
+//   failed, which the dialog reports. A removed member's username brings their old login back
 //   (see lib/auth/member-logins.ts).
 // ============================================================
 
@@ -45,6 +47,7 @@ import type { AccountMember } from "@/types";
 const MAX_NAME_LEN = 80;
 
 interface ProfileRow {
+  id: string;
   user_id: string;
   full_name: string | null;
   email: string | null;
@@ -61,7 +64,7 @@ export async function GET() {
     // the caller's, so this query is naturally account-scoped.
     const { data, error } = await ctx.supabase
       .from("profiles")
-      .select("user_id, full_name, email, avatar_url, account_role, created_at")
+      .select("id, user_id, full_name, email, avatar_url, account_role, created_at")
       .eq("account_id", ctx.accountId)
       .order("created_at", { ascending: true });
 
@@ -91,6 +94,7 @@ export async function GET() {
       return [
         {
           user_id: row.user_id,
+          profile_id: row.id,
           full_name: row.full_name ?? "",
           username: emailToUsername(loginEmails.get(row.user_id)),
           // A username member's profile email is their internal login address.
@@ -149,16 +153,28 @@ export async function POST(request: Request) {
       );
     }
 
-    const issued = await addMember(supabaseAdmin(), {
+    const admin = supabaseAdmin();
+    const issued = await addMember(admin, {
       accountId: ctx.accountId,
       username,
       fullName,
       role,
     });
+    const { data: profile, error: profileErr } = await admin
+      .from("profiles")
+      .select("id")
+      .eq("user_id", issued.userId)
+      .eq("account_id", ctx.accountId)
+      .maybeSingle();
+    if (profileErr) {
+      // The login is made; only the follow-up step loses its id.
+      console.error("[POST /api/account/members] profile lookup failed:", profileErr);
+    }
     return NextResponse.json({
       login: issued.login,
       password: issued.password,
       restored: issued.restored ?? false,
+      profileId: (profile as { id: string } | null)?.id ?? null,
     });
   } catch (err) {
     if (err instanceof MemberLoginError) {

@@ -7,7 +7,7 @@ import { contactListQuery, withoutTagJoin } from './list-query';
 function recorder() {
   const calls: unknown[][] = [];
   const builder: Record<string, (...args: unknown[]) => unknown> = {};
-  for (const m of ['select', 'order', 'range', 'in', 'like', 'not', 'or']) {
+  for (const m of ['select', 'order', 'range', 'in', 'like', 'not', 'or', 'is']) {
     builder[m] = (...args: unknown[]) => {
       calls.push([m, ...args]);
       return builder;
@@ -58,6 +58,15 @@ describe('contactListQuery', () => {
       ['not', 'university', 'is', null],
       ['or', 'name.ilike.%kaur%,phone.ilike.%kaur%,email.ilike.%kaur%'],
     ]);
+  });
+});
+
+describe('contactListQuery: Unowned', () => {
+  it('with tags, still filters on the server and keeps the tag join', () => {
+    const { client, calls } = recorder();
+    contactListQuery(client, { ...base, tab: 'unowned', tagIds: ['t1'] });
+    expect(calls).toContainEqual(['select', '*, contact_tags!inner(tag_id)', { count: 'exact' }]);
+    expect(calls.at(-1)).toEqual(['is', 'owner_profile_id', null]);
   });
 });
 

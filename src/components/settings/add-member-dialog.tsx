@@ -11,9 +11,14 @@
 //
 // LoginCredentials is the "send this to them" panel, shared with the
 // Reset password flow in the Members tab.
+//
+// Counsellor (R2, Option 1): the dialog also asks for Branch and
+// WhatsApp number, and once the login exists calls add_counsellor for
+// the lead rotation entry. That entry stays inactive until they join
+// the Telegram leads bot, so the join link is shown here, once.
 // ============================================================
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { Copy, Loader2, MessageCircle, Sparkles } from 'lucide-react';
 
@@ -35,6 +40,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { createClient } from '@/lib/supabase/client';
+import {
+  addCounsellor,
+  defaultDisplayName,
+  isValidDisplayName,
+  normalizeWaNumber,
+  telegramJoinLink,
+} from '@/lib/counsellors/counsellors';
+import { roleLabel } from './role-meta';
 
 type MemberRole = 'admin' | 'agent' | 'viewer';
 
@@ -114,6 +128,70 @@ export function LoginCredentials({ credentials }: { credentials: IssuedCredentia
   );
 }
 
+interface Branch {
+  id: string;
+  code: string;
+  name: string;
+}
+
+/** What happened to the rotation entry after the login was made. */
+type CounsellorOutcome =
+  | { kind: 'code'; code: string }
+  | { kind: 'linked' }
+  | { kind: 'error'; error: string };
+
+// Public on purpose: the bot's username is in every join link. Next inlines
+// NEXT_PUBLIC_* at build time, so the image must be built with it set.
+const LEADS_BOT = process.env.NEXT_PUBLIC_TELEGRAM_LEADS_BOT;
+
+function CounsellorJoin({ outcome }: { outcome: CounsellorOutcome }) {
+  if (outcome.kind === 'linked') {
+    return (
+      <p className="rounded-md border border-border bg-muted px-3 py-2 text-sm text-foreground">
+        Linked to their existing rotation entry. Its branch, Telegram join and
+        Takes leads setting are kept.
+      </p>
+    );
+  }
+  if (outcome.kind === 'error') {
+    return (
+      <div className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+        <strong className="font-semibold">The login was created</strong>, but
+        they were not added to the lead rotation: {outcome.error}
+      </div>
+    );
+  }
+  const link = telegramJoinLink(LEADS_BOT, outcome.code);
+  return (
+    <div className="space-y-2 rounded-md border border-border bg-muted px-3 py-2 text-sm">
+      <p className="text-foreground">
+        <strong className="font-semibold">Telegram join.</strong> They get no
+        leads until they join the leads bot. Send them this, then turn on
+        Takes leads in the Members list.
+      </p>
+      {link ? (
+        <a
+          href={link}
+          target="_blank"
+          rel="noreferrer noopener"
+          className="block break-all font-mono text-primary underline underline-offset-2"
+        >
+          {link}
+        </a>
+      ) : (
+        <p className="text-muted-foreground">
+          Open the Kuanli leads bot on Telegram (the same bot the other
+          counsellors use) and send:{' '}
+          <span className="font-mono text-foreground select-all">
+            /start {outcome.code}
+          </span>
+        </p>
+      )}
+      <p className="text-xs text-muted-foreground">Shown only once.</p>
+    </div>
+  );
+}
+
 interface AddMemberDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -126,7 +204,43 @@ export function AddMemberDialog({ open, onOpenChange, onCreated }: AddMemberDial
   const [username, setUsername] = useState('');
   const [role, setRole] = useState<MemberRole>('agent');
   const [submitting, setSubmitting] = useState(false);
-  const [result, setResult] = useState<(IssuedCredentials & { restored: boolean }) | null>(null);
+  const [result, setResult] = useState<
+    (IssuedCredentials & { restored: boolean; counsellor: CounsellorOutcome | null }) | null
+  >(null);
+
+  // Counsellor only: their lead rotation entry.
+  const [branches, setBranches] = useState<Branch[]>([]);
+  const [chosenBranch, setBranchId] = useState<string | null>(null);
+  const [waNumber, setWaNumber] = useState('');
+  const [editedDisplayName, setDisplayName] = useState<string | null>(null);
+  const isCounsellor = role === 'agent';
+  // One branch needs no choice.
+  const branchId = chosenBranch ?? (branches.length === 1 ? branches[0].id : null);
+  const displayName = editedDisplayName ?? defaultDisplayName(fullName);
+  const waValid = normalizeWaNumber(waNumber) !== null;
+  const displayNameValid = isValidDisplayName(displayName.trim());
+  const counsellorReady = !isCounsellor || (!!branchId && waValid && displayNameValid);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    void createClient()
+      .from('branches')
+      .select('id, code, name')
+      .order('code')
+      .then(({ data, error }) => {
+        if (cancelled) return;
+        if (error) {
+          console.error('[AddMemberDialog] branches load error:', error);
+          toast.error('Could not load branches');
+          return;
+        }
+        setBranches((data ?? []) as Branch[]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
 
   function reset() {
     setFullName('');
@@ -134,6 +248,24 @@ export function AddMemberDialog({ open, onOpenChange, onCreated }: AddMemberDial
     setRole('agent');
     setSubmitting(false);
     setResult(null);
+    setBranchId(null);
+    setWaNumber('');
+    setDisplayName(null);
+  }
+
+  async function addToRotation(profileId: unknown): Promise<CounsellorOutcome> {
+    if (typeof profileId !== 'string' || !branchId) {
+      return { kind: 'error', error: 'Kuanli could not find the new profile. Add them with the staff script.' };
+    }
+    const out = await addCounsellor(createClient(), {
+      profileId,
+      branchId,
+      waNumber,
+      displayName,
+    });
+    if (!out.ok) return { kind: 'error', error: out.error };
+    if (out.linked || !out.startCode) return { kind: 'linked' };
+    return { kind: 'code', code: out.startCode };
   }
 
   async function handleCreate() {
@@ -149,10 +281,24 @@ export function AddMemberDialog({ open, onOpenChange, onCreated }: AddMemberDial
         toast.error(payload.error || 'Failed to add member');
         return;
       }
+      // The login exists from here on, whatever the rotation step does.
+      let counsellor: CounsellorOutcome | null = null;
+      if (isCounsellor) {
+        try {
+          counsellor = await addToRotation(payload.profileId);
+        } catch (err) {
+          console.error('[AddMemberDialog] add_counsellor error:', err);
+          counsellor = { kind: 'error', error: 'Could not reach the server' };
+        }
+        if (counsellor.kind === 'error') {
+          toast.error('Login created, but not added to the lead rotation');
+        }
+      }
       setResult({
         login: payload.login,
         password: payload.password,
         restored: payload.restored === true,
+        counsellor,
       });
       onCreated();
     } catch (err) {
@@ -187,6 +333,7 @@ export function AddMemberDialog({ open, onOpenChange, onCreated }: AddMemberDial
               </DialogDescription>
             </DialogHeader>
             <LoginCredentials credentials={result} />
+            {result.counsellor && <CounsellorJoin outcome={result.counsellor} />}
             <DialogFooter className="bg-popover border-border">
               <Button
                 onClick={() => onOpenChange(false)}
@@ -245,7 +392,7 @@ export function AddMemberDialog({ open, onOpenChange, onCreated }: AddMemberDial
                 <Label className="text-muted-foreground">Role</Label>
                 <Select value={role} onValueChange={(v) => v && setRole(v as MemberRole)}>
                   <SelectTrigger className="w-full bg-muted border-border text-foreground">
-                    <SelectValue />
+                    <SelectValue>{roleLabel}</SelectValue>
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="admin">Admin</SelectItem>
@@ -255,6 +402,69 @@ export function AddMemberDialog({ open, onOpenChange, onCreated }: AddMemberDial
                 </Select>
                 <p className="text-xs text-muted-foreground">{ROLE_DESCRIPTIONS[role]}</p>
               </div>
+
+              {isCounsellor && (
+                <>
+                  <div className="space-y-2">
+                    <Label className="text-muted-foreground">Branch</Label>
+                    <Select value={branchId} onValueChange={(v) => setBranchId(v)}>
+                      <SelectTrigger className="w-full bg-muted border-border text-foreground">
+                        <SelectValue placeholder="Pick a branch" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {branches.map((b) => (
+                          <SelectItem key={b.id} value={b.id}>
+                            {b.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="member-wa" className="text-muted-foreground">
+                      WhatsApp number
+                    </Label>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm text-muted-foreground">+91</span>
+                      <Input
+                        id="member-wa"
+                        inputMode="numeric"
+                        placeholder="10 digits"
+                        value={waNumber}
+                        onChange={(e) => setWaNumber(e.target.value)}
+                        maxLength={16}
+                        className="bg-muted border-border text-foreground font-mono placeholder:text-muted-foreground"
+                      />
+                    </div>
+                    {waNumber.trim() && !waValid && (
+                      <p className="text-xs text-red-400">Enter a 10-digit Indian mobile number.</p>
+                    )}
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="member-display" className="text-muted-foreground">
+                      Name in lead pings
+                    </Label>
+                    <Input
+                      id="member-display"
+                      value={displayName}
+                      onChange={(e) => setDisplayName(e.target.value)}
+                      maxLength={12}
+                      className="bg-muted border-border text-foreground placeholder:text-muted-foreground"
+                    />
+                    <p className={`text-xs ${displayName && !displayNameValid ? 'text-red-400' : 'text-muted-foreground'}`}>
+                      Up to 12 letters, starting with a letter. Spaces and dots are fine.
+                    </p>
+                  </div>
+
+                  <p className="text-xs text-muted-foreground">
+                    They join the lead rotation switched off. It turns on once
+                    they join the Telegram leads bot and you switch on Takes
+                    leads.
+                  </p>
+                </>
+              )}
             </div>
 
             <DialogFooter className="bg-popover border-border">
@@ -267,7 +477,9 @@ export function AddMemberDialog({ open, onOpenChange, onCreated }: AddMemberDial
               </Button>
               <Button
                 onClick={handleCreate}
-                disabled={submitting || !fullName.trim() || !username.trim()}
+                disabled={
+                  submitting || !fullName.trim() || !username.trim() || !counsellorReady
+                }
                 className="bg-primary hover:bg-primary/90 text-primary-foreground"
               >
                 {submitting ? (

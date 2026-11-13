@@ -60,6 +60,8 @@ export interface Account {
  */
 export interface AccountMember {
   user_id: string;
+  /** profiles.id: what contacts.owner_profile_id and counsellors.profile_id hold. */
+  profile_id: string;
   full_name: string;
   /** Login username (admin+ only); null for an email login. */
   username: string | null;
@@ -131,6 +133,12 @@ export interface Contact {
   /** The contact who referred this one (migration 096). Same account only;
    *  null when unset or the referrer was deleted. */
   referred_by_contact_id?: string | null;
+  /** Branch of the lead (migration 097). Admin-written only. */
+  branch_id?: string | null;
+  /** Owner of the lead, a profiles.id (migration 098). A counsellor sees only
+   *  the leads they own; null = unowned (owner and admins only). Written
+   *  through the `set_contact_owner` RPC, never directly. */
+  owner_profile_id?: string | null;
 }
 
 export type ContactSource = 'organic' | 'ads' | 'reference' | 'walkin';

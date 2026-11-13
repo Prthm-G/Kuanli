@@ -4,6 +4,7 @@ import {
   dedupeByPhone,
   findExistingContact,
   HIDDEN_DUPLICATE_MESSAGE,
+  csvContactsInsertError,
   hiddenDuplicatesNotice,
   isExactMatch,
   isUniqueViolation,
@@ -109,6 +110,25 @@ describe("hiddenDuplicatesNotice", () => {
   it("several: counts them and names nobody", () => {
     expect(hiddenDuplicatesNotice(3)).toBe(
       "3 numbers are already in Kuanli. Ask an admin to check them."
+    );
+  });
+});
+
+describe("csvContactsInsertError", () => {
+  it("a duplicate number: the hidden-lead notice, not the raw error", () => {
+    const msg = csvContactsInsertError({
+      code: "23505",
+      message: `duplicate key value, Key (account_id, phone_normalized)=(acc, 1555${"0".repeat(7)})`,
+    });
+    expect(msg).toBe(
+      "A number in this file is already in Kuanli. Ask an admin to check it, or remove it from the file."
+    );
+    expect(msg).not.toMatch(/\d{6,}/);
+  });
+
+  it("anything else keeps the database message", () => {
+    expect(csvContactsInsertError({ code: "23502", message: "null value" })).toBe(
+      "Failed to create CSV contacts: null value"
     );
   });
 });

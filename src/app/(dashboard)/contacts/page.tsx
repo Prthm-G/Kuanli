@@ -55,6 +55,7 @@ import { ContactDetailView } from '@/components/contacts/contact-detail-view';
 import { ImportModal } from '@/components/contacts/import-modal';
 import { CustomFieldsManager } from '@/components/contacts/custom-fields-manager';
 import { useCan } from '@/hooks/use-can';
+import { useAuth } from '@/hooks/use-auth';
 import { GatedButton } from '@/components/ui/gated-button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { loadNotInterestedContacts } from '@/lib/contacts/not-interested';
@@ -72,6 +73,9 @@ export default function ContactsPage() {
   const supabase = createClient();
   const canEdit = useCan('send-messages');
   const canEditSettings = useCan('edit-settings');
+  // Lead visibility (098): admins see every lead, counsellors their own.
+  const { accountRole, canManageMembers } = useAuth();
+  const isCounsellorView = !!accountRole && !canManageMembers;
 
   const [contacts, setContacts] = useState<ContactWithTags[]>([]);
   const [loading, setLoading] = useState(true);
@@ -388,7 +392,7 @@ export default function ContactsPage() {
         <div>
           <h1 className="text-2xl font-bold text-foreground">Contacts</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Manage your contact list.{' '}
+            {isCounsellorView ? 'You see the leads assigned to you.' : 'Manage your contact list.'}{' '}
             {totalCount > 0 &&
               (hasActiveFilters
                 ? `${totalCount} matching contacts.`
@@ -434,6 +438,9 @@ export default function ContactsPage() {
         <button onClick={() => selectTab('leads')} className={`pb-2 text-sm font-medium transition-colors hover:text-foreground ${activeTab === 'leads' ? 'border-b-2 border-primary text-foreground' : 'text-muted-foreground'}`}>Leads (Temp ID)</button>
         <button onClick={() => selectTab('enrolled')} className={`pb-2 text-sm font-medium transition-colors hover:text-foreground ${activeTab === 'enrolled' ? 'border-b-2 border-primary text-foreground' : 'text-muted-foreground'}`}>Enrolled</button>
         <button onClick={() => selectTab('not_interested')} className={`pb-2 text-sm font-medium transition-colors hover:text-foreground ${activeTab === 'not_interested' ? 'border-b-2 border-primary text-foreground' : 'text-muted-foreground'}`}>Not interested</button>
+        {canManageMembers && (
+          <button onClick={() => selectTab('unowned')} className={`pb-2 text-sm font-medium transition-colors hover:text-foreground ${activeTab === 'unowned' ? 'border-b-2 border-primary text-foreground' : 'text-muted-foreground'}`}>Unowned</button>
+        )}
       </div>
 
       {/* Search + tag filter */}

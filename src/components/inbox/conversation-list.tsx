@@ -16,6 +16,7 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { sortConversationsByActivity } from "@/lib/inbox/conversation-order";
 import {
+  ADMIN_ONLY_FILTERS,
   defaultInboxFilter,
   filterConversations,
   ownerMap,
@@ -66,6 +67,7 @@ const STATUS_COLORS: Record<ConversationStatus, string> = {
 const FILTER_OPTIONS: { label: string; value: InboxFilter }[] = [
   { label: "All", value: "all" },
   { label: "My leads", value: "mine" },
+  { label: "Unowned", value: "unowned" },
   { label: "Unread", value: "unread" },
   { label: "Open", value: "open" },
   { label: "Pending", value: "pending" },
@@ -101,7 +103,14 @@ export function ConversationList({
   const numberFilter = numberOptions.some((o) => o.value === chosenNumber)
     ? chosenNumber
     : "all";
-  const { profile, accountRole } = useAuth();
+  const { profile, accountRole, canManageMembers } = useAuth();
+  const filterOptions = useMemo(
+    () =>
+      FILTER_OPTIONS.filter(
+        (o) => canManageMembers || !ADMIN_ONLY_FILTERS.has(o.value),
+      ),
+    [canManageMembers],
+  );
   const profileId = profile?.id;
   const [search, setSearch] = useState("");
   // Closed conversations are archived. They remain available through
@@ -284,7 +293,7 @@ export function ConversationList({
     [onSelect]
   );
 
-  const activeFilter = FILTER_OPTIONS.find((o) => o.value === filter);
+  const activeFilter = filterOptions.find((o) => o.value === filter);
   const activeNumber = numberOptions.find((o) => o.value === numberFilter);
 
   return (
@@ -314,7 +323,7 @@ export function ConversationList({
               align="start"
               className="border-border bg-popover"
             >
-              {FILTER_OPTIONS.map((opt) => (
+              {filterOptions.map((opt) => (
                 <DropdownMenuItem
                   key={opt.value}
                   onClick={() => setFilter(opt.value)}
