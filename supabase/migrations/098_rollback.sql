@@ -24,6 +24,28 @@ CREATE POLICY contacts_delete ON public.contacts FOR DELETE USING (
   public.is_account_member(account_id, 'agent'::public.account_role_enum)
   AND (NOT counsellor_number_only OR public.can_see_counsellor_chats(account_id)));
 
+-- 4b. automations and flows: agents write them again (017)
+DROP POLICY IF EXISTS automations_insert ON public.automations;
+CREATE POLICY automations_insert ON public.automations FOR INSERT WITH CHECK (is_account_member(account_id, 'agent'::account_role_enum));
+DROP POLICY IF EXISTS automations_update ON public.automations;
+CREATE POLICY automations_update ON public.automations FOR UPDATE USING (is_account_member(account_id, 'agent'::account_role_enum));
+DROP POLICY IF EXISTS automations_delete ON public.automations;
+CREATE POLICY automations_delete ON public.automations FOR DELETE USING (is_account_member(account_id, 'agent'::account_role_enum));
+DROP POLICY IF EXISTS flows_insert ON public.flows;
+CREATE POLICY flows_insert ON public.flows FOR INSERT WITH CHECK (is_account_member(account_id, 'agent'::account_role_enum));
+DROP POLICY IF EXISTS flows_update ON public.flows;
+CREATE POLICY flows_update ON public.flows FOR UPDATE USING (is_account_member(account_id, 'agent'::account_role_enum));
+DROP POLICY IF EXISTS flows_delete ON public.flows;
+CREATE POLICY flows_delete ON public.flows FOR DELETE USING (is_account_member(account_id, 'agent'::account_role_enum));
+DROP POLICY IF EXISTS automation_steps_modify ON public.automation_steps;
+CREATE POLICY automation_steps_modify ON public.automation_steps FOR ALL
+  USING (EXISTS (SELECT 1 FROM automations a WHERE a.id = automation_steps.automation_id AND is_account_member(a.account_id, 'agent'::account_role_enum)))
+  WITH CHECK (EXISTS (SELECT 1 FROM automations a WHERE a.id = automation_steps.automation_id AND is_account_member(a.account_id, 'agent'::account_role_enum)));
+DROP POLICY IF EXISTS flow_nodes_modify ON public.flow_nodes;
+CREATE POLICY flow_nodes_modify ON public.flow_nodes FOR ALL
+  USING (EXISTS (SELECT 1 FROM flows f WHERE f.id = flow_nodes.flow_id AND is_account_member(f.account_id, 'agent'::account_role_enum)))
+  WITH CHECK (EXISTS (SELECT 1 FROM flows f WHERE f.id = flow_nodes.flow_id AND is_account_member(f.account_id, 'agent'::account_role_enum)));
+
 -- 5. the readers, as 093/094/095/096 left them
 CREATE OR REPLACE FUNCTION public.application_tracker(p_account_id uuid)
  RETURNS jsonb

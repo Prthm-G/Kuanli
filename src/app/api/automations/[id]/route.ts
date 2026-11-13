@@ -23,11 +23,11 @@ async function requireUser() {
 /**
  * PATCH and DELETE write through `supabaseAdmin()`, which bypasses the
  * `automations_update` / `automations_delete` policies and their
- * `agent` minimum. Without this a read-only viewer could edit and
+ * `admin` minimum (098). Without this a read-only viewer could edit and
  * delete automations (GHSA-34q7-fv77-625j). Mirrors the RLS minimum
  * rather than inventing one.
  */
-async function isAtLeastAgent(userId: string): Promise<boolean> {
+async function isAtLeastAdmin(userId: string): Promise<boolean> {
   const supabase = await createClient()
   const { data: profile } = await supabase
     .from('profiles')
@@ -35,11 +35,11 @@ async function isAtLeastAgent(userId: string): Promise<boolean> {
     .eq('user_id', userId)
     .maybeSingle()
   const role = profile?.account_role
-  return isAccountRole(role) && hasMinRole(role, 'agent')
+  return isAccountRole(role) && hasMinRole(role, 'admin')
 }
 
 const FORBIDDEN = NextResponse.json(
-  { error: 'This action requires the agent role or higher.' },
+  { error: 'This action requires the admin role or higher.' },
   { status: 403 },
 )
 
@@ -73,7 +73,7 @@ export async function PATCH(
   const { id } = await params
   const user = await requireUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  if (!(await isAtLeastAgent(user.id))) return FORBIDDEN
+  if (!(await isAtLeastAdmin(user.id))) return FORBIDDEN
 
   const body = await request.json().catch(() => null)
   if (!body) return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
@@ -152,7 +152,7 @@ export async function DELETE(
   const { id } = await params
   const user = await requireUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  if (!(await isAtLeastAgent(user.id))) return FORBIDDEN
+  if (!(await isAtLeastAdmin(user.id))) return FORBIDDEN
 
   const { error } = await supabaseAdmin()
     .from('automations')

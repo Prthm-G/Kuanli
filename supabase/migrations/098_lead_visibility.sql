@@ -19,6 +19,7 @@
 -- 4. RLS: contacts SELECT/UPDATE/DELETE add "own lead or admin", so every table 094 hangs off a contact follows. Restrictive
 --    own_leads_only on conversations (and so messages, reactions, Realtime), deals with no contact, meta_conversion_
 --    events, flow_runs, automation_logs.
+-- 4b. Automations and flows (they run as the service role on every lead): admins write them, members read.
 -- 5. The SECURITY DEFINER readers that hand lead rows or counts to members get the same rule (below admin: own leads):
 --    lead_queue, application_tracker, follow_up_worklist, follow_up_timeline, follow_up_overdue_count, payment_ledger,
 --    funnel_analytics, pipeline_funnel, update_contact_enrollment, apply_fee_template. duplicate_payment_reference
@@ -183,14 +184,16 @@ DROP TRIGGER IF EXISTS contact_owner_from_assignment ON public.counsellor_assign
 CREATE TRIGGER contact_owner_from_assignment AFTER INSERT ON public.counsellor_assignments
   FOR EACH ROW EXECUTE FUNCTION public.contact_owner_from_assignment();
 
--- A chat assigned to someone: a human's "Assign" in Kuanli moves the lead; the bot, the webhook and crons
+-- A chat assigned to someone: an admin's "Assign" in Kuanli moves the lead; the bot, the webhook and crons
 -- (mark_counsellor_reached) only fill an empty owner. Clearing a chat's assignee never removes the owner.
 CREATE OR REPLACE FUNCTION public.contact_owner_from_chat()
 RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 BEGIN
   IF NEW.contact_id IS NULL OR NEW.assigned_agent_id IS NULL OR NEW.assigned_agent_id IS NOT DISTINCT FROM OLD.assigned_agent_id
-     OR NOT EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = NEW.assigned_agent_id AND p.account_id = NEW.account_id) THEN
+     OR NOT EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = NEW.assigned_agent_id AND p.account_id = NEW.account_id)
+     -- a counsellor re-assigning their own chat does not hand the lead over (only admins move leads)
+     OR (auth.uid() IS NOT NULL AND NOT public.is_account_member(NEW.account_id, 'admin'::public.account_role_enum)) THEN
     RETURN NULL;
   END IF;
   PERFORM public.set_owner_trusted(NEW.contact_id, NEW.assigned_agent_id,
@@ -277,6 +280,29 @@ BEGIN
              OR EXISTS (SELECT 1 FROM public.contacts ct WHERE ct.id = %1$I.contact_id))$p$, t);
   END LOOP;
 END $$;
+
+-- 4b. Automations and flows run with the service role on every lead of the account (a webhook step, a send, a field
+-- update), so from R2 only admins write them; members still read them.
+DO $$
+DECLARE t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['automations', 'flows'] LOOP
+    EXECUTE format('DROP POLICY IF EXISTS %1$s_insert ON public.%1$I', t);
+    EXECUTE format('CREATE POLICY %1$s_insert ON public.%1$I FOR INSERT WITH CHECK (public.is_account_member(account_id, ''admin''::public.account_role_enum))', t);
+    EXECUTE format('DROP POLICY IF EXISTS %1$s_update ON public.%1$I', t);
+    EXECUTE format('CREATE POLICY %1$s_update ON public.%1$I FOR UPDATE USING (public.is_account_member(account_id, ''admin''::public.account_role_enum))', t);
+    EXECUTE format('DROP POLICY IF EXISTS %1$s_delete ON public.%1$I', t);
+    EXECUTE format('CREATE POLICY %1$s_delete ON public.%1$I FOR DELETE USING (public.is_account_member(account_id, ''admin''::public.account_role_enum))', t);
+  END LOOP;
+END $$;
+DROP POLICY IF EXISTS automation_steps_modify ON public.automation_steps;
+CREATE POLICY automation_steps_modify ON public.automation_steps FOR ALL
+  USING (EXISTS (SELECT 1 FROM public.automations a WHERE a.id = automation_steps.automation_id AND public.is_account_member(a.account_id, 'admin'::public.account_role_enum)))
+  WITH CHECK (EXISTS (SELECT 1 FROM public.automations a WHERE a.id = automation_steps.automation_id AND public.is_account_member(a.account_id, 'admin'::public.account_role_enum)));
+DROP POLICY IF EXISTS flow_nodes_modify ON public.flow_nodes;
+CREATE POLICY flow_nodes_modify ON public.flow_nodes FOR ALL
+  USING (EXISTS (SELECT 1 FROM public.flows f WHERE f.id = flow_nodes.flow_id AND public.is_account_member(f.account_id, 'admin'::public.account_role_enum)))
+  WITH CHECK (EXISTS (SELECT 1 FROM public.flows f WHERE f.id = flow_nodes.flow_id AND public.is_account_member(f.account_id, 'admin'::public.account_role_enum)));
 
 -- 5. the SECURITY DEFINER readers (bodies copied from 093/094/095/096; signatures, grants and search_path unchanged) -----
 CREATE OR REPLACE FUNCTION public.application_tracker(p_account_id uuid)
@@ -1143,7 +1169,8 @@ AS $function$
 -- RLS, so they follow ownership), or by the person who uploaded it (a receipt is uploaded before its row exists, and an
 -- upload reads its own object back). Signed links the server makes with the service role are unchanged.
 CREATE INDEX IF NOT EXISTS application_documents_storage_path ON public.application_documents (storage_path);
-CREATE INDEX IF NOT EXISTS payment_receipts_storage_path ON public.payment_receipts (storage_path);
+-- unique: one receipt row per stored file, so a member cannot add a receipt row naming somebody else's file to read it
+CREATE UNIQUE INDEX IF NOT EXISTS payment_receipts_storage_path ON public.payment_receipts (storage_path);
 
 DROP POLICY IF EXISTS "Members read application docs" ON storage.objects;
 CREATE POLICY "Members read application docs" ON storage.objects FOR SELECT USING (

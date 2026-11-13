@@ -47,12 +47,12 @@ export async function POST(request: Request) {
     )
   }
   // The insert below uses the admin client, which bypasses the
-  // `automations_insert` policy's `agent` minimum — enforce it here or
+  // `automations_insert` policy's `admin` minimum (098: automations and flows act on every lead as the service role, so only admins write them) — enforce it here or
   // a viewer could create automations (GHSA-34q7-fv77-625j).
   const role = profile?.account_role
-  if (!isAccountRole(role) || !hasMinRole(role, 'agent')) {
+  if (!isAccountRole(role) || !hasMinRole(role, 'admin')) {
     return NextResponse.json(
-      { error: 'This action requires the agent role or higher.' },
+      { error: 'This action requires the admin role or higher.' },
       { status: 403 },
     )
   }

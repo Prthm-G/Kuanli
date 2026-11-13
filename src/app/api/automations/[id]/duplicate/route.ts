@@ -15,7 +15,7 @@ export async function POST(
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   // Duplicating inserts a new automation through the admin client,
-  // which bypasses the `automations_insert` policy's `agent` minimum
+  // which bypasses the `automations_insert` policy's `admin` minimum (098: automations and flows act on every lead as the service role, so only admins write them)
   // (GHSA-34q7-fv77-625j).
   const { data: profile } = await supabase
     .from('profiles')
@@ -23,9 +23,9 @@ export async function POST(
     .eq('user_id', user.id)
     .maybeSingle()
   const role = profile?.account_role
-  if (!isAccountRole(role) || !hasMinRole(role, 'agent')) {
+  if (!isAccountRole(role) || !hasMinRole(role, 'admin')) {
     return NextResponse.json(
-      { error: 'This action requires the agent role or higher.' },
+      { error: 'This action requires the admin role or higher.' },
       { status: 403 },
     )
   }

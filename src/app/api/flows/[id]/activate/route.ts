@@ -34,7 +34,7 @@ export async function POST(
 
   // Changing a flow's status is a write, and the write below goes
   // through supabaseAdmin() which bypasses the `flows_update` policy's
-  // `agent` minimum. Check it here or a viewer could activate and
+  // `admin` minimum (098). Check it here or a viewer could activate and
   // archive flows (GHSA-34q7-fv77-625j).
   const { data: profile } = await supabase
     .from('profiles')
@@ -42,9 +42,9 @@ export async function POST(
     .eq('user_id', user.id)
     .maybeSingle();
   const role = profile?.account_role;
-  if (!isAccountRole(role) || !hasMinRole(role, 'agent')) {
+  if (!isAccountRole(role) || !hasMinRole(role, 'admin')) {
     return NextResponse.json(
-      { error: 'This action requires the agent role or higher.' },
+      { error: 'This action requires the admin role or higher.' },
       { status: 403 }
     );
   }

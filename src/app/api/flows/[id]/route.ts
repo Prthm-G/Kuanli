@@ -25,7 +25,7 @@ import { hasMinRole, isAccountRole, type AccountRole } from '@/lib/auth/roles';
  * `flows_select` policy is `is_account_member(account_id)` with no
  * minimum role, so a viewer passes the lookup below — but the writes
  * in this file go through `supabaseAdmin()`, which bypasses the
- * `flows_update` / `flows_delete` policies that do require `agent`.
+ * `flows_update` / `flows_delete` policies that require `admin` (098).
  * Without an explicit check here a read-only viewer could edit and
  * delete flows. Mirror the RLS minimum rather than inventing one, so
  * the route guard and the policy can't drift apart.
@@ -120,7 +120,7 @@ export async function PUT(
   context: { params: Promise<{ id: string }> }
 ) {
   const { id } = await context.params;
-  const guard = await requireOwnership(id, 'agent');
+  const guard = await requireOwnership(id, 'admin');
   if (!guard.ok) return NextResponse.json(guard.body, { status: guard.status });
 
   const body = (await request.json().catch(() => null)) as PutBody | null;
@@ -206,7 +206,7 @@ export async function DELETE(
   context: { params: Promise<{ id: string }> }
 ) {
   const { id } = await context.params;
-  const guard = await requireOwnership(id, 'agent');
+  const guard = await requireOwnership(id, 'admin');
   if (!guard.ok) return NextResponse.json(guard.body, { status: guard.status });
 
   // CASCADE on flow_nodes / flow_runs / flow_run_events handles the
