@@ -285,3 +285,56 @@ REVOKE ALL ON FUNCTION public.form_lead_phone(text), public.ingest_form_lead(uui
 GRANT EXECUTE ON FUNCTION public.form_lead_phone(text), public.ingest_form_lead(uuid, uuid, uuid, timestamptz, jsonb),
   public.form_lead_poll_window(text, timestamptz), public.form_lead_poll_ok(text), public.form_lead_poll_failed(text, text),
   public.form_lead_alerted(uuid) TO service_role;
+
+-- 5. pick_counsellor (097) ------------------------------------------------------------------------------------------
+-- As live (097) except the sticky step, which now also counts form-lead hand-offs: the latest hand-off wins, so a
+-- student given to a counsellor through the form goes to the same counsellor when they ask for one on WhatsApp.
+CREATE OR REPLACE FUNCTION public.pick_counsellor(p_account uuid, p_contact uuid, p_branch uuid)
+RETURNS TABLE (counsellor_id uuid, is_new boolean, pool_branch_id uuid)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+#variable_conflict use_column
+DECLARE
+  v_id     uuid;
+  v_active boolean;
+BEGIN
+  SELECT x.id, x.active INTO v_id, v_active
+    FROM (SELECT c.id, c.active, a.assigned_at AS at
+            FROM public.counsellor_assignments a JOIN public.counsellors c ON c.id = a.counsellor_id
+           WHERE a.contact_id = p_contact AND c.account_id = p_account
+          UNION ALL
+          SELECT c.id, c.active, f.assigned_at
+            FROM public.meta_form_leads f JOIN public.counsellors c ON c.id = f.counsellor_id
+           WHERE f.contact_id = p_contact AND c.account_id = p_account) x
+   ORDER BY x.at DESC LIMIT 1;
+  IF v_id IS NOT NULL AND v_active THEN
+    RETURN QUERY SELECT v_id, false, p_branch;
+    RETURN;
+  END IF;
+
+  IF p_branch IS NOT NULL THEN
+    SELECT c.id INTO v_id
+      FROM public.counsellors c
+      LEFT JOIN LATERAL (SELECT max(a.assigned_at) AS last FROM public.counsellor_assignments a
+                          WHERE a.counsellor_id = c.id AND a.pool_branch_id = p_branch) l ON true
+     WHERE c.account_id = p_account AND c.active AND c.branch_id = p_branch
+     ORDER BY l.last NULLS FIRST, c.created_at, c.id
+     LIMIT 1;
+    IF FOUND THEN
+      RETURN QUERY SELECT v_id, true, p_branch;
+      RETURN;
+    END IF;
+  END IF;
+
+  SELECT c.id INTO v_id
+    FROM public.counsellors c
+    LEFT JOIN LATERAL (SELECT max(a.assigned_at) AS last FROM public.counsellor_assignments a
+                        WHERE a.counsellor_id = c.id AND a.pool_branch_id IS NULL) l ON true
+   WHERE c.account_id = p_account AND c.active
+   ORDER BY l.last NULLS FIRST, c.created_at, c.id
+   LIMIT 1;
+  IF FOUND THEN
+    RETURN QUERY SELECT v_id, true, NULL::uuid;
+  END IF;
+END $$;
+REVOKE ALL ON FUNCTION public.pick_counsellor(uuid, uuid, uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.pick_counsellor(uuid, uuid, uuid) TO service_role;
