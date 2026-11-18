@@ -54,11 +54,36 @@ END $function$;
 REVOKE ALL ON FUNCTION public.pick_counsellor(uuid, uuid, uuid) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.pick_counsellor(uuid, uuid, uuid) TO service_role;
 
+-- contact_owner_from_assignment back to 098 exactly as live (it reads meta_form_leads until then).
+CREATE OR REPLACE FUNCTION public.contact_owner_from_assignment()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE v_profile uuid;
+BEGIN
+  SELECT c.profile_id INTO v_profile FROM public.counsellors c
+    JOIN public.profiles p ON p.id = c.profile_id AND p.account_id = NEW.account_id   -- never abort the bot's handover
+   WHERE c.id = NEW.counsellor_id;
+  IF v_profile IS NULL OR EXISTS (SELECT 1 FROM public.counsellor_assignments a
+                                   WHERE a.contact_id = NEW.contact_id AND a.counsellor_id = NEW.counsellor_id AND a.id <> NEW.id) THEN
+    RETURN NULL;
+  END IF;
+  PERFORM public.set_owner_trusted(NEW.contact_id, v_profile, 'assignment:' || NEW.assigned_via, false);
+  RETURN NULL;
+END $function$;
+REVOKE ALL ON FUNCTION public.contact_owner_from_assignment() FROM PUBLIC, anon, authenticated, service_role;
+
 DROP FUNCTION IF EXISTS public.ingest_form_lead(uuid, uuid, uuid, timestamptz, jsonb);
 DROP FUNCTION IF EXISTS public.form_lead_poll_window(text, timestamptz);
 DROP FUNCTION IF EXISTS public.form_lead_poll_ok(text);
 DROP FUNCTION IF EXISTS public.form_lead_poll_failed(text, text);
 DROP FUNCTION IF EXISTS public.form_lead_alerted(uuid);
+DROP FUNCTION IF EXISTS public.form_lead_pending_alerts(uuid);
+DROP FUNCTION IF EXISTS public.form_lead_ops_alerted(text);
+DROP FUNCTION IF EXISTS public.form_lead_redact(text);
 DROP FUNCTION IF EXISTS public.form_lead_phone(text);
 DROP TABLE IF EXISTS public.meta_form_lead_sync;
 DROP TABLE IF EXISTS public.meta_form_leads;
+DROP FUNCTION IF EXISTS public.meta_form_leads_scrub();
