@@ -6,5 +6,5 @@ SET LOCAL lock_timeout = '5s';
 
 DROP TRIGGER IF EXISTS meta_form_leads_surface ON public.meta_form_leads;
 DROP FUNCTION IF EXISTS public.meta_form_leads_surface();
-DROP FUNCTION IF EXISTS public.form_lead_surface(uuid, uuid, timestamptz);
+DROP FUNCTION IF EXISTS public.form_lead_surface(uuid, uuid, timestamptz, boolean);
 DROP FUNCTION IF EXISTS public.form_lead_tag(uuid);
