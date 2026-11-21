@@ -13,7 +13,8 @@ DROP FUNCTION IF EXISTS public.form_lead_counsellor(uuid, uuid);
 DROP FUNCTION IF EXISTS public.ops_lead_chats(uuid[], uuid);
 DROP FUNCTION IF EXISTS public.ops_open_leads(uuid, uuid, timestamptz);
 DROP FUNCTION IF EXISTS public.ops_names(uuid);
-DROP FUNCTION IF EXISTS public.ops_counsellor(uuid, text);
+DROP FUNCTION IF EXISTS public.ops_counsellor_id(uuid, text);
+DROP FUNCTION IF EXISTS public.ops_counsellor(uuid, text);   -- an early draft's name
 DROP FUNCTION IF EXISTS public.ops_reply(bigint, text, text, bigint);
 DROP TABLE IF EXISTS public.ops_actions;
 DROP TABLE IF EXISTS public.ops_bot_owner;

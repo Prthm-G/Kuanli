@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS public.ops_bot_owner (
   ignored_last_at timestamptz
 );
 ALTER TABLE public.ops_bot_owner ENABLE ROW LEVEL SECURITY;
-REVOKE ALL ON public.ops_bot_owner FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON public.ops_bot_owner FROM PUBLIC, anon, authenticated, service_role;
 
 CREATE TABLE IF NOT EXISTS public.ops_actions (
   id           bigserial PRIMARY KEY,
@@ -38,8 +38,8 @@ CREATE TABLE IF NOT EXISTS public.ops_actions (
 );
 CREATE INDEX IF NOT EXISTS ops_actions_last_applied ON public.ops_actions (account_id, applied_at DESC) WHERE applied_at IS NOT NULL;
 ALTER TABLE public.ops_actions ENABLE ROW LEVEL SECURITY;
-REVOKE ALL ON public.ops_actions FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON SEQUENCE public.ops_actions_id_seq FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON public.ops_actions FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON SEQUENCE public.ops_actions_id_seq FROM PUBLIC, anon, authenticated, service_role;
 
 -- 2. helpers -----------------------------------------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.ops_reply(p_chat bigint, p_text text, p_kind text DEFAULT 'plain', p_action bigint DEFAULT NULL)
@@ -48,11 +48,12 @@ LANGUAGE sql IMMUTABLE SET search_path = public, pg_temp AS $$
   SELECT jsonb_strip_nulls(jsonb_build_object('chat_id', p_chat, 'text', left(p_text, 3900), 'kind', p_kind, 'action_id', p_action))
 $$;
 
--- One counsellor by first name (any case); NULL when none or more than one match.
-CREATE OR REPLACE FUNCTION public.ops_counsellor(p_account uuid, p_name text)
-RETURNS public.counsellors
+-- One counsellor by display name (any case); NULL when none or more than one match. Returns the id, not the row, so
+-- a later column on counsellors never breaks it.
+CREATE OR REPLACE FUNCTION public.ops_counsellor_id(p_account uuid, p_name text)
+RETURNS uuid
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
-  SELECT c.* FROM public.counsellors c
+  SELECT c.id FROM public.counsellors c
    WHERE c.account_id = p_account AND lower(c.display_name) = lower(btrim(p_name))
      AND (SELECT count(*) FROM public.counsellors x WHERE x.account_id = p_account AND lower(x.display_name) = lower(btrim(p_name))) = 1
 $$;
@@ -64,8 +65,9 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
 $$;
 
 -- Open leads a login owns: not counsellor-number-only, latest deal not Enrolled / Lost / Not Interested (or none).
--- p_since: only leads whose latest owner-log row naming this login is on/after p_since and came from the rotation or a
--- form lead (any via but 'manual*', so moved leads never count as new). NULL = all open leads.
+-- p_since: only leads whose latest owner-log row naming this login is on/after p_since and came from the rotation
+-- ('assignment:*') or a form lead ('form_lead'); a move, an admin's reassignment or a chat assign never counts as new.
+-- NULL = all open leads.
 CREATE OR REPLACE FUNCTION public.ops_open_leads(p_account uuid, p_profile uuid, p_since timestamptz)
 RETURNS TABLE (contact_id uuid, stage text)
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
@@ -78,7 +80,7 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
      AND (p_since IS NULL OR EXISTS (
            SELECT 1 FROM (SELECT l.via, l.at FROM public.contact_owner_log l
                            WHERE l.contact_id = ct.id AND l.new_owner = p_profile ORDER BY l.at DESC, l.id DESC LIMIT 1) x
-            WHERE x.at >= p_since AND x.via NOT LIKE 'manual%'))
+            WHERE x.at >= p_since AND (x.via LIKE 'assignment:%' OR x.via = 'form_lead')))
 $$;
 
 -- The chats that move with a lead: ordinary numbers only (as set_contact_owner, 098), not already on p_to.
@@ -100,12 +102,14 @@ DECLARE
 BEGIN
   SELECT * INTO v_c FROM public.counsellors WHERE id = p_default AND account_id = p_account;
   IF NOT FOUND OR v_c.active THEN RETURN p_default; END IF;
-  -- A made-up contact has no sticky counsellor, so this is the branch rotation's next pick. Someone from another
-  -- branch (pick_counsellor's all-branch fallback) or without a login does not count: then the configured one keeps it.
-  SELECT k.counsellor_id INTO v_pick
-    FROM public.pick_counsellor(p_account, '00000000-0000-4000-8000-000000000000'::uuid, v_c.branch_id) k
-    JOIN public.counsellors c ON c.id = k.counsellor_id
-   WHERE c.branch_id = v_c.branch_id AND c.profile_id IS NOT NULL;
+  -- Whoever in her branch is on, has a login and got a lead longest ago (WhatsApp assignment in the branch pool or form
+  -- lead): form leads write no counsellor_assignments row, so they are counted here or they would all go to one person.
+  -- Nobody like that: the configured one keeps it (a form lead never goes to another branch or to nobody).
+  SELECT c.id INTO v_pick FROM public.counsellors c
+   WHERE c.account_id = p_account AND c.branch_id = v_c.branch_id AND c.active AND c.profile_id IS NOT NULL AND c.id <> v_c.id
+   ORDER BY greatest((SELECT max(a.assigned_at) FROM public.counsellor_assignments a WHERE a.counsellor_id = c.id AND a.pool_branch_id = v_c.branch_id),
+                     (SELECT max(f.assigned_at) FROM public.meta_form_leads f WHERE f.counsellor_id = c.id)) ASC NULLS FIRST, c.created_at, c.id
+   LIMIT 1;
   RETURN coalesce(v_pick, p_default);
 END $$;
 
@@ -119,6 +123,8 @@ DECLARE
   v_out  text := 'Kuanli rotation, ' || to_char(now() AT TIME ZONE 'Asia/Kolkata', 'DD Mon HH24:MI') || ' IST';
   v_next text := '';
   v_new  text;
+  v_ign  integer;
+  v_ign_at timestamptz;
   r      record;
 BEGIN
   FOR r IN SELECT b.id, b.name, string_agg(c.display_name || CASE WHEN c.active THEN ' ON' ELSE ' off' END, ', '
@@ -139,9 +145,15 @@ BEGIN
   SELECT string_agg(x.display_name || ' ' || x.n, ', ' ORDER BY x.n DESC, x.display_name) INTO v_new
     FROM (SELECT c.display_name, count(DISTINCT l.contact_id) AS n FROM public.counsellors c
             LEFT JOIN public.contact_owner_log l ON l.new_owner = c.profile_id AND l.account_id = p_account
-                                                AND l.at >= v_day AND l.via NOT LIKE 'manual%'
+                                                AND l.at >= v_day AND (l.via LIKE 'assignment:%' OR l.via = 'form_lead')
            WHERE c.account_id = p_account AND c.profile_id IS NOT NULL GROUP BY c.id, c.display_name) x;
-  RETURN v_out || E'\n\nNext lead:' || v_next || E'\n\nNew leads today: ' || coalesce(v_new, 'none');
+  v_out := v_out || E'\n\nNext lead:' || v_next || E'\n\nNew leads today: ' || coalesce(v_new, 'none');
+  -- Strangers (and counsellors) who wrote to the bot: so a burned pairing code or odd traffic is visible.
+  SELECT o.ignored, o.ignored_last_at INTO v_ign, v_ign_at FROM public.ops_bot_owner o WHERE o.account_id = p_account;
+  IF coalesce(v_ign, 0) > 0 AND v_ign_at IS NOT NULL THEN
+    v_out := v_out || E'\nOther chats that messaged the bot: ' || v_ign || ' (last ' || to_char(v_ign_at AT TIME ZONE 'Asia/Kolkata', 'DD Mon HH24:MI') || ' IST)';
+  END IF;
+  RETURN v_out;
 END $$;
 
 -- 5. previews (each one a row in ops_actions, nothing else written) --------------------------------------------------
@@ -158,7 +170,7 @@ BEGIN
   IF coalesce(btrim(p_name), '') = '' THEN
     RETURN public.ops_reply(p_chat, 'Who? e.g. /' || CASE WHEN p_on THEN 'on' ELSE 'off' END || ' ' || split_part(public.ops_names(p_account), ', ', 1));
   END IF;
-  v_c := public.ops_counsellor(p_account, p_name);
+  SELECT * INTO v_c FROM public.counsellors WHERE id = public.ops_counsellor_id(p_account, p_name);
   IF v_c.id IS NULL THEN
     RETURN public.ops_reply(p_chat, 'No counsellor called ' || left(p_name, 30) || '. Counsellors: ' || public.ops_names(p_account) || '.');
   END IF;
@@ -205,8 +217,8 @@ BEGIN
   IF coalesce(btrim(p_from), '') = '' OR coalesce(btrim(p_to), '') = '' THEN
     RETURN public.ops_reply(p_chat, 'Usage: /move <from> <to> [today|yesterday|all|YYYY-MM-DD]' || E'\ne.g. /move Jaspreet Aman yesterday');
   END IF;
-  v_from := public.ops_counsellor(p_account, p_from);
-  v_to := public.ops_counsellor(p_account, p_to);
+  SELECT * INTO v_from FROM public.counsellors WHERE id = public.ops_counsellor_id(p_account, p_from);
+  SELECT * INTO v_to FROM public.counsellors WHERE id = public.ops_counsellor_id(p_account, p_to);
   IF v_from.id IS NULL OR v_to.id IS NULL THEN
     RETURN public.ops_reply(p_chat, 'No counsellor called ' || left(CASE WHEN v_from.id IS NULL THEN p_from ELSE p_to END, 30)
       || '. Counsellors: ' || public.ops_names(p_account) || '.');
@@ -290,7 +302,7 @@ BEGIN
     v_text := 'Done: ' || v_c.display_name || ' is ' || CASE WHEN v_on THEN 'ON' ELSE 'OFF' END || '. ' || coalesce(v_br, '?') || ' on now: '
       || coalesce((SELECT string_agg(display_name, ', ' ORDER BY created_at) FROM public.counsellors
                     WHERE account_id = p_account AND branch_id = v_c.branch_id AND active), 'nobody') || '.';
-    UPDATE public.ops_actions SET applied_at = now(), undo = jsonb_build_object('counsellor_id', v_c.id, 'was', v_c.active), result = v_text
+    UPDATE public.ops_actions SET applied_at = now(), undo = jsonb_build_object('counsellor_id', v_c.id, 'was', v_c.active, 'set', v_on), result = v_text
      WHERE id = a.id;
     RETURN public.ops_reply(p_chat, v_text, 'undo', a.id);
   END IF;
@@ -302,6 +314,9 @@ BEGIN
   IF NOT FOUND OR NOT v_to.active OR v_to.profile_id IS DISTINCT FROM v_top THEN
     RETURN public.ops_reply(p_chat, coalesce(a.params->>'to', 'The receiver') || ' is no longer on (or changed login). Nothing moved.');
   END IF;
+  -- Lock the previewed leads (id order, so two writers never deadlock), then decide: this next statement sees anything
+  -- an admin or the webhook committed meanwhile.
+  PERFORM 1 FROM public.contacts WHERE id IN (SELECT (jsonb_array_elements_text(a.params->'leads'))::uuid) ORDER BY id FOR UPDATE;
   SELECT array_agg(o.contact_id ORDER BY o.contact_id) INTO v_ids
     FROM public.ops_open_leads(p_account, v_from, NULL) o
    WHERE o.contact_id IN (SELECT (jsonb_array_elements_text(a.params->'leads'))::uuid);
@@ -348,6 +363,9 @@ RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
   a      public.ops_actions%ROWTYPE;
+  v_c    public.counsellors%ROWTYPE;
+  v_was  boolean;
+  v_back uuid[];
   v_n    integer := 0;
   v_m    integer := 0;
   v_text text;
@@ -367,14 +385,33 @@ BEGIN
   END IF;
 
   IF a.kind = 'active' THEN
-    UPDATE public.counsellors SET active = (a.undo->>'was')::boolean WHERE id = (a.undo->>'counsellor_id')::uuid AND account_id = p_account;
-    v_text := 'Undone: ' || (a.params->>'name') || ' is ' || CASE WHEN (a.undo->>'was')::boolean THEN 'ON' ELSE 'OFF' END || ' again.';
+    -- Only if nobody changed that switch since (an old Undo button never overrides a newer change), and never turns on
+    -- someone who has since lost Telegram or their login.
+    v_was := (a.undo->>'was')::boolean;
+    SELECT * INTO v_c FROM public.counsellors WHERE id = (a.undo->>'counsellor_id')::uuid AND account_id = p_account FOR UPDATE;
+    IF NOT FOUND THEN RETURN public.ops_reply(p_chat, 'That counsellor is gone. Nothing changed.'); END IF;
+    IF v_c.active IS DISTINCT FROM (a.undo->>'set')::boolean THEN
+      RETURN public.ops_reply(p_chat, v_c.display_name || ' was switched since (now ' || CASE WHEN v_c.active THEN 'ON' ELSE 'OFF' END
+        || '). Not undone: use /on or /off.');
+    END IF;
+    IF v_was AND (v_c.telegram_chat_id IS NULL OR v_c.profile_id IS NULL) THEN
+      RETURN public.ops_reply(p_chat, v_c.display_name || ' cannot be turned on any more (no Telegram or no login). Not undone.');
+    END IF;
+    UPDATE public.counsellors SET active = v_was WHERE id = v_c.id;
+    v_text := 'Undone: ' || v_c.display_name || ' is ' || CASE WHEN v_was THEN 'ON' ELSE 'OFF' END || ' again.';
   ELSE
-    -- Only rows still as the move left them go back; anything changed since stays.
+    -- Only leads still exactly as this move left them go back: still the receiver's, still open, and the receiver got
+    -- them from this move (latest owner-log row is this action's). Anything changed since stays.
+    PERFORM 1 FROM public.contacts WHERE id IN (SELECT (jsonb_array_elements_text(a.undo->'leads'))::uuid) ORDER BY id FOR UPDATE;
+    SELECT coalesce(array_agg(o.contact_id), '{}') INTO v_back
+      FROM public.ops_open_leads(p_account, (a.params->>'to_profile')::uuid, NULL) o
+     WHERE o.contact_id IN (SELECT (jsonb_array_elements_text(a.undo->'leads'))::uuid)
+       AND EXISTS (SELECT 1 FROM (SELECT l.via, l.at FROM public.contact_owner_log l WHERE l.contact_id = o.contact_id
+                                   ORDER BY l.at DESC, l.id DESC LIMIT 1) x
+                    WHERE x.via = 'manual_reassign_ops' AND x.at = a.applied_at);
     -- The call sits in the select list, so it runs only for rows that passed the WHERE (never in a WHERE: no order).
     SELECT count(*) FILTER (WHERE public.set_owner_trusted(ct.id, (a.params->>'from_profile')::uuid, 'manual_reassign_ops_undo', false))
-      INTO v_n FROM public.contacts ct
-     WHERE ct.id IN (SELECT (jsonb_array_elements_text(a.undo->'leads'))::uuid) AND ct.owner_profile_id = (a.params->>'to_profile')::uuid;
+      INTO v_n FROM public.contacts ct WHERE ct.id = ANY (v_back);
     -- A chat goes back only with its lead: a lead that changed hands keeps its chats where they are.
     WITH back AS (
       UPDATE public.conversations cv SET assigned_agent_id = (e->>'prev')::uuid, updated_at = now()
@@ -435,7 +472,7 @@ BEGIN
   BEGIN
     IF jsonb_typeof(p_update->'message') = 'object' AND p_update#>>'{message,chat,type}' = 'private' THEN
       v_chat := (p_update#>>'{message,chat,id}')::bigint;
-      v_text := left(btrim(coalesce(p_update#>>'{message,text}', '')), 300);
+      v_text := left(btrim(regexp_replace(coalesce(p_update#>>'{message,text}', ''), '\s+', ' ', 'g')), 300);
     ELSIF jsonb_typeof(p_update->'callback_query') = 'object' AND p_update#>>'{callback_query,message,chat,type}' = 'private'
           AND p_update#>>'{callback_query,from,id}' = p_update#>>'{callback_query,message,chat,id}' THEN
       v_chat := (p_update#>>'{callback_query,message,chat,id}')::bigint;
@@ -447,13 +484,14 @@ BEGIN
   END;
   IF v_chat IS NULL THEN RETURN NULL; END IF;
 
-  SELECT * INTO v_owner FROM public.ops_bot_owner WHERE account_id = p_account FOR UPDATE;
+  SELECT * INTO v_owner FROM public.ops_bot_owner WHERE account_id = p_account;
   IF NOT FOUND THEN RETURN NULL; END IF;   -- pairing never started: the bot stays silent for everyone
 
   IF v_owner.chat_id IS DISTINCT FROM v_chat THEN
     v_m := regexp_match(coalesce(v_text, ''), '^/pair(?:@[A-Za-z0-9_]+)?\s+([A-Za-z0-9]{6,40})$');
     IF v_cbid IS NULL AND v_m IS NOT NULL AND v_owner.chat_id IS NULL AND v_owner.pair_code_hash IS NOT NULL THEN
-      IF v_owner.pair_expires_at > now() AND v_owner.pair_code_hash = encode(sha256(convert_to(v_m[1], 'UTF8')), 'hex') THEN
+      SELECT * INTO v_owner FROM public.ops_bot_owner WHERE account_id = p_account FOR UPDATE;   -- re-read under the lock
+      IF v_owner.chat_id IS NULL AND v_owner.pair_expires_at > now() AND v_owner.pair_code_hash = encode(sha256(convert_to(upper(v_m[1]), 'UTF8')), 'hex') THEN
         UPDATE public.ops_bot_owner SET chat_id = v_chat, paired_at = now(), pair_code_hash = NULL, pair_expires_at = NULL
          WHERE account_id = p_account;
         RETURN public.ops_reply(v_chat, E'Paired. This chat now runs the Kuanli ops commands.\n\n' || v_help);
@@ -467,7 +505,8 @@ BEGIN
     RETURN NULL;
   END IF;
 
-  -- The owner. Any failure rolls back this call's writes and is reported, never half-done.
+  -- The owner: one call at a time. Any failure rolls back this call's writes and is reported, never half-done.
+  PERFORM 1 FROM public.ops_bot_owner WHERE account_id = p_account FOR UPDATE;
   BEGIN
     IF v_cbid IS NOT NULL THEN
       v_m := regexp_match(v_data, '^(ok|no|undo):([0-9]{1,18})$');
@@ -491,7 +530,8 @@ BEGIN
     END;
     RETURN v_r;
   EXCEPTION WHEN others THEN
-    RETURN public.ops_reply(v_chat, 'Something went wrong, nothing changed: ' || left(SQLERRM, 200))
+    RAISE LOG 'ops_bot failed (%): %', SQLSTATE, SQLERRM;
+    RETURN public.ops_reply(v_chat, 'Something went wrong, nothing changed (error ' || SQLSTATE || '). The details are in the database log.')
            || CASE WHEN v_cbid IS NOT NULL THEN jsonb_build_object('callback_id', v_cbid) ELSE '{}'::jsonb END;
   END;
 END $$;
