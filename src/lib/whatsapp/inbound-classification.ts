@@ -99,15 +99,69 @@ function label(contentText: string): InboundClassification {
 }
 
 /**
+ * Parsed types the bot cannot read: n8n's intake keeps text, audio and taps
+ * only. A lead whose first message is one of these got no reply at all
+ * (6ddb4b12, 19 Nov 2026), so they are greeted like an unreadable message.
+ */
+const BOT_UNREADABLE_TYPES = new Set([
+  'image',
+  'video',
+  'document',
+  'sticker',
+  'location',
+]);
+
+/** An earlier customer message this close is the same burst: it got the greeting. */
+const SAME_BURST_MS = 10 * 60 * 1000;
+
+/** Whether this message may be answered with the stand-in greeting. */
+export function greetCandidate(
+  special: InboundClassification | null,
+  messageType: string
+): boolean {
+  return special
+    ? special.greetWhenFirst
+    : BOT_UNREADABLE_TYPES.has(messageType);
+}
+
+/**
+ * Whether the conversation is past its first contact, so a message the bot
+ * cannot read gets no greeting: it has a bot or agent message, or an earlier
+ * customer message inside the same burst. An earlier message long ago that
+ * nobody answered does not count (9f827adb, 6857796f: unreadable messages days
+ * apart, never answered, because only the very first inbound was greeted).
+ */
+export function isPastFirstContact(args: {
+  hasReply: boolean;
+  previousCustomerAt: string | null;
+  messageAt: number;
+}): boolean {
+  if (args.hasReply) return true;
+  if (args.previousCustomerAt === null) return false;
+  const previous = Date.parse(args.previousCustomerAt);
+  // Unknown time: assume the same burst rather than greet twice.
+  if (!Number.isFinite(previous)) return true;
+  return args.messageAt - previous < SAME_BURST_MS;
+}
+
+/**
  * Whether the bot gets this message, and whether it gets a stand-in greeting
- * rather than the message itself. `pastFirstContact` is true once the
- * conversation has an earlier customer message or any bot or agent message.
+ * rather than the message itself. `pastFirstContact`: see isPastFirstContact.
+ * `messageType` (the WhatsApp type) lets a media first contact be greeted.
  */
 export function botForwardFor(
   special: InboundClassification | null,
-  pastFirstContact: boolean
+  pastFirstContact: boolean,
+  messageType?: string
 ): { forward: boolean; greet: boolean } {
-  if (!special || special.forwardToBot) return { forward: true, greet: false };
+  if (!special) {
+    const greet =
+      messageType !== undefined &&
+      BOT_UNREADABLE_TYPES.has(messageType) &&
+      !pastFirstContact;
+    return { forward: true, greet };
+  }
+  if (special.forwardToBot) return { forward: true, greet: false };
   if (special.greetWhenFirst && !pastFirstContact)
     return { forward: true, greet: true };
   return { forward: false, greet: false };

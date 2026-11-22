@@ -121,4 +121,40 @@ describe('GET /api/whatsapp/media/[mediaId]', () => {
     await get('9000000000001');
     expect(h.getPrimaryConfig).toHaveBeenCalledWith(h.admin, 'acc-1');
   });
+
+  // KB-FIXPASS-20261122: media Meta no longer holds is gone for good.
+  it('410 with one warning line when Meta no longer has the media', async () => {
+    h.visible = [{ id: 'm1' }];
+    h.getMediaUrl.mockRejectedValueOnce(
+      new Error(
+        "Unsupported get request. Object with ID '9000000000001' does not exist, cannot be loaded due to missing permissions, or does not support this operation."
+      )
+    );
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await get('9000000000001');
+    expect(res.status).toBe(410);
+    expect(await res.json()).toEqual({
+      error: 'Media no longer available on WhatsApp',
+    });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(error).not.toHaveBeenCalled();
+    warn.mockRestore();
+    error.mockRestore();
+  });
+
+  it('500 and the full error for any other failure', async () => {
+    h.visible = [{ id: 'm1' }];
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    for (const failure of [
+      new TypeError('fetch failed'),
+      new Error('relation "whatever" does not exist'),
+      new Error('Error validating access token: Session has expired'),
+    ]) {
+      h.getMediaUrl.mockRejectedValueOnce(failure);
+      expect((await get('9000000000001')).status).toBe(500);
+    }
+    expect(error).toHaveBeenCalledTimes(3);
+    error.mockRestore();
+  });
 });

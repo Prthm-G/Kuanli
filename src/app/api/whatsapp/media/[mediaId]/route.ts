@@ -99,6 +99,22 @@ export async function GET(
       },
     })
   } catch (error) {
+    // Meta answers "Unsupported get request. Object with ID '<id>' does not
+    // exist ..." for media it no longer holds (past its 30 days, or some
+    // coexistence history media). Retrying cannot help, so it is a 410 with
+    // one log line; the inbox shows "<type> unavailable" either way.
+    // KB-FIXPASS-20261122: 89 such ids filled the log with stacks, 18-21 Nov.
+    const message = error instanceof Error ? error.message : String(error)
+    // Meta's exact wording only: a bad token is a different error (code 190)
+    // and still logs in full below.
+    if (/Unsupported get request\. Object with ID '[^']*' does not exist/.test(message)) {
+      const { mediaId } = await params
+      console.warn(`[media] ${mediaId} is no longer available on WhatsApp`)
+      return NextResponse.json(
+        { error: 'Media no longer available on WhatsApp' },
+        { status: 410 }
+      )
+    }
     console.error('Error in WhatsApp media GET:', error)
     return NextResponse.json(
       { error: 'Failed to fetch media' },

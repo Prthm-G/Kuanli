@@ -5,6 +5,8 @@ import {
   BACKFILL_LABEL,
   botForwardFor,
   classifyInboundMessage,
+  greetCandidate,
+  isPastFirstContact,
 } from './inbound-classification';
 
 const base = { id: 'wamid.X', from: '919999999999', timestamp: '1790000000' };
@@ -190,6 +192,95 @@ describe('botForwardFor', () => {
       forward: true,
       greet: false,
     });
+  });
+
+  // KB-FIXPASS-20261122: 6ddb4b12 (19 Nov) opened with an image and got no
+  // reply, because n8n reads text, audio and taps only.
+  it('greets a media first contact the bot cannot read', () => {
+    for (const type of ['image', 'video', 'document', 'sticker', 'location']) {
+      expect(botForwardFor(null, false, type)).toEqual({
+        forward: true,
+        greet: true,
+      });
+      expect(botForwardFor(null, true, type)).toEqual({
+        forward: true,
+        greet: false,
+      });
+    }
+  });
+
+  it('never greets text, audio, a tap or a reaction', () => {
+    for (const type of ['text', 'audio', 'interactive', 'reaction']) {
+      expect(botForwardFor(null, false, type)).toEqual({
+        forward: true,
+        greet: false,
+      });
+    }
+  });
+});
+
+describe('greetCandidate', () => {
+  it('follows the classifier for special messages', () => {
+    const unsupported = classifyInboundMessage({ ...base, type: 'unsupported' });
+    const edit = classifyInboundMessage({ ...base, type: 'edit' });
+    expect(greetCandidate(unsupported, 'unsupported')).toBe(true);
+    expect(greetCandidate(edit, 'edit')).toBe(false);
+  });
+
+  it('is true for media the bot cannot read and false for the rest', () => {
+    expect(greetCandidate(null, 'image')).toBe(true);
+    expect(greetCandidate(null, 'document')).toBe(true);
+    expect(greetCandidate(null, 'text')).toBe(false);
+    expect(greetCandidate(null, 'audio')).toBe(false);
+  });
+});
+
+describe('isPastFirstContact', () => {
+  const at = Date.parse('2026-11-22T10:00:00Z');
+  const minutesBefore = (m: number) => new Date(at - m * 60000).toISOString();
+
+  it('is first contact when nobody has written or replied before', () => {
+    expect(
+      isPastFirstContact({ hasReply: false, previousCustomerAt: null, messageAt: at })
+    ).toBe(false);
+  });
+
+  it('is past first contact once the chat has any bot or agent message', () => {
+    expect(
+      isPastFirstContact({ hasReply: true, previousCustomerAt: null, messageAt: at })
+    ).toBe(true);
+  });
+
+  it('treats an earlier customer message within 10 minutes as the same burst', () => {
+    expect(
+      isPastFirstContact({
+        hasReply: false,
+        previousCustomerAt: minutesBefore(2),
+        messageAt: at,
+      })
+    ).toBe(true);
+  });
+
+  // 9f827adb and 6857796f (16-19 Nov): unreadable messages days apart, never
+  // answered, because only the very first inbound was greeted.
+  it('greets again when the earlier message was long ago and never answered', () => {
+    expect(
+      isPastFirstContact({
+        hasReply: false,
+        previousCustomerAt: minutesBefore(60 * 24 * 6),
+        messageAt: at,
+      })
+    ).toBe(false);
+  });
+
+  it('counts an unparseable earlier time as the same burst (no double greeting)', () => {
+    expect(
+      isPastFirstContact({
+        hasReply: false,
+        previousCustomerAt: 'not a date',
+        messageAt: at,
+      })
+    ).toBe(true);
   });
 });
 

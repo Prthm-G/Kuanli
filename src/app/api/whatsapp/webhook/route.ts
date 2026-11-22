@@ -8,6 +8,8 @@ import {
   botForwardFor,
   classifyInboundMessage,
   FIRST_CONTACT_GREETING,
+  greetCandidate,
+  isPastFirstContact,
   type ClassifiableInboundMessage,
 } from '@/lib/whatsapp/inbound-classification';
 import {
@@ -1287,6 +1289,30 @@ async function hasBotOrAgentReply(conversationId: string): Promise<boolean> {
   }
 }
 
+// When the conversation's latest customer message before this one was stored.
+// On a lookup error this answers null ("none"), so the lead is greeted: like
+// hasBotOrAgentReply, a second greeting costs less than a lead left in silence.
+async function previousCustomerMessageAt(
+  conversationId: string,
+  messageId: string
+): Promise<string | null> {
+  try {
+    const { data, error } = await supabaseAdmin()
+      .from('messages')
+      .select('created_at')
+      .eq('conversation_id', conversationId)
+      .eq('sender_type', 'customer')
+      .neq('message_id', messageId)
+      .order('created_at', { ascending: false })
+      .limit(1);
+    if (error) throw error;
+    return (data?.[0]?.created_at as string | undefined) ?? null;
+  } catch (error) {
+    console.error('[webhook] failed to read the previous customer message:', error);
+    return null;
+  }
+}
+
 async function handleReaction(
   message: WhatsAppMessage,
   conversationId: string,
@@ -1535,15 +1561,23 @@ async function processMessage(
   // than per conversation so new threads on that number are covered too.
   // A counsellor number (counsellors.phone_number_id, migration 094) is always
   // silenced, with no .env entry: see number-policy.ts.
-  // An unreadable message (Meta 131051/131060) as the first inbound of a chat
-  // nobody has answered is a lead's first contact. The bot is handed a plain
-  // greeting as a text message (n8n drops any other type) so they get the
-  // opening question. Requiring the first inbound keeps a burst of two
-  // unreadable messages from being greeted twice before the reply is stored.
-  const pastFirstContact = special?.greetWhenFirst
-    ? !isFirstInboundMessage || (await hasBotOrAgentReply(conversation.id))
+  // An unreadable message (Meta 131051/131060), or media the bot cannot read
+  // (image, video, document, sticker, location), in a chat nobody has answered
+  // is a lead's first contact. The bot is handed a plain greeting as a text
+  // message (n8n drops any other type) so they get the opening question. An
+  // earlier customer message inside the same burst (10 min) means that one was
+  // greeted, so a burst of two is not greeted twice before the reply is stored;
+  // one long ago that nobody answered does not (KB-FIXPASS-20261122).
+  const pastFirstContact = greetCandidate(special, message.type)
+    ? isPastFirstContact({
+        hasReply: await hasBotOrAgentReply(conversation.id),
+        previousCustomerAt: isFirstInboundMessage
+          ? null
+          : await previousCustomerMessageAt(conversation.id, message.id),
+        messageAt: Date.parse(messageCreatedAt),
+      })
     : false;
-  const botForward = botForwardFor(special, pastFirstContact);
+  const botForward = botForwardFor(special, pastFirstContact, message.type);
 
   if (!actions.forwardToBot) {
     console.log(
