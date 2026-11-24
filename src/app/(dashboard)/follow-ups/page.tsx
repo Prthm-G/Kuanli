@@ -49,43 +49,77 @@ export default function FollowUpsPage() {
   // the table so recording a payment can refresh the ledger behind it.
   const [openStudent, setOpenStudent] = useState<LedgerRow | null>(null);
 
+  // The fetch* loaders run every setter in a promise callback, so the effects
+  // below set no state synchronously; load / loadPayments add the resets a
+  // manual refresh needs.
+  const fetchWorklist = useCallback(async () => {
+    if (!accountId) return;
+    await loadWorklist(createClient(), accountId)
+      .then(setRows)
+      .catch((e) =>
+        setError(e instanceof Error ? e.message : 'Could not load follow-ups')
+      )
+      .finally(() => setLoading(false));
+  }, [accountId]);
+
   const load = useCallback(async () => {
     if (!accountId) return;
     setLoading(true);
     setError(null);
-    try {
-      setRows(await loadWorklist(createClient(), accountId));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not load follow-ups');
-    } finally {
-      setLoading(false);
+    await fetchWorklist();
+  }, [accountId, fetchWorklist]);
+
+  // accountId arriving (or changing after a sign-out in another tab) refetches
+  // in the effect below; reset for it while rendering instead.
+  const [prevAccountId, setPrevAccountId] = useState(accountId);
+  if (accountId !== prevAccountId) {
+    setPrevAccountId(accountId);
+    if (accountId) {
+      setLoading(true);
+      setError(null);
     }
-  }, [accountId]);
+  }
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    void fetchWorklist();
+  }, [fetchWorklist]);
+
+  const fetchPayments = useCallback(async () => {
+    if (!accountId) return;
+    await loadLedger(createClient(), accountId)
+      .then(setLedger)
+      .catch((e) =>
+        setLedgerError(
+          e instanceof Error ? e.message : 'Could not load payments'
+        )
+      )
+      .finally(() => setLedgerLoading(false));
+  }, [accountId]);
 
   const loadPayments = useCallback(async () => {
     if (!accountId) return;
     setLedgerLoading(true);
     setLedgerError(null);
-    try {
-      setLedger(await loadLedger(createClient(), accountId));
-    } catch (e) {
-      setLedgerError(
-        e instanceof Error ? e.message : 'Could not load payments'
-      );
-    } finally {
-      setLedgerLoading(false);
+    await fetchPayments();
+  }, [accountId, fetchPayments]);
+
+  // Opening the Payments tab (or accountId changing while it is open)
+  // refetches the ledger; reset for it while rendering rather than in the
+  // effect.
+  const [prevLedgerDeps, setPrevLedgerDeps] = useState({ accountId, view });
+  if (accountId !== prevLedgerDeps.accountId || view !== prevLedgerDeps.view) {
+    setPrevLedgerDeps({ accountId, view });
+    if (view === 'payments' && accountId) {
+      setLedgerLoading(true);
+      setLedgerError(null);
     }
-  }, [accountId]);
+  }
 
   // Only fetched once the Payments tab is actually opened: the ledger is a
   // four-table RPC and most visits here are about follow-ups.
   useEffect(() => {
-    if (view === 'payments') void loadPayments();
-  }, [view, loadPayments]);
+    if (view === 'payments') void fetchPayments();
+  }, [view, fetchPayments]);
 
   const counts = useMemo(() => worklistCounts(rows ?? []), [rows]);
   // Reported by "Needs your decision" (payments to check + discounts to

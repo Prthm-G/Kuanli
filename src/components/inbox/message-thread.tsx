@@ -330,11 +330,9 @@ export function MessageThread({
   // from the channel subscription below so a `resyncToken` bump just
   // refetches the rows without also tearing down and rebuilding the
   // realtime channel.
+  // Closing the conversation clears them while rendering (below).
   useEffect(() => {
-    if (!conversationId) {
-      setReactions([]);
-      return;
-    }
+    if (!conversationId) return;
     const supabase = createClient();
     let cancelled = false;
 
@@ -430,10 +428,15 @@ export function MessageThread({
   }, [conversationId]);
 
   // Clear any in-progress reply draft when the active conversation changes —
-  // a quote pulled from conversation A shouldn't bleed into conversation B.
-  useEffect(() => {
+  // a quote pulled from conversation A shouldn't bleed into conversation B —
+  // and the reactions when there is no conversation any more. Done while
+  // rendering, so no frame shows them against the wrong conversation.
+  const [prevConversationId, setPrevConversationId] = useState(conversationId);
+  if (conversationId !== prevConversationId) {
+    setPrevConversationId(conversationId);
     setReplyTo(null);
-  }, [conversationId]);
+    if (!conversationId) setReactions([]);
+  }
 
   // Reset the server-side unread_count to 0 whenever an unread count
   // surfaces on the active conversation — covers both (a) opening a
@@ -612,9 +615,19 @@ export function MessageThread({
     conversation?.bot_active !== false,
   );
 
-  useEffect(() => {
+  // Follow the row when the conversation or its column changes, while
+  // rendering rather than from an effect.
+  const [botActiveFor, setBotActiveFor] = useState({
+    id: conversation?.id,
+    botActive: conversation?.bot_active,
+  });
+  if (
+    conversation?.id !== botActiveFor.id ||
+    conversation?.bot_active !== botActiveFor.botActive
+  ) {
+    setBotActiveFor({ id: conversation?.id, botActive: conversation?.bot_active });
     setBotActive(conversation?.bot_active !== false);
-  }, [conversation?.id, conversation?.bot_active]);
+  }
 
   const handleBotToggle = useCallback(
     async (next: boolean) => {
@@ -759,9 +772,11 @@ export function MessageThread({
   // The "toggle" semantic (pill click) is computed at the call site where the
   // current reactions for the bubble are already in scope — keeps this
   // function dependency-free w.r.t. the reaction list.
+  // Read once, so the memo's deps are exactly what the callback reads.
+  const userId = user?.id;
   const postReaction = useCallback(
     async (messageId: string, emoji: string) => {
-      if (!user?.id || !conversation) {
+      if (!userId || !conversation) {
         console.warn("[reactions] missing user or conversation");
         return;
       }
@@ -771,7 +786,6 @@ export function MessageThread({
       }
 
       const convId = conversation.id;
-      const userId = user.id;
       let snapshot: MessageReaction[] = [];
 
       // Functional updater — captures the freshest reactions list, never a
@@ -816,7 +830,7 @@ export function MessageThread({
         setReactions(snapshot);
       }
     },
-    [conversation, user?.id],
+    [conversation, userId],
   );
 
   const handleAssignChange = useCallback(

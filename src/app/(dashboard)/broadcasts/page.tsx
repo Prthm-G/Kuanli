@@ -66,21 +66,21 @@ export default function BroadcastsPage() {
   // Used to kick off polling only while something is actively sending.
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // Every setter runs in a promise callback, so the mount effect below sets
+  // no state synchronously.
   async function fetchBroadcasts() {
-    try {
-      const supabase = createClient();
-      const { data, error: fetchError } = await supabase
-        .from('broadcasts')
-        .select('*')
-        .order('created_at', { ascending: false });
-
-      if (fetchError) throw fetchError;
-      setBroadcasts(data ?? []);
-    } catch (err) {
+    const fail = (err: unknown) =>
       setError(err instanceof Error ? err.message : 'Failed to load broadcasts');
-    } finally {
-      setLoading(false);
-    }
+    const supabase = createClient();
+    await supabase
+      .from('broadcasts')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .then(({ data, error: fetchError }) => {
+        if (fetchError) return fail(fetchError);
+        setBroadcasts(data ?? []);
+      }, fail)
+      .then(() => setLoading(false));
   }
 
   useEffect(() => {

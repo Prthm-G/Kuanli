@@ -38,11 +38,13 @@ export function ProfileForm() {
   const [removeAvatar, setRemoveAvatar] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  // Seed form state once the profile loads.
-  useEffect(() => {
-    if (!profile) return;
-    setFullName(profile.full_name ?? '');
-  }, [profile]);
+  // Seed form state once the profile loads (and again whenever it is
+  // refetched), while rendering rather than from an effect.
+  const [seededProfile, setSeededProfile] = useState<typeof profile>(null);
+  if (profile !== seededProfile) {
+    setSeededProfile(profile);
+    if (profile) setFullName(profile.full_name ?? '');
+  }
 
   // Cleanup object URLs to avoid leaks.
   useEffect(() => {

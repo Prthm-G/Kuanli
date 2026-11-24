@@ -51,18 +51,23 @@ export function DocumentsTab({
   const fileInput = useRef<HTMLInputElement>(null);
   const [uploadType, setUploadType] = useState<string | null>(null);
 
+  // Every setter runs in a promise callback, so the effect below sets no
+  // state synchronously.
   const load = useCallback(async () => {
-    try {
-      const db = createClient();
-      const a = await loadApplication(db, contactId);
-      setApp(a);
-      // Same fallback the database uses to count required documents.
-      const university = a?.university || contactUniversity || 'LPU';
-      setView(await loadContactDocuments(db, accountId, contactId, university));
-    } catch (e) {
-      console.error('Failed to load documents:', e);
-      toast.error('Could not load the documents');
-    }
+    const db = createClient();
+    await loadApplication(db, contactId)
+      .then(async (a) => {
+        setApp(a);
+        // Same fallback the database uses to count required documents.
+        const university = a?.university || contactUniversity || 'LPU';
+        setView(
+          await loadContactDocuments(db, accountId, contactId, university)
+        );
+      })
+      .catch((e) => {
+        console.error('Failed to load documents:', e);
+        toast.error('Could not load the documents');
+      });
   }, [accountId, contactId, contactUniversity]);
 
   useEffect(() => {

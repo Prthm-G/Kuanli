@@ -62,19 +62,29 @@ export function PortalCredentialsTab({ contactId }: PortalCredentialsTabProps) {
 
   const base = `/api/contacts/${contactId}/portal-credentials`;
 
+  // Sets state only in promise callbacks, so the effect below sets none
+  // synchronously; a caller reloading the list raises `loading` first.
   const fetchCredentials = useCallback(async () => {
-    setLoading(true);
-    try {
-      const res = await fetch(base);
-      if (!res.ok) throw new Error();
-      const data = (await res.json()) as { credentials: PortalCredential[] };
-      setCredentials(data.credentials ?? []);
-    } catch {
-      toast.error('Failed to load portal credentials');
-    } finally {
-      setLoading(false);
-    }
+    await fetch(base)
+      .then(async (res) => {
+        if (!res.ok) throw new Error();
+        const data = (await res.json()) as { credentials: PortalCredential[] };
+        setCredentials(data.credentials ?? []);
+      })
+      .catch(() => {
+        toast.error('Failed to load portal credentials');
+      })
+      .finally(() => setLoading(false));
   }, [base]);
+
+  // Another contact (or gaining access) refetches in the effect below; raise
+  // `loading` for it while rendering. Initial state already covers mount.
+  const fetchKey = canManage ? base : null;
+  const [prevFetchKey, setPrevFetchKey] = useState(fetchKey);
+  if (fetchKey !== prevFetchKey) {
+    setPrevFetchKey(fetchKey);
+    if (fetchKey) setLoading(true);
+  }
 
   useEffect(() => {
     if (canManage) void fetchCredentials();
@@ -118,6 +128,7 @@ export function PortalCredentialsTab({ contactId }: PortalCredentialsTabProps) {
       setUsername('');
       setPassword('');
       setNotes('');
+      setLoading(true);
       void fetchCredentials();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to save credential');
@@ -162,6 +173,7 @@ export function PortalCredentialsTab({ contactId }: PortalCredentialsTabProps) {
       if (!res.ok) throw new Error();
       toast.success('Credential deleted');
       setConfirmDelete(null);
+      setLoading(true);
       void fetchCredentials();
     } catch {
       toast.error('Failed to delete credential');

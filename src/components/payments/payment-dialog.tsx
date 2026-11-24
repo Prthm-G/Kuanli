@@ -106,22 +106,26 @@ export function PaymentDialog({
   const [duplicates, setDuplicates] = useState(0);
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    if (!open) return;
-    setPaidAt(toLocalInput(new Date()));
-    setAmount('');
-    setMethod('upi');
-    setInstallmentId('');
-    setReference('');
-    setNote('');
-    setReceipt(initialReceipt);
-    setHead('');
-    setReceivedBy('');
-    setCollectedBy(user?.id ?? '');
-    setDuplicates(0);
-    // initialReceipt and user are read when the dialog opens, not tracked.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  // Reset on every open, while rendering the open transition so the first
+  // open frame is already reset. initialReceipt and user are read when the
+  // dialog opens, not tracked.
+  const [wasOpen, setWasOpen] = useState(false);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open) {
+      setPaidAt(toLocalInput(new Date()));
+      setAmount('');
+      setMethod('upi');
+      setInstallmentId('');
+      setReference('');
+      setNote('');
+      setReceipt(initialReceipt);
+      setHead('');
+      setReceivedBy('');
+      setCollectedBy(user?.id ?? '');
+      setDuplicates(0);
+    }
+  }
 
   // Owner and admin can say a colleague collected the money.
   useEffect(() => {

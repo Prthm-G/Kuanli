@@ -93,22 +93,41 @@ export default function ReportsPage() {
     );
   }, [report, eodSearch]);
 
+  // Every setter runs in a promise callback, so the effect below sets no
+  // state synchronously.
+  const fetchReport = useCallback(async () => {
+    if (!accountId) return;
+    await loadEodReport(createClient(), accountId, period)
+      .then(setReport)
+      .catch((e) =>
+        setError(e instanceof Error ? e.message : 'Could not load the report')
+      )
+      .finally(() => setLoading(false));
+  }, [accountId, period]);
+
+  // Refresh: show the spinner and clear the last error, then refetch.
   const load = useCallback(async () => {
     if (!accountId) return;
     setLoading(true);
     setError(null);
-    try {
-      setReport(await loadEodReport(createClient(), accountId, period));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not load the report');
-    } finally {
-      setLoading(false);
+    await fetchReport();
+  }, [accountId, fetchReport]);
+
+  // Picking another period, or accountId arriving (or changing after a
+  // sign-out in another tab), refetches in the effect below; reset for it
+  // while rendering instead.
+  const [prevDeps, setPrevDeps] = useState({ accountId, period });
+  if (accountId !== prevDeps.accountId || period !== prevDeps.period) {
+    setPrevDeps({ accountId, period });
+    if (accountId) {
+      setLoading(true);
+      setError(null);
     }
-  }, [accountId, period]);
+  }
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    void fetchReport();
+  }, [fetchReport]);
 
   function downloadCsv() {
     if (!report) return;

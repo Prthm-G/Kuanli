@@ -58,28 +58,34 @@ function MediaImage({ url, alt }: { url: string; alt: string }) {
   const [src, setSrc] = useState<string | null>(null);
   const [error, setError] = useState(false);
   const [loading, setLoading] = useState(true);
+  // Proxy URLs need auth fetch to create blob URL
+  const isProxied = url.startsWith("/api/whatsapp/media/");
 
+  // A direct URL needs no fetch: take it while rendering rather than from the
+  // effect below.
+  const [prevUrl, setPrevUrl] = useState<string | null>(null);
+  if (url !== prevUrl) {
+    setPrevUrl(url);
+    if (url && !isProxied) {
+      setSrc(url);
+      setLoading(false);
+    }
+  }
+
+  // Sets state only in promise callbacks, so the effect sets none
+  // synchronously.
   const loadImage = useCallback(async () => {
-    if (!url) return;
-
-    // Proxy URLs need auth fetch to create blob URL
-    if (url.startsWith("/api/whatsapp/media/")) {
-      try {
-        const res = await fetch(url);
+    if (!isProxied) return;
+    await fetch(url)
+      .then(async (res) => {
         if (!res.ok) throw new Error("Failed to load media");
         const blob = await res.blob();
         const blobUrl = URL.createObjectURL(blob);
         setSrc(blobUrl);
-      } catch {
-        setError(true);
-      } finally {
-        setLoading(false);
-      }
-    } else {
-      setSrc(url);
-      setLoading(false);
-    }
-  }, [url]);
+      })
+      .catch(() => setError(true))
+      .finally(() => setLoading(false));
+  }, [url, isProxied]);
 
   useEffect(() => {
     loadImage();

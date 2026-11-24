@@ -42,22 +42,40 @@ export default function QueuePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Every setter runs in a promise callback, so the effect below sets no
+  // state synchronously.
+  const fetchQueue = useCallback(async () => {
+    if (!accountId) return;
+    await loadLeadQueue(createClient(), accountId)
+      .then(setLeads)
+      .catch((e) =>
+        setError(e instanceof Error ? e.message : 'Could not load the queue')
+      )
+      .finally(() => setLoading(false));
+  }, [accountId]);
+
+  // Refresh: show the spinner and clear the last error, then refetch.
   const load = useCallback(async () => {
     if (!accountId) return;
     setLoading(true);
     setError(null);
-    try {
-      setLeads(await loadLeadQueue(createClient(), accountId));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not load the queue');
-    } finally {
-      setLoading(false);
+    await fetchQueue();
+  }, [accountId, fetchQueue]);
+
+  // accountId arriving (or changing after a sign-out in another tab) refetches
+  // in the effect below; reset for it while rendering instead.
+  const [prevAccountId, setPrevAccountId] = useState(accountId);
+  if (accountId !== prevAccountId) {
+    setPrevAccountId(accountId);
+    if (accountId) {
+      setLoading(true);
+      setError(null);
     }
-  }, [accountId]);
+  }
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    void fetchQueue();
+  }, [fetchQueue]);
 
   const awaiting = useMemo(
     () => leads?.filter((l) => l.score.isAwaitingReply).length ?? 0,

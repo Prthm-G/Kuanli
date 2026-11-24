@@ -1,6 +1,12 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef } from "react";
+import {
+  useState,
+  useCallback,
+  useEffect,
+  useRef,
+  useSyncExternalStore,
+} from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import type { Conversation, Message, Contact, ConversationStatus } from "@/types";
@@ -24,6 +30,21 @@ import { useAuth } from "@/hooks/use-auth";
 // Remembers the agent's show/hide choice for the desktop contact panel
 // across reloads and sessions (device-scoped, like the theme prefs).
 const CONTACT_PANEL_STORAGE_KEY = "Kuanli:inbox:contact-panel-open";
+
+function readContactPanelOpen(): boolean {
+  if (typeof window === "undefined") return true;
+  try {
+    const stored = localStorage.getItem(CONTACT_PANEL_STORAGE_KEY);
+    return stored === null ? true : stored === "true";
+  } catch {
+    // localStorage can throw in private-browsing / sandboxed contexts.
+    return true;
+  }
+}
+
+// With useSyncExternalStore: false during SSR and the hydration render, true
+// after (the same pattern as themed-toaster.tsx).
+const noopSubscribe = () => () => {};
 
 export default function InboxPage() {
   const router = useRouter();
@@ -64,30 +85,26 @@ export default function InboxPage() {
 
   /**
    * Whether the desktop contact sidebar (tags / deals / notes) is shown.
-   * Defaults to `true` (the historical behaviour) and is restored from
-   * localStorage after mount. We deliberately do NOT read localStorage in
-   * the initializer: the server renders with `true`, so reading a stored
-   * `false` synchronously would produce a hydration mismatch. The effect
-   * below reconciles to the stored value right after mount instead.
+   * Defaults to `true` (the historical behaviour). The stored choice is read
+   * once, in the initializer, but only shown once hydrated (`isClient`): the
+   * server renders with `true`, so showing a stored `false` on the hydration
+   * render would produce a hydration mismatch.
    */
-  const [contactPanelOpen, setContactPanelOpen] = useState(true);
+  const isClient = useSyncExternalStore(noopSubscribe, () => true, () => false);
+  const [contactPanelPref, setContactPanelOpen] = useState(readContactPanelOpen);
+  const contactPanelOpen = isClient ? contactPanelPref : true;
   // Phones have no room for the panel, so it opens as a sheet from the header.
   const [mobileDetailsOpen, setMobileDetailsOpen] = useState(false);
   // The image message a payment is being logged from ("Log payment" on a bubble).
   const [paymentMessage, setPaymentMessage] = useState<Message | null>(null);
   // A receipt image belongs to the chat it was opened from: drop it when the
-  // active chat changes so it can never attach to another student.
-  useEffect(() => {
+  // active chat changes so it can never attach to another student. Done while
+  // rendering, so no frame shows it against the new chat.
+  const [paymentChatId, setPaymentChatId] = useState(activeConversation?.id);
+  if (activeConversation?.id !== paymentChatId) {
+    setPaymentChatId(activeConversation?.id);
     setPaymentMessage(null);
-  }, [activeConversation?.id]);
-  useEffect(() => {
-    try {
-      const stored = localStorage.getItem(CONTACT_PANEL_STORAGE_KEY);
-      if (stored !== null) setContactPanelOpen(stored === "true");
-    } catch {
-      // localStorage can throw in private-browsing / sandboxed contexts.
-    }
-  }, []);
+  }
 
   const handleToggleContactPanel = useCallback(() => {
     setContactPanelOpen((prev) => {
@@ -246,13 +263,19 @@ export default function InboxPage() {
   }, []);
 
   // The number badge and the number filter (094), for the owner and admins.
-  // counsellors is admin-only under RLS, so this read is theirs alone.
-  useEffect(() => {
+  // counsellors is admin-only under RLS, so this read is theirs alone. Losing
+  // the role drops them; that is done while rendering, not in the effect.
+  const [prevCanManageMembers, setPrevCanManageMembers] =
+    useState(canManageMembers);
+  if (canManageMembers !== prevCanManageMembers) {
+    setPrevCanManageMembers(canManageMembers);
     if (!canManageMembers) {
       setNumberLabels({});
       setCounsellorNumbers([]);
-      return;
     }
+  }
+  useEffect(() => {
+    if (!canManageMembers) return;
     let cancelled = false;
     const supabase = createClient();
     void Promise.all([

@@ -55,36 +55,57 @@ export default function ApplicationsPage() {
     );
   }, [contacts, search]);
 
+  // Every setter runs in a promise callback, so the effect below sets no
+  // state synchronously.
+  const fetchApplications = useCallback(async () => {
+    if (!accountId) return;
+    const supabase = createClient();
+    await loadApplicationTracker(supabase, accountId)
+      .then(async (tracker) => {
+        setContacts(tracker);
+        // Counsellors don't get the fee strip, so don't fetch the ledger for them.
+        if (!showMoney) {
+          setLedger(new Map());
+        } else {
+          try {
+            const rows = await loadLedger(supabase, accountId);
+            setLedger(new Map(rows.map((r) => [r.contactId, r])));
+          } catch {
+            // The document tracker is this page's job; a failed ledger fetch
+            // hides the fee strip rather than taking the page down.
+            setLedger(new Map());
+          }
+        }
+      })
+      .catch((e) =>
+        setError(e instanceof Error ? e.message : 'Could not load applications')
+      )
+      .finally(() => setLoading(false));
+  }, [accountId, showMoney]);
+
+  // Refresh: show the spinner and clear the last error, then refetch.
   const load = useCallback(async () => {
     if (!accountId) return;
     setLoading(true);
     setError(null);
-    try {
-      const supabase = createClient();
-      setContacts(await loadApplicationTracker(supabase, accountId));
-      // Counsellors don't get the fee strip, so don't fetch the ledger for them.
-      if (!showMoney) {
-        setLedger(new Map());
-      } else {
-        try {
-          const rows = await loadLedger(supabase, accountId);
-          setLedger(new Map(rows.map((r) => [r.contactId, r])));
-        } catch {
-          // The document tracker is this page's job; a failed ledger fetch
-          // hides the fee strip rather than taking the page down.
-          setLedger(new Map());
-        }
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not load applications');
-    } finally {
-      setLoading(false);
+    await fetchApplications();
+  }, [accountId, fetchApplications]);
+
+  // accountId arriving (or changing after a sign-out in another tab) and a
+  // role change flipping showMoney both refetch in the effect below; reset for
+  // them while rendering instead.
+  const [prevDeps, setPrevDeps] = useState({ accountId, showMoney });
+  if (accountId !== prevDeps.accountId || showMoney !== prevDeps.showMoney) {
+    setPrevDeps({ accountId, showMoney });
+    if (accountId) {
+      setLoading(true);
+      setError(null);
     }
-  }, [accountId, showMoney]);
+  }
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    void fetchApplications();
+  }, [fetchApplications]);
 
   async function classify(doc: UnsortedDoc, docType: string) {
     if (!docType) return;

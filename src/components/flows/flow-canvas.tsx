@@ -303,9 +303,14 @@ function FlowCanvasInner() {
 
   const [rfNodes, setRfNodes] = useState<RfNode<NodeData>[]>(derivedRfNodes);
 
-  useEffect(() => {
+  // Reset the local copy (which also takes React Flow's node changes) to the
+  // derived nodes whenever those change, while rendering rather than from an
+  // effect.
+  const [syncedRfNodes, setSyncedRfNodes] = useState(derivedRfNodes);
+  if (derivedRfNodes !== syncedRfNodes) {
+    setSyncedRfNodes(derivedRfNodes);
     setRfNodes(derivedRfNodes);
-  }, [derivedRfNodes]);
+  }
 
   const rfEdges = useMemo(() => {
     const canvasEdges = deriveCanvasEdges(builderNodes);

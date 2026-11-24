@@ -73,7 +73,15 @@ export function ContactForm({
   const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
   const [loadingTags, setLoadingTags] = useState(false);
 
-  useEffect(() => {
+  // Seed the form from its props when the dialog opens, while rendering rather
+  // than in an effect. Deliberately keyed on [open, contact] only: it must NOT
+  // re-run while the user is typing. `contactTags` is an array prop with a
+  // fresh identity on every render, so keying on it would re-seed the form
+  // continuously and discard input — the same defect that was fixed in
+  // whatsapp-config.tsx.
+  const [seededFor, setSeededFor] = useState({ open: false, contact });
+  if (open !== seededFor.open || contact !== seededFor.contact) {
+    setSeededFor({ open, contact });
     if (open) {
       setName(contact?.name ?? '');
       setPhone(contact?.phone ?? '');
@@ -84,16 +92,22 @@ export function ContactForm({
       setReferrerId(contact?.referred_by_contact_id ?? null);
       setSelectedTagIds(contactTags.map((ct) => ct.tag_id));
       setDupMatch(null);
-      fetchTags();
+      setLoadingTags(true);
     }
-    // Deliberately keyed on [open, contact] only. This effect seeds the form
-    // from its props when the dialog opens; it must NOT re-run while the user
-    // is typing. `contactTags` is an array prop with a fresh identity on every
-    // render and `fetchTags` is redefined each render, so listing either would
-    // re-seed the form continuously and discard input — the same defect that
-    // was fixed in whatsapp-config.tsx.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, contact]);
+  }
+
+  // The tag list is refetched on the same [open, contact] changes.
+  useEffect(() => {
+    if (!open) return;
+    void supabase
+      .from('tags')
+      .select('*')
+      .order('name')
+      .then(({ data }) => {
+        if (data) setTags(data);
+        setLoadingTags(false);
+      });
+  }, [open, contact, supabase]);
 
   // Look up an existing contact with this number (new contacts only).
   // Runs on blur so we don't query on every keystroke.
@@ -115,13 +129,6 @@ export function ContactForm({
     } finally {
       setCheckingDup(false);
     }
-  }
-
-  async function fetchTags() {
-    setLoadingTags(true);
-    const { data } = await supabase.from('tags').select('*').order('name');
-    if (data) setTags(data);
-    setLoadingTags(false);
   }
 
   function toggleTag(tagId: string) {

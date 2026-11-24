@@ -40,28 +40,48 @@ export default function GrowthPage() {
     if (accountRole !== null && !allowed) router.replace('/dashboard');
   }, [accountRole, allowed, router]);
 
+  // Every setter runs in a promise callback, so the effect below sets no
+  // state synchronously.
+  const fetchGrowth = useCallback(async () => {
+    if (!accountId || !allowed) return;
+    const supabase = createClient();
+    await Promise.all([
+      loadGrowthLive(supabase, accountId),
+      loadGrowthSnapshots(supabase, accountId),
+    ])
+      .then(([l, s]) => {
+        setLive(l);
+        setSnapshots(s);
+      })
+      .catch((e) =>
+        setError(e instanceof Error ? e.message : 'Could not load growth data')
+      )
+      .finally(() => setLoading(false));
+  }, [accountId, allowed]);
+
+  // Refresh: show the spinner and clear the last error, then refetch.
   const load = useCallback(async () => {
     if (!accountId || !allowed) return;
     setLoading(true);
     setError(null);
-    try {
-      const supabase = createClient();
-      const [l, s] = await Promise.all([
-        loadGrowthLive(supabase, accountId),
-        loadGrowthSnapshots(supabase, accountId),
-      ]);
-      setLive(l);
-      setSnapshots(s);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not load growth data');
-    } finally {
-      setLoading(false);
+    await fetchGrowth();
+  }, [accountId, allowed, fetchGrowth]);
+
+  // accountId or access arriving (or accountId changing after a sign-out in
+  // another tab) refetches in the effect below; reset for it while rendering
+  // instead.
+  const [prevDeps, setPrevDeps] = useState({ accountId, allowed });
+  if (accountId !== prevDeps.accountId || allowed !== prevDeps.allowed) {
+    setPrevDeps({ accountId, allowed });
+    if (accountId && allowed) {
+      setLoading(true);
+      setError(null);
     }
-  }, [accountId, allowed]);
+  }
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    void fetchGrowth();
+  }, [fetchGrowth]);
 
   const latest = snapshots[0]?.payload ?? null;
   const adNames = useMemo(

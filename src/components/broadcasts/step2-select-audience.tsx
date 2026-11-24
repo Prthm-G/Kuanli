@@ -77,6 +77,30 @@ const OPERATOR_OPTIONS: { value: CustomFieldOperator; label: string }[] = [
   { value: 'contains', label: 'contains' },
 ];
 
+/**
+ * The estimate an audience has without a query: a CSV list counts itself and
+ * a partially-configured audience has none yet (wait for the user to finish).
+ * `undefined` means the count needs a query.
+ */
+function countWithoutQuery(audience: AudienceConfig): number | null | undefined {
+  if (
+    audience.type === 'csv' &&
+    audience.csvContacts &&
+    audience.csvContacts.length > 0
+  ) {
+    return audience.csvContacts.length;
+  }
+  const queried =
+    audience.type === 'all' ||
+    (audience.type === 'tags' &&
+      !!audience.tagIds &&
+      audience.tagIds.length > 0) ||
+    (audience.type === 'custom_field' &&
+      !!audience.customField?.fieldId &&
+      !!audience.customField.value);
+  return queried ? undefined : null;
+}
+
 export function Step2SelectAudience({
   audience,
   onUpdate,
@@ -87,8 +111,14 @@ export function Step2SelectAudience({
   const [customFields, setCustomFields] = useState<CustomField[]>([]);
   const [loadingTags, setLoadingTags] = useState(false);
   const [loadingFields, setLoadingFields] = useState(false);
-  const [estimatedCount, setEstimatedCount] = useState<number | null>(null);
-  const [loadingCount, setLoadingCount] = useState(false);
+  const [queriedCount, setQueriedCount] = useState<number | null>(null);
+  const [queryingCount, setQueryingCount] = useState(false);
+
+  // A CSV list counts itself and a partially-configured audience has no
+  // estimate yet; only the other shapes wait on fetchEstimatedCount.
+  const knownCount = countWithoutQuery(audience);
+  const estimatedCount = knownCount === undefined ? queriedCount : knownCount;
+  const loadingCount = knownCount === undefined && queryingCount;
 
   // Tags are used both by the primary "Filter by Tags" audience type
   // AND by the exclude-list below — so always load once on mount.
@@ -125,91 +155,96 @@ export function Step2SelectAudience({
     fetchFields();
   }, [audience.type]);
 
-  const fetchEstimatedCount = useCallback(async () => {
-    setLoadingCount(true);
-    try {
-      const supabase = createClient();
+  // Returns the estimate rather than setting it, so the effect below applies
+  // it in a promise callback and sets no state synchronously.
+  const fetchEstimatedCount = useCallback(async (): Promise<number | null> => {
+    const supabase = createClient();
 
-      // Base query — produces the superset before exclude is applied.
-      let baseIds: Set<string> | null = null; // null means "all contacts"
+    // Base query — produces the superset before exclude is applied.
+    let baseIds: Set<string> | null = null; // null means "all contacts"
 
-      if (audience.type === 'all') {
-        // Handled below — full-table count adjusted by excludes.
-      } else if (
-        audience.type === 'tags' &&
-        audience.tagIds &&
-        audience.tagIds.length > 0
-      ) {
-        const { data } = await supabase
-          .from('contact_tags')
-          .select('contact_id')
-          .in('tag_id', audience.tagIds);
-        baseIds = new Set((data ?? []).map((r) => r.contact_id));
-      } else if (
-        audience.type === 'custom_field' &&
-        audience.customField?.fieldId &&
-        audience.customField.value
-      ) {
-        const { fieldId, operator, value } = audience.customField;
-        let q = supabase
-          .from('contact_custom_values')
-          .select('contact_id')
-          .eq('custom_field_id', fieldId);
-        if (operator === 'is') q = q.eq('value', value);
-        else if (operator === 'is_not') q = q.neq('value', value);
-        else q = q.ilike('value', `%${value}%`);
-        const { data } = await q;
-        baseIds = new Set((data ?? []).map((r) => r.contact_id));
-      } else if (
-        audience.type === 'csv' &&
-        audience.csvContacts &&
-        audience.csvContacts.length > 0
-      ) {
-        setEstimatedCount(audience.csvContacts.length);
-        return;
-      } else {
-        // Partially-configured audience — wait for the user to finish.
-        setEstimatedCount(null);
-        return;
-      }
-
-      // Apply exclude tags
-      let excludeSet: Set<string> | null = null;
-      if (audience.excludeTagIds && audience.excludeTagIds.length > 0) {
-        const { data: excludeRows } = await supabase
-          .from('contact_tags')
-          .select('contact_id')
-          .in('tag_id', audience.excludeTagIds);
-        excludeSet = new Set((excludeRows ?? []).map((r) => r.contact_id));
-      }
-
-      if (baseIds) {
-        const effective = [...baseIds].filter(
-          (id) => !excludeSet?.has(id),
-        );
-        setEstimatedCount(effective.length);
-      } else {
-        // "All" — fetch the total, then subtract exclude set if any.
-        const { count } = await supabase
-          .from('contacts')
-          .select('*', { count: 'exact', head: true });
-        const total = count ?? 0;
-        setEstimatedCount(excludeSet ? Math.max(0, total - excludeSet.size) : total);
-      }
-    } finally {
-      setLoadingCount(false);
+    if (audience.type === 'all') {
+      // Handled below — full-table count adjusted by excludes.
+    } else if (
+      audience.type === 'tags' &&
+      audience.tagIds &&
+      audience.tagIds.length > 0
+    ) {
+      const { data } = await supabase
+        .from('contact_tags')
+        .select('contact_id')
+        .in('tag_id', audience.tagIds);
+      baseIds = new Set((data ?? []).map((r) => r.contact_id));
+    } else if (
+      audience.type === 'custom_field' &&
+      audience.customField?.fieldId &&
+      audience.customField.value
+    ) {
+      const { fieldId, operator, value } = audience.customField;
+      let q = supabase
+        .from('contact_custom_values')
+        .select('contact_id')
+        .eq('custom_field_id', fieldId);
+      if (operator === 'is') q = q.eq('value', value);
+      else if (operator === 'is_not') q = q.neq('value', value);
+      else q = q.ilike('value', `%${value}%`);
+      const { data } = await q;
+      baseIds = new Set((data ?? []).map((r) => r.contact_id));
+    } else {
+      // countWithoutQuery answers every other shape; nothing to query.
+      return null;
     }
+
+    // Apply exclude tags
+    let excludeSet: Set<string> | null = null;
+    if (audience.excludeTagIds && audience.excludeTagIds.length > 0) {
+      const { data: excludeRows } = await supabase
+        .from('contact_tags')
+        .select('contact_id')
+        .in('tag_id', audience.excludeTagIds);
+      excludeSet = new Set((excludeRows ?? []).map((r) => r.contact_id));
+    }
+
+    if (baseIds) {
+      const effective = [...baseIds].filter(
+        (id) => !excludeSet?.has(id),
+      );
+      return effective.length;
+    }
+    // "All" — fetch the total, then subtract exclude set if any.
+    const { count } = await supabase
+      .from('contacts')
+      .select('*', { count: 'exact', head: true });
+    const total = count ?? 0;
+    return excludeSet ? Math.max(0, total - excludeSet.size) : total;
   }, [
     audience.type,
     audience.tagIds,
     audience.customField,
-    audience.csvContacts,
     audience.excludeTagIds,
   ]);
 
+  // A change to what the query reads re-runs the effect below; show its
+  // spinner while rendering (mount included) rather than from the effect.
+  // csvContacts only feeds knownCount, which never needs the query.
+  const countDeps = [
+    audience.type,
+    audience.tagIds,
+    audience.customField,
+    audience.excludeTagIds,
+  ];
+  const [prevCountDeps, setPrevCountDeps] = useState<unknown[] | null>(null);
+  if (!prevCountDeps || countDeps.some((d, i) => d !== prevCountDeps[i])) {
+    setPrevCountDeps(countDeps);
+    if (knownCount === undefined) setQueryingCount(true);
+  }
+
   useEffect(() => {
-    fetchEstimatedCount();
-  }, [fetchEstimatedCount]);
+    if (knownCount !== undefined) return;
+    void fetchEstimatedCount()
+      .then(setQueriedCount)
+      .finally(() => setQueryingCount(false));
+  }, [knownCount, fetchEstimatedCount]);
 
   function toggleTag(tagId: string) {
     const current = audience.tagIds ?? [];

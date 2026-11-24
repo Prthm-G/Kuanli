@@ -65,18 +65,20 @@ export default function AutomationsPage() {
   const [pendingDelete, setPendingDelete] = useState<Automation | null>(null)
   const [deleting, setDeleting] = useState(false)
 
+  // Every setter runs in a promise callback, so the mount effect below sets
+  // no state synchronously.
   async function load() {
-    try {
-      const supabase = createClient()
-      const { data, error: fetchErr } = await supabase
-        .from("automations")
-        .select("*")
-        .order("created_at", { ascending: false })
-      if (fetchErr) throw fetchErr
-      setAutomations((data ?? []) as Automation[])
-    } catch (err) {
+    const fail = (err: unknown) =>
       setError(err instanceof Error ? err.message : "Failed to load automations")
-    }
+    const supabase = createClient()
+    await supabase
+      .from("automations")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .then(({ data, error: fetchErr }) => {
+        if (fetchErr) return fail(fetchErr)
+        setAutomations((data ?? []) as Automation[])
+      }, fail)
   }
 
   useEffect(() => {

@@ -289,6 +289,12 @@ export function MessageComposer({
     [removeStaged],
   );
 
+  const stopRecording = useCallback(() => {
+    clearTimer();
+    setRecording(false);
+    void recorderRef.current?.stop().catch(() => {});
+  }, [clearTimer]);
+
   const startRecording = useCallback(async () => {
     if (inputsDisabled || busy || recording) return;
     if (!navigator.mediaDevices?.getUserMedia || typeof AudioContext === "undefined") {
@@ -315,19 +321,20 @@ export function MessageComposer({
       await recorder.start();
       setRecording(true);
       setRecordSeconds(0);
-      timerRef.current = setInterval(() => setRecordSeconds((s) => s + 1), 1000);
+      // Auto-stop at the cap so a forgotten recording can't blow the
+      // upload size limit. Checked in the tick that reaches it.
+      let seconds = 0;
+      timerRef.current = setInterval(() => {
+        seconds += 1;
+        setRecordSeconds(seconds);
+        if (seconds >= MAX_RECORDING_SECONDS) stopRecording();
+      }, 1000);
     } catch {
       void recorderRef.current?.stop().catch(() => {});
       recorderRef.current = null;
       toast.error("Microphone access denied or unavailable.");
     }
-  }, [inputsDisabled, busy, recording, finalizeRecording]);
-
-  const stopRecording = useCallback(() => {
-    clearTimer();
-    setRecording(false);
-    void recorderRef.current?.stop().catch(() => {});
-  }, [clearTimer]);
+  }, [inputsDisabled, busy, recording, finalizeRecording, stopRecording]);
 
   const cancelRecording = useCallback(() => {
     cancelledRef.current = true;
@@ -335,14 +342,6 @@ export function MessageComposer({
     setRecording(false);
     void recorderRef.current?.stop().catch(() => {});
   }, [clearTimer]);
-
-  // Auto-stop at the cap so a forgotten recording can't blow the
-  // upload size limit.
-  useEffect(() => {
-    if (recording && recordSeconds >= MAX_RECORDING_SECONDS) {
-      stopRecording();
-    }
-  }, [recording, recordSeconds, stopRecording]);
 
   // ---- Draft send / discard -----------------------------------------
 

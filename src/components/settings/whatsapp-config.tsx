@@ -85,83 +85,100 @@ export function WhatsAppConfig() {
       ? `${window.location.origin}/api/whatsapp/webhook`
       : '';
 
+  // Sets state only in promise callbacks, so the effect below sets none
+  // synchronously; the caller raises `loading` (the auth reset below, or a
+  // handler reloading after a save).
   const fetchConfig = useCallback(async (acctId: string) => {
-    setLoading(true);
-    try {
-      // Load form values from Supabase (shows what's in DB).
-      // Switched from `user_id` (which would only match the row's
-      // original author) to `account_id` so every member of the
-      // account sees the same saved configuration. UNIQUE(account_id)
-      // on the table guarantees the .maybeSingle() return type
-      // remains accurate.
-      // Multi-number (034): an account may own several numbers. This form edits
-      // the primary number; a full numbers-list UI is a follow-up.
-      // Not `*`: since 099 the browser cannot read access_token or verify_token
-      // (a `*` select fails outright). The form never showed them anyway.
-      const { data, error } = await supabase
+    // Load form values from Supabase (shows what's in DB).
+    // Switched from `user_id` (which would only match the row's
+    // original author) to `account_id` so every member of the
+    // account sees the same saved configuration. UNIQUE(account_id)
+    // on the table guarantees the .maybeSingle() return type
+    // remains accurate.
+    // Multi-number (034): an account may own several numbers. This form edits
+    // the primary number; a full numbers-list UI is a follow-up.
+    // Not `*`: since 099 the browser cannot read access_token or verify_token
+    // (a `*` select fails outright). The form never showed them anyway.
+    // Promise.resolve: the query builder is only PromiseLike (no catch/finally).
+    await Promise.resolve(
+      supabase
         .from('whatsapp_config')
         .select('id, user_id, phone_number_id, waba_id, status, connected_at, registered_at, subscribed_apps_at, last_registration_error, meta_business_id, onboarding_method, token_expires_at')
         .eq('account_id', acctId)
         .order('is_primary', { ascending: false })
         .order('created_at', { ascending: true })
         .limit(1)
-        .maybeSingle();
-
-      if (error) {
-        console.error('Failed to load config row:', error);
-      }
-
-      if (data) {
-        setConfig(data);
-        setPhoneNumberId(data.phone_number_id || '');
-        setWabaId(data.waba_id || '');
-        setAccessToken(MASKED_TOKEN);
-        setVerifyToken('');
-        setPin('');
-        setTokenEdited(false);
-      } else {
-        setConfig(null);
-        setPhoneNumberId('');
-        setWabaId('');
-        setAccessToken('');
-        setVerifyToken('');
-        setPin('');
-        setTokenEdited(false);
-      }
-      // Clear any stale probe result when reloading the row.
-      setRegistrationProbe(null);
-
-      // Then verify health via the API (decrypts token + pings Meta)
-      if (data) {
-        try {
-          const res = await fetch('/api/whatsapp/config', { method: 'GET' });
-          const payload = await res.json();
-
-          if (payload.connected) {
-            setConnectionStatus('connected');
-            setResetReason(null);
-            setStatusMessage('');
-          } else {
-            setConnectionStatus('disconnected');
-            setResetReason(payload.needs_reset ? 'token_corrupted' : payload.reason === 'meta_api_error' ? 'meta_api_error' : null);
-            setStatusMessage(payload.message || '');
-          }
-        } catch (err) {
-          console.error('Health check failed:', err);
-          setConnectionStatus('disconnected');
+        .maybeSingle(),
+    )
+      .then(async ({ data, error }) => {
+        if (error) {
+          console.error('Failed to load config row:', error);
         }
-      } else {
-        setConnectionStatus('disconnected');
-        setResetReason(null);
-        setStatusMessage('');
-      }
-    } catch (err) {
-      console.error('fetchConfig error:', err);
-      toast.error('Failed to load WhatsApp configuration');
-    } finally {
-      setLoading(false);
-    }
+
+        if (data) {
+          setConfig(data);
+          setPhoneNumberId(data.phone_number_id || '');
+          setWabaId(data.waba_id || '');
+          setAccessToken(MASKED_TOKEN);
+          setVerifyToken('');
+          setPin('');
+          setTokenEdited(false);
+        } else {
+          setConfig(null);
+          setPhoneNumberId('');
+          setWabaId('');
+          setAccessToken('');
+          setVerifyToken('');
+          setPin('');
+          setTokenEdited(false);
+        }
+        // Clear any stale probe result when reloading the row.
+        setRegistrationProbe(null);
+
+        // Then verify health via the API (decrypts token + pings Meta)
+        if (data) {
+          try {
+            const res = await fetch('/api/whatsapp/config', { method: 'GET' });
+            const payload = await res.json();
+
+            if (payload.connected) {
+              setConnectionStatus('connected');
+              setResetReason(null);
+              setStatusMessage('');
+            } else {
+              setConnectionStatus('disconnected');
+              setResetReason(payload.needs_reset ? 'token_corrupted' : payload.reason === 'meta_api_error' ? 'meta_api_error' : null);
+              setStatusMessage(payload.message || '');
+            }
+          } catch (err) {
+            console.error('Health check failed:', err);
+            setConnectionStatus('disconnected');
+          }
+        } else {
+          setConnectionStatus('disconnected');
+          setResetReason(null);
+          setStatusMessage('');
+        }
+      })
+      .catch((err) => {
+        console.error('fetchConfig error:', err);
+        toast.error('Failed to load WhatsApp configuration');
+      })
+      .finally(() => setLoading(false));
   }, [supabase]);
+
+  // Auth settling (again after every profile refetch) either loads the row in
+  // the effect below or, with no account, stops loading. Both flips of
+  // `loading` happen while rendering rather than in the effect.
+  const authSettled = !authLoading && !profileLoading;
+  const fetchKey =
+    authSettled && user && accountId ? `${user.id}:${accountId}` : null;
+  const [prevFetchKey, setPrevFetchKey] = useState<string | null>(null);
+  if (fetchKey !== prevFetchKey) {
+    setPrevFetchKey(fetchKey);
+    if (fetchKey) setLoading(true);
+  }
+  if (authSettled && (!user || !accountId) && loading) setLoading(false);
 
   useEffect(() => {
     // Need both the auth session (`!authLoading`) AND the profile
@@ -169,11 +186,7 @@ export function WhatsAppConfig() {
     // second guard, the effect would fire with `accountId === null`
     // for the first render window and bail without ever retrying
     // once the profile arrives.
-    if (authLoading || profileLoading) return;
-    if (!user || !accountId) {
-      setLoading(false);
-      return;
-    }
+    if (authLoading || profileLoading || !user || !accountId) return;
     fetchConfig(accountId);
   // `user` is a fresh object on every Supabase onAuthStateChange event — which
   // fires on token refresh AND on tab focus — so depending on it re-ran this
@@ -269,7 +282,10 @@ export function WhatsAppConfig() {
         setPin('');
       }
 
-      if (accountId) await fetchConfig(accountId);
+      if (accountId) {
+        setLoading(true);
+        await fetchConfig(accountId);
+      }
     } catch (err) {
       console.error('Save error:', err);
       toast.error('Failed to save configuration');
@@ -325,7 +341,10 @@ export function WhatsAppConfig() {
           { duration: 8000 },
         );
       }
-      if (accountId) await fetchConfig(accountId);
+      if (accountId) {
+        setLoading(true);
+        await fetchConfig(accountId);
+      }
     } catch (err) {
       console.error('verify-registration failed:', err);
       toast.error('Could not reach the verification endpoint.');

@@ -23,22 +23,40 @@ export default function AnalyticsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Every setter runs in a promise callback, so the effect below sets no
+  // state synchronously.
+  const fetchReport = useCallback(async () => {
+    if (!accountId) return;
+    await loadFunnelAnalytics(createClient(), accountId)
+      .then(setReport)
+      .catch((e) =>
+        setError(e instanceof Error ? e.message : 'Could not load analytics')
+      )
+      .finally(() => setLoading(false));
+  }, [accountId]);
+
+  // Refresh: show the spinner and clear the last error, then refetch.
   const load = useCallback(async () => {
     if (!accountId) return;
     setLoading(true);
     setError(null);
-    try {
-      setReport(await loadFunnelAnalytics(createClient(), accountId));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not load analytics');
-    } finally {
-      setLoading(false);
+    await fetchReport();
+  }, [accountId, fetchReport]);
+
+  // accountId arriving (or changing after a sign-out in another tab) refetches
+  // in the effect below; reset for it while rendering instead.
+  const [prevAccountId, setPrevAccountId] = useState(accountId);
+  if (accountId !== prevAccountId) {
+    setPrevAccountId(accountId);
+    if (accountId) {
+      setLoading(true);
+      setError(null);
     }
-  }, [accountId]);
+  }
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    void fetchReport();
+  }, [fetchReport]);
 
   const t = report?.totals;
   // Not Interested has no totals key (093); its funnel row carries the count.

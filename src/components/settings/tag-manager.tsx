@@ -54,34 +54,42 @@ export function TagManager() {
   const [newTagName, setNewTagName] = useState('');
   const [selectedColor, setSelectedColor] = useState(PRESET_COLORS[3].value);
 
+  // Auth settling either fetches in the effect below (the profile, and with it
+  // accountId, can land after the session) or, with no account, stops
+  // loading. Both flips of `loading` happen while rendering instead.
+  const fetchKey =
+    !authLoading && user && accountId ? `${user.id}:${accountId}` : null;
+  const [prevFetchKey, setPrevFetchKey] = useState<string | null>(null);
+  if (fetchKey !== prevFetchKey) {
+    setPrevFetchKey(fetchKey);
+    if (fetchKey) setLoading(true);
+  }
+  if (!authLoading && (!user || !accountId) && loading) setLoading(false);
+
   useEffect(() => {
-    if (authLoading) return;
-    if (!user || !accountId) {
-      setLoading(false);
-      return;
-    }
+    if (authLoading || !user || !accountId) return;
     fetchTags(accountId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authLoading, user?.id, accountId]);
 
   // By account, not by author: tags belong to the team (RLS: any member reads).
+  // Sets state only in promise callbacks, so the effect above sets none
+  // synchronously; a reload after a change raises `loading` first.
   async function fetchTags(acctId: string) {
-    try {
-      setLoading(true);
-      const { data, error } = await supabase
-        .from('tags')
-        .select('*')
-        .eq('account_id', acctId)
-        .order('created_at', { ascending: true });
-
-      if (error) throw error;
-      setTags(data || []);
-    } catch (err) {
+    const fail = (err: unknown) => {
       console.error('Failed to fetch tags:', err);
       toast.error('Failed to load tags');
-    } finally {
-      setLoading(false);
-    }
+    };
+    await supabase
+      .from('tags')
+      .select('*')
+      .eq('account_id', acctId)
+      .order('created_at', { ascending: true })
+      .then(({ data, error }) => {
+        if (error) return fail(error);
+        setTags(data || []);
+      }, fail)
+      .then(() => setLoading(false));
   }
 
   async function handleCreate() {
@@ -111,6 +119,7 @@ export function TagManager() {
       toast.success('Tag created');
       setNewTagName('');
       setSelectedColor(PRESET_COLORS[3].value);
+      setLoading(true);
       await fetchTags(accountId);
     } catch (err) {
       console.error('Create error:', err);

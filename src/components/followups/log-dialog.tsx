@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { toast } from 'sonner';
 
 import { createClient } from '@/lib/supabase/client';
@@ -87,16 +87,20 @@ export function LogDialog({
   const [saving, setSaving] = useState(false);
 
   // Reset on every open rather than on close: a dialog that reopens holding
-  // the last student's notes is how the wrong summary gets filed.
-  useEffect(() => {
-    if (!open) return;
-    setOccurredAt(toLocalInput(new Date()));
-    setMethod('call');
-    setOutcome('');
-    setSummary('');
-    setNextDue('');
-    setNextMethod('call');
-  }, [open]);
+  // the last student's notes is how the wrong summary gets filed. Done while
+  // rendering the open transition, so the first open frame is already reset.
+  const [wasOpen, setWasOpen] = useState(false);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open) {
+      setOccurredAt(toLocalInput(new Date()));
+      setMethod('call');
+      setOutcome('');
+      setSummary('');
+      setNextDue('');
+      setNextMethod('call');
+    }
+  }
 
   // Not interested: the database moves the lead (migration 093); the form
   // only says so. It must not move the deal itself, or the trail gets two.

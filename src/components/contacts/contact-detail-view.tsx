@@ -118,95 +118,114 @@ export function ContactDetailView({
     };
   }, []);
 
+  // The fetchers set state only in promise callbacks, so the effect below sets
+  // none synchronously. Raising a loading flag is the caller's job: the open
+  // reset below for the drawer, the handler for a reload after a save.
   const fetchContact = useCallback(async () => {
     if (!contactId) return;
-    setLoading(true);
 
-    const { data } = await supabase
+    await supabase
       .from('contacts')
       .select('*')
       .eq('id', contactId)
-      .single();
-
-    if (data) {
-      setContact(data);
-      setEditName(data.name ?? '');
-      setEditPhone(data.phone);
-      setEditEmail(data.email ?? '');
-      setEditCompany(data.company ?? '');
-      setEditUniversityRoll(data.university_roll_number ?? '');
-      setEditSource(data.source ?? 'organic');
-      setEditSourceDetail(data.source_detail ?? '');
-      setEditReferrerId(data.referred_by_contact_id ?? null);
-    }
-    setLoading(false);
+      .single()
+      .then(({ data }) => {
+        if (data) {
+          setContact(data);
+          setEditName(data.name ?? '');
+          setEditPhone(data.phone);
+          setEditEmail(data.email ?? '');
+          setEditCompany(data.company ?? '');
+          setEditUniversityRoll(data.university_roll_number ?? '');
+          setEditSource(data.source ?? 'organic');
+          setEditSourceDetail(data.source_detail ?? '');
+          setEditReferrerId(data.referred_by_contact_id ?? null);
+        }
+        setLoading(false);
+      });
   }, [contactId, supabase]);
 
   const fetchTags = useCallback(async () => {
     if (!contactId) return;
 
-    const [tagsRes, contactTagsRes] = await Promise.all([
+    await Promise.all([
       supabase.from('tags').select('*').order('name'),
       supabase
         .from('contact_tags')
         .select('tag_id')
         .eq('contact_id', contactId),
-    ]);
-
-    if (tagsRes.data) setAllTags(tagsRes.data);
-    if (contactTagsRes.data) {
-      setContactTagIds(contactTagsRes.data.map((ct) => ct.tag_id));
-    }
+    ]).then(([tagsRes, contactTagsRes]) => {
+      if (tagsRes.data) setAllTags(tagsRes.data);
+      if (contactTagsRes.data) {
+        setContactTagIds(contactTagsRes.data.map((ct) => ct.tag_id));
+      }
+    });
   }, [contactId, supabase]);
 
   const fetchNotes = useCallback(async () => {
     if (!contactId) return;
-    setLoadingNotes(true);
 
-    const { data } = await supabase
+    await supabase
       .from('contact_notes')
       .select('*')
       .eq('contact_id', contactId)
-      .order('created_at', { ascending: false });
-
-    if (data) setNotes(data);
-    setLoadingNotes(false);
+      .order('created_at', { ascending: false })
+      .then(({ data }) => {
+        if (data) setNotes(data);
+        setLoadingNotes(false);
+      });
   }, [contactId, supabase]);
 
   const fetchCustomFields = useCallback(async () => {
     if (!contactId) return;
-    setLoadingCustom(true);
 
-    const [fieldsRes, valuesRes] = await Promise.all([
+    await Promise.all([
       supabase.from('custom_fields').select('*').order('field_name'),
       supabase
         .from('contact_custom_values')
         .select('*')
         .eq('contact_id', contactId),
-    ]);
-
-    if (fieldsRes.data) setCustomFields(fieldsRes.data);
-    if (valuesRes.data) {
-      const map: Record<string, string> = {};
-      valuesRes.data.forEach((v) => {
-        map[v.custom_field_id] = v.value ?? '';
-      });
-      setCustomValues(map);
-    }
-    setLoadingCustom(false);
+    ]).then(([fieldsRes, valuesRes]) => {
+      if (fieldsRes.data) setCustomFields(fieldsRes.data);
+      if (valuesRes.data) {
+        const map: Record<string, string> = {};
+        valuesRes.data.forEach((v) => {
+          map[v.custom_field_id] = v.value ?? '';
+        });
+        setCustomValues(map);
+      }
+      setLoadingCustom(false);
+    });
   }, [contactId, supabase]);
 
   const fetchDeals = useCallback(async () => {
     if (!contactId) return;
-    setLoadingDeals(true);
-    const { data } = await supabase
+    await supabase
       .from('deals')
       .select('*, stage:pipeline_stages(*)')
       .eq('contact_id', contactId)
-      .order('created_at', { ascending: false });
-    setDeals((data ?? []) as Deal[]);
-    setLoadingDeals(false);
+      .order('created_at', { ascending: false })
+      .then(({ data }) => {
+        setDeals((data ?? []) as Deal[]);
+        setLoadingDeals(false);
+      });
   }, [contactId, supabase]);
+
+  // Opening the drawer on a contact (mount included) refetches everything in
+  // the effect below; raise its loading flags while rendering instead.
+  const openContactId = open && contactId ? contactId : null;
+  const [prevOpenContactId, setPrevOpenContactId] = useState<string | null>(
+    null
+  );
+  if (openContactId !== prevOpenContactId) {
+    setPrevOpenContactId(openContactId);
+    if (openContactId) {
+      setLoading(true);
+      setLoadingNotes(true);
+      setLoadingCustom(true);
+      setLoadingDeals(true);
+    }
+  }
 
   useEffect(() => {
     if (open && contactId) {
@@ -260,6 +279,7 @@ export function ContactDetailView({
       toast.error('Failed to update contact');
     } else {
       toast.success('Contact updated');
+      setLoading(true);
       fetchContact();
       onUpdated();
     }
@@ -319,6 +339,7 @@ export function ContactDetailView({
       toast.error('Failed to add note');
     } else {
       setNewNote('');
+      setLoadingNotes(true);
       fetchNotes();
       toast.success('Note added');
     }

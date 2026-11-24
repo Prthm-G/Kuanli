@@ -70,20 +70,23 @@ export function ApplicationPanel({
   /** What the form last loaded from the server: a field that differs is unsaved typing. */
   const baseline = useRef<Fields>(EMPTY);
 
+  // Every setter runs in a promise callback, so the effect below sets no
+  // state synchronously.
   const load = useCallback(async () => {
-    try {
-      const a = await loadApplication(createClient(), contactId);
-      const fresh = fieldsOf(a);
-      const base = baseline.current;
-      baseline.current = fresh;
-      setApp(a);
-      // Unsaved typing survives a button's save and reload.
-      setFields((cur) => mergeServerFields(cur, base, fresh));
-      setLoaded(true);
-    } catch (e) {
-      console.error('Failed to load application:', e);
-      toast.error('Could not load the application');
-    }
+    await loadApplication(createClient(), contactId)
+      .then((a) => {
+        const fresh = fieldsOf(a);
+        const base = baseline.current;
+        baseline.current = fresh;
+        setApp(a);
+        // Unsaved typing survives a button's save and reload.
+        setFields((cur) => mergeServerFields(cur, base, fresh));
+        setLoaded(true);
+      })
+      .catch((e) => {
+        console.error('Failed to load application:', e);
+        toast.error('Could not load the application');
+      });
   }, [contactId]);
 
   useEffect(() => {

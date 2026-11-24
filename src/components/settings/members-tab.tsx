@@ -155,50 +155,52 @@ export function MembersTab() {
     full_name: string;
   } | null>(null);
 
+  // Both loaders set state only in promise callbacks, so the effects below
+  // set none synchronously.
   const loadRotation = useCallback(async (quiet = false) => {
     const supabase = createClient();
-    const [cres, bres] = await Promise.all([
+    await Promise.all([
       supabase
         .from('counsellors')
         .select('id, profile_id, active, branch_id, telegram_chat_id'),
       supabase.from('branches').select('id, name'),
-    ]);
-    if (cres.error || bres.error) {
-      console.error('[MembersTab] rotation load error:', cres.error ?? bres.error);
-      if (!quiet) toast.error('Could not load the lead rotation');
-      return;
-    }
-    const entries = (cres.data ?? []) as RotationEntry[];
-    setRotation(
-      new Map(
-        entries.flatMap((e) => (e.profile_id ? [[e.profile_id, e] as const] : [])),
-      ),
-    );
-    setBranchNames(
-      new Map(
-        ((bres.data ?? []) as { id: string; name: string }[]).map((b) => [b.id, b.name]),
-      ),
-    );
-    setRotationLoaded(true);
+    ]).then(([cres, bres]) => {
+      if (cres.error || bres.error) {
+        console.error('[MembersTab] rotation load error:', cres.error ?? bres.error);
+        if (!quiet) toast.error('Could not load the lead rotation');
+        return;
+      }
+      const entries = (cres.data ?? []) as RotationEntry[];
+      setRotation(
+        new Map(
+          entries.flatMap((e) => (e.profile_id ? [[e.profile_id, e] as const] : [])),
+        ),
+      );
+      setBranchNames(
+        new Map(
+          ((bres.data ?? []) as { id: string; name: string }[]).map((b) => [b.id, b.name]),
+        ),
+      );
+      setRotationLoaded(true);
+    });
   }, []);
 
   const loadEverything = useCallback(async () => {
-    try {
-      const mres = await fetch('/api/account/members', { cache: 'no-store' });
-
-      if (!mres.ok) {
-        const payload = await mres.json().catch(() => ({}));
-        toast.error(payload.error || 'Failed to load members');
-        return;
-      }
-      const mdata = (await mres.json()) as { members: Member[] };
-      setMembers(mdata.members);
-    } catch (err) {
-      console.error('[MembersTab] load error:', err);
-      toast.error('Could not reach the server');
-    } finally {
-      setLoading(false);
-    }
+    await fetch('/api/account/members', { cache: 'no-store' })
+      .then(async (mres) => {
+        if (!mres.ok) {
+          const payload = await mres.json().catch(() => ({}));
+          toast.error(payload.error || 'Failed to load members');
+          return;
+        }
+        const mdata = (await mres.json()) as { members: Member[] };
+        setMembers(mdata.members);
+      })
+      .catch((err) => {
+        console.error('[MembersTab] load error:', err);
+        toast.error('Could not reach the server');
+      })
+      .finally(() => setLoading(false));
   }, []);
 
   useEffect(() => {

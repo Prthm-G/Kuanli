@@ -164,45 +164,57 @@ export function TemplateManager() {
     [form.header_format, form.header_content],
   );
 
-  // Resize body_samples so it always has exactly bodyVarCount entries.
-  // (We mutate via setForm in an effect so React owns the state.)
-  useEffect(() => {
+  // Resize body_samples so it always has exactly bodyVarCount entries,
+  // whenever that count changes (mount included). Adjusted while rendering
+  // rather than from an effect.
+  const [sizedForCount, setSizedForCount] = useState<number | null>(null);
+  if (bodyVarCount !== sizedForCount) {
+    setSizedForCount(bodyVarCount);
     setForm((prev) => {
       if (prev.body_samples.length === bodyVarCount) return prev;
       const next = prev.body_samples.slice(0, bodyVarCount);
       while (next.length < bodyVarCount) next.push('');
       return { ...prev, body_samples: next };
     });
-  }, [bodyVarCount]);
+  }
+
+  // Auth settling either fetches in the effect below (the profile, and with it
+  // accountId, can land after the session) or, with no account, stops
+  // loading. Both flips of `loading` happen while rendering instead.
+  const fetchKey =
+    !authLoading && user && accountId ? `${user.id}:${accountId}` : null;
+  const [prevFetchKey, setPrevFetchKey] = useState<string | null>(null);
+  if (fetchKey !== prevFetchKey) {
+    setPrevFetchKey(fetchKey);
+    if (fetchKey) setLoading(true);
+  }
+  if (!authLoading && (!user || !accountId) && loading) setLoading(false);
 
   useEffect(() => {
-    if (authLoading) return;
-    if (!user || !accountId) {
-      setLoading(false);
-      return;
-    }
+    if (authLoading || !user || !accountId) return;
     fetchTemplates(accountId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authLoading, user?.id, accountId]);
 
   // By account, not by author: Meta templates belong to the team's number,
-  // and anyone in the account may read them (RLS).
+  // and anyone in the account may read them (RLS). Sets state only in promise
+  // callbacks, so the effect above sets none synchronously; a reload after a
+  // change raises `loading` first.
   async function fetchTemplates(acctId: string) {
-    try {
-      setLoading(true);
-      const { data, error } = await supabase
-        .from('message_templates')
-        .select('*')
-        .eq('account_id', acctId)
-        .order('created_at', { ascending: false });
-      if (error) throw error;
-      setTemplates(data || []);
-    } catch (err) {
+    const fail = (err: unknown) => {
       console.error('Failed to fetch templates:', err);
       toast.error('Failed to load templates');
-    } finally {
-      setLoading(false);
-    }
+    };
+    await supabase
+      .from('message_templates')
+      .select('*')
+      .eq('account_id', acctId)
+      .order('created_at', { ascending: false })
+      .then(({ data, error }) => {
+        if (error) return fail(error);
+        setTemplates(data || []);
+      }, fail)
+      .then(() => setLoading(false));
   }
 
   function buildSubmitPayload() {
@@ -280,7 +292,10 @@ export function TemplateManager() {
       }
       // Refresh first, then close — re-opening the dialog
       // immediately should not show a stale list.
-      if (accountId) await fetchTemplates(accountId);
+      if (accountId) {
+        setLoading(true);
+        await fetchTemplates(accountId);
+      }
       toast.success(
         data.dry_run
           ? isEdit
@@ -334,7 +349,10 @@ export function TemplateManager() {
           { duration: 10000 },
         );
       }
-      if (accountId) await fetchTemplates(accountId);
+      if (accountId) {
+        setLoading(true);
+        await fetchTemplates(accountId);
+      }
     } catch (err) {
       console.error('Template sync error:', err);
       toast.error(err instanceof Error ? err.message : 'Failed to sync templates');
