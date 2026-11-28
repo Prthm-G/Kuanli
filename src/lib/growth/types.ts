@@ -59,3 +59,85 @@ export interface GrowthLive {
   }>;
   contactsBySource: Array<{ source: string; contacts: number }>;
 }
+
+/** A branch tab on /growth (migration 097). */
+export interface GrowthBranch {
+  id: string;
+  code: string;
+  name: string;
+}
+
+/** Distinct contacts reaching each step (any deal, now or by a past stage move). */
+export interface FunnelSteps {
+  contacts: number;
+  qualified: number;
+  applicationStarted: number;
+  provisional: number;
+  fee: number;
+  enrolled: number;
+}
+
+export interface FunnelBranchRow extends FunnelSteps {
+  branchCode: string | null;
+  branchName: string | null;
+  chats: number;
+  adChats: number;
+  adUnknownChats: number;
+  organicChats: number;
+  /** null when no daily Meta spend is stored for the window. */
+  spend: number | null;
+}
+
+export interface FunnelAdRow extends FunnelSteps {
+  adId: string;
+  branchCode: string | null;
+  catalogName: string | null;
+  metaName: string | null;
+  inCatalog: boolean;
+  chats: number;
+  spend: number | null;
+  impressions: number | null;
+  clicks: number | null;
+}
+
+export interface FunnelSourceRow extends FunnelSteps {
+  source: 'ad_unknown' | 'organic';
+  branchCode: string | null;
+  chats: number;
+}
+
+/** Form leads carry no ad id (Meta returns none to the form workflow), so they are per branch and form. */
+export interface FunnelFormRow extends FunnelSteps {
+  branchCode: string | null;
+  form: string;
+  leads: number;
+}
+
+/** Meta reports spend, impressions and clicks by state; no chats or leads. */
+export interface SpendStateRow {
+  region: string;
+  branchCode: string | null;
+  spend: number;
+  impressions: number | null;
+  clicks: number | null;
+}
+
+export interface SpendCoverage {
+  adAccountId: string;
+  branchCode: string | null;
+  accountTz: string;
+  lastDay: string | null;
+  daysInWindow: number;
+}
+
+/** Shape returned by the `growth_branch_funnel` RPC (migration 105). */
+export interface BranchFunnel {
+  since: string;
+  until: string;
+  branches: FunnelBranchRow[];
+  byAd: FunnelAdRow[];
+  bySource: FunnelSourceRow[];
+  formLeads: FunnelFormRow[];
+  spendByState: SpendStateRow[];
+  coverage: SpendCoverage[];
+}

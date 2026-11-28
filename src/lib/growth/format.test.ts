@@ -1,6 +1,17 @@
 import { describe, expect, it } from 'vitest';
 
-import { cpeLabel, daysSince, inr, istDate, numberLabel } from './format';
+import {
+  adLabel,
+  costPer,
+  coverageLine,
+  cpeLabel,
+  daysSince,
+  inr,
+  istDate,
+  numberLabel,
+  regionLabel,
+  spendCell,
+} from './format';
 
 describe('growth format', () => {
   it('inr groups digits the Indian way', () => {
@@ -29,5 +40,74 @@ describe('growth format', () => {
   it('istDate shows the IST calendar day, not the UTC one', () => {
     expect(istDate('2026-10-01T20:00:00Z')).toBe('2026-10-02');
     expect(istDate(null)).toBe('—');
+  });
+});
+
+describe('costPer', () => {
+  it('divides, or says why not', () => {
+    expect(costPer(1000, 4)).toBe('₹250');
+    expect(costPer(500, 0)).toBe('none yet');
+    expect(costPer(0, 0)).toBe('n/a');
+    expect(costPer(null, 3)).toBe('no data');
+  });
+});
+
+describe('labels', () => {
+  it('spend, region and ad', () => {
+    expect(spendCell(null)).toBe('no data');
+    expect(spendCell(1234.4)).toBe('₹1,234');
+    expect(regionLabel('null')).toBe('Unknown');
+    expect(regionLabel('Unknown')).toBe('Unknown');
+    expect(regionLabel('Punjab region')).toBe('Punjab region');
+    expect(
+      adLabel({ adId: '1', catalogName: 'A10', metaName: 'x', inCatalog: true })
+    ).toBe('A10');
+    expect(
+      adLabel({
+        adId: '81059999',
+        catalogName: null,
+        metaName: 'Meta name',
+        inCatalog: false,
+      })
+    ).toBe('unknown ad (Meta name) …059999');
+    expect(
+      adLabel({
+        adId: '81059999',
+        catalogName: null,
+        metaName: null,
+        inCatalog: false,
+      })
+    ).toBe('unknown ad …059999');
+  });
+
+  it('coverage line names each account day and the Pacific day', () => {
+    const name = (c: string | null) =>
+      c === 'PTA' ? 'Patiala' : c === 'MOH' ? 'Mohali' : 'No branch';
+    expect(coverageLine([], name)).toBe(
+      'No daily Meta spend stored yet, so spend columns say "no data".'
+    );
+    expect(
+      coverageLine(
+        [
+          {
+            adAccountId: '1',
+            branchCode: 'PTA',
+            accountTz: 'America/Los_Angeles',
+            lastDay: '2026-11-26',
+            daysInWindow: 3,
+          },
+          {
+            adAccountId: '2',
+            branchCode: 'MOH',
+            accountTz: 'Asia/Kolkata',
+            lastDay: '2026-11-27',
+            daysInWindow: 3,
+          },
+        ],
+        name
+      )
+    ).toBe(
+      'Daily Meta spend: Patiala to 2026-11-26 (Meta day, Pacific), Mohali to 2026-11-27. Spend uses Meta account days; chats use IST days.'
+    );
   });
 });

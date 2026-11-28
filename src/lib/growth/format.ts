@@ -3,6 +3,8 @@
  * edge cases (no enrolments, suppressed counts, retired numbers) are tested.
  */
 
+import type { SpendCoverage } from './types';
+
 /** "₹14,391" in Indian digit grouping. */
 export function inr(amount: number): string {
   return `₹${Math.round(amount).toLocaleString('en-IN')}`;
@@ -48,4 +50,51 @@ export function istDate(iso: string | null): string {
   const t = Date.parse(iso);
   if (Number.isNaN(t)) return '—';
   return new Date(t).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+}
+
+/** "₹250" per unit, or why there is no cost: no spend data, nothing reached yet, or no spend. */
+export function costPer(spend: number | null, n: number): string {
+  if (spend === null) return 'no data';
+  if (n > 0) return inr(spend / n);
+  return spend > 0 ? 'none yet' : 'n/a';
+}
+
+export function spendCell(spend: number | null): string {
+  return spend === null ? 'no data' : inr(spend);
+}
+
+/** Meta's region names, with its "null" and "Unknown" both shown as Unknown. */
+export function regionLabel(region: string): string {
+  const r = region.trim();
+  return !r || r === 'null' || r === 'Unknown' ? 'Unknown' : r;
+}
+
+/** The catalogue name, else "unknown ad" with Meta's own name when it gave one and the id's last 6 digits. */
+export function adLabel(a: {
+  adId: string;
+  catalogName: string | null;
+  metaName: string | null;
+  inCatalog: boolean;
+}): string {
+  if (a.inCatalog && a.catalogName) return a.catalogName;
+  return `unknown ad${a.metaName ? ` (${a.metaName})` : ''} …${a.adId.slice(-6)}`;
+}
+
+const TZ_NOTE: Record<string, string> = {
+  'America/Los_Angeles': ' (Meta day, Pacific)',
+  'Asia/Kolkata': '',
+};
+
+/** Which Meta days are stored, per ad account, in one line for the page. */
+export function coverageLine(
+  c: SpendCoverage[],
+  branchName: (code: string | null) => string
+): string {
+  if (c.length === 0)
+    return 'No daily Meta spend stored yet, so spend columns say "no data".';
+  const parts = c.map(
+    (x) =>
+      `${branchName(x.branchCode)} to ${x.lastDay ?? 'no day'}${TZ_NOTE[x.accountTz] ?? ` (${x.accountTz})`}`
+  );
+  return `Daily Meta spend: ${parts.join(', ')}. Spend uses Meta account days; chats use IST days.`;
 }

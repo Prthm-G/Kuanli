@@ -1,30 +1,50 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { RefreshCw, TrendingUp } from 'lucide-react';
 
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
 import { canViewGrowth } from '@/lib/auth/roles';
-import { loadGrowthLive, loadGrowthSnapshots } from '@/lib/growth/queries';
+import {
+  loadBranchFunnel,
+  loadBranches,
+  loadGrowthLive,
+  loadGrowthSnapshots,
+} from '@/lib/growth/queries';
 import {
   AD_CLICK_STALE_DAYS,
+  coverageLine,
   cpeLabel,
   daysSince,
   istDate,
   inr,
   numberLabel,
 } from '@/lib/growth/format';
-import type { GrowthLive, GrowthSnapshot } from '@/lib/growth/types';
+import {
+  adRows,
+  branchRows,
+  formRows,
+  stateRows,
+} from '@/lib/growth/funnel-rows';
+import type {
+  BranchFunnel,
+  GrowthBranch,
+  GrowthLive,
+  GrowthSnapshot,
+} from '@/lib/growth/types';
 import { Button } from '@/components/ui/button';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
 /**
- * Owner-only growth page (KB-GROWTH-R1). Live signals come from the
- * `growth_live` RPC over Kuanli's own tables; spend, enrolments and proposals
- * come from the weekly scorecard snapshots (`growth_snapshots`). Both are
- * owner-gated in the database (migration 078); the redirect here only keeps
- * other roles off a page that would load empty.
+ * Owner-only growth page (KB-GROWTH-R1, R2). Branch tabs (All, Patiala,
+ * Mohali) filter every live table. Live signals come from `growth_live`;
+ * daily spend, costs, spend by state and form leads come from
+ * `growth_branch_funnel` over `meta_ad_daily` (migration 105). The weekly
+ * snapshot (`growth_snapshots`) is still the source for proposals, blockers
+ * and SEO. All are owner-gated in the database (078, 105); the redirect here
+ * only keeps other roles off a page that would load empty.
  */
 export default function GrowthPage() {
   const router = useRouter();
@@ -33,6 +53,10 @@ export default function GrowthPage() {
 
   const [live, setLive] = useState<GrowthLive | null>(null);
   const [snapshots, setSnapshots] = useState<GrowthSnapshot[]>([]);
+  const [branches, setBranches] = useState<GrowthBranch[]>([]);
+  const [branch, setBranch] = useState('all');
+  const [funnel, setFunnel] = useState<BranchFunnel | null>(null);
+  const reqRef = useRef(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -45,19 +69,30 @@ export default function GrowthPage() {
   const fetchGrowth = useCallback(async () => {
     if (!accountId || !allowed) return;
     const supabase = createClient();
+    const branchId = branch === 'all' ? null : branch;
+    const req = ++reqRef.current;
+    // A slower response for another tab never overwrites the current one.
     await Promise.all([
-      loadGrowthLive(supabase, accountId),
+      loadGrowthLive(supabase, accountId, 30, branchId),
       loadGrowthSnapshots(supabase, accountId),
+      loadBranchFunnel(supabase, accountId, 30, branchId),
+      loadBranches(supabase, accountId),
     ])
-      .then(([l, s]) => {
+      .then(([l, s, f, b]) => {
+        if (req !== reqRef.current) return;
         setLive(l);
         setSnapshots(s);
+        setFunnel(f);
+        setBranches(b);
       })
-      .catch((e) =>
-        setError(e instanceof Error ? e.message : 'Could not load growth data')
-      )
-      .finally(() => setLoading(false));
-  }, [accountId, allowed]);
+      .catch((e) => {
+        if (req !== reqRef.current) return;
+        setError(e instanceof Error ? e.message : 'Could not load growth data');
+      })
+      .finally(() => {
+        if (req === reqRef.current) setLoading(false);
+      });
+  }, [accountId, allowed, branch]);
 
   // Refresh: show the spinner and clear the last error, then refetch.
   const load = useCallback(async () => {
@@ -70,9 +105,13 @@ export default function GrowthPage() {
   // accountId or access arriving (or accountId changing after a sign-out in
   // another tab) refetches in the effect below; reset for it while rendering
   // instead.
-  const [prevDeps, setPrevDeps] = useState({ accountId, allowed });
-  if (accountId !== prevDeps.accountId || allowed !== prevDeps.allowed) {
-    setPrevDeps({ accountId, allowed });
+  const [prevDeps, setPrevDeps] = useState({ accountId, allowed, branch });
+  if (
+    accountId !== prevDeps.accountId ||
+    allowed !== prevDeps.allowed ||
+    branch !== prevDeps.branch
+  ) {
+    setPrevDeps({ accountId, allowed, branch });
     if (accountId && allowed) {
       setLoading(true);
       setError(null);
@@ -84,10 +123,9 @@ export default function GrowthPage() {
   }, [fetchGrowth]);
 
   const latest = snapshots[0]?.payload ?? null;
-  const adNames = useMemo(
-    () => new Map((latest?.ads ?? []).map((a) => [a.ad_id, a.ad_name])),
-    [latest]
-  );
+  const allTab = branch === 'all';
+  const codeToName = (c: string | null) =>
+    branches.find((b) => b.code === c)?.name ?? 'No branch';
 
   if (!allowed) {
     // A failed profile load leaves the role null; say so instead of a blank page.
@@ -123,6 +161,22 @@ export default function GrowthPage() {
           Refresh
         </Button>
       </div>
+
+      <Tabs
+        value={branch}
+        onValueChange={(v) => {
+          if (v != null) setBranch(String(v));
+        }}
+      >
+        <TabsList>
+          <TabsTrigger value="all">All</TabsTrigger>
+          {branches.map((b) => (
+            <TabsTrigger key={b.id} value={b.id}>
+              {b.name}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+      </Tabs>
 
       {error && (
         <p className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-400">
@@ -166,7 +220,13 @@ export default function GrowthPage() {
           value={
             latest ? cpeLabel(latest.window14.spend, latest.window14.cpe) : '—'
           }
-          hint={latest ? `${inr(latest.window14.spend)} spend` : undefined}
+          hint={
+            funnel?.coverage.length
+              ? 'weekly scorecard; daily spend is in the tables below'
+              : latest
+                ? `${inr(latest.window14.spend)} spend`
+                : undefined
+          }
         />
         <Stat
           label="Last ad click captured"
@@ -180,6 +240,36 @@ export default function GrowthPage() {
           alert={!!live && clicksStale}
         />
       </div>
+
+      <p className="text-muted-foreground text-xs">
+        {coverageLine(funnel?.coverage ?? [], codeToName)}
+      </p>
+
+      {allTab && (
+        <Section title="Branches · last 30 days">
+          <Table
+            head={[
+              'Branch',
+              'Chats',
+              'Ad',
+              'Ad (exact ad unknown)',
+              'Organic',
+              'Qualified',
+              'App started',
+              'Provisional',
+              'Fee',
+              'Enrolled',
+              'Spend',
+              'Cost/ad chat',
+              'Cost/provisional',
+              'Cost/enrolment',
+            ]}
+            loading={loading}
+            empty="No chats in the window."
+            rows={funnel ? branchRows(funnel) : undefined}
+          />
+        </Section>
+      )}
 
       <Section title="Live · last 30 days">
         <Table
@@ -199,16 +289,23 @@ export default function GrowthPage() {
       </Section>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <Section title="Conversations by latest ad clicked (live)">
+        <Section title="Ads · chats, funnel and spend (last 30 days)">
           <Table
-            head={['Ad', 'Conversations', 'Last click']}
+            head={[
+              'Ad',
+              ...(allTab ? ['Branch'] : []),
+              'Chats',
+              'Qualified',
+              'Provisional',
+              'Enrolled',
+              'Spend',
+              'Cost/chat',
+              'Cost/provisional',
+              'Cost/enrolment',
+            ]}
             loading={loading}
-            empty="No ad clicks in the window."
-            rows={live?.byAd.map((a) => [
-              adNames.get(a.adSourceId) ?? a.adSourceId,
-              a.conversations,
-              istDate(a.lastAt),
-            ])}
+            empty="No ad chats or spend in the window."
+            rows={funnel ? adRows(funnel, allTab) : undefined}
           />
         </Section>
         <Section title="Conversations by WhatsApp number (live)">
@@ -234,84 +331,123 @@ export default function GrowthPage() {
         />
       </Section>
 
-      <Section title="Proposals (each needs the owner's OK)">
-        <List
-          loading={loading}
-          empty="No proposals this week."
-          items={latest?.proposals.map((p) => `${p.kind} · ${p.text}`)}
-        />
-      </Section>
-
-      <Section title="Blockers">
-        <List
-          loading={loading}
-          empty="No open blockers."
-          items={latest?.blockers.map(
-            (b) =>
-              `${b.text} · ${b.owner}${b.since ? ` · since ${b.since}` : ''}`
-          )}
-        />
-      </Section>
-
-      <Section title="Cells (scorecard)">
-        <Table
-          head={['Cell', 'Spend', 'Conversations', 'Enrolled']}
-          loading={loading}
-          empty="No snapshot yet."
-          rows={latest?.cells.map((c) => [
-            c.cell,
-            inr(c.spend),
-            c.conversations,
-            c.enrolled,
-          ])}
-        />
-      </Section>
-
-      <Section title="Ads (scorecard)">
-        <Table
-          head={['Ad', 'Cell', 'Spend', 'Conversations', 'Enrolled']}
-          loading={loading}
-          empty="No snapshot yet."
-          rows={latest?.ads
-            .slice()
-            .sort((a, b) => b.spend - a.spend)
-            .slice(0, 15)
-            .map((a) => [
-              a.ad_name,
-              a.cell,
-              inr(a.spend),
-              a.conversations,
-              a.enrolled,
-            ])}
-        />
-      </Section>
-
-      <Section title="Weekly trend">
+      <Section title="Form leads by form (form leads carry no ad id)">
         <Table
           head={[
-            'Week',
-            '14-day spend',
-            'Ad-attributed enrolments',
-            'Cost per enrolment',
+            'Form',
+            'Branch',
+            'Leads',
+            'Contacts',
+            'Qualified',
+            'App started',
+            'Provisional',
+            'Fee',
+            'Enrolled',
           ]}
           loading={loading}
-          empty="No snapshots yet."
-          rows={snapshots.map((s) => [
-            s.snapshotDate,
-            inr(s.payload.window14.spend),
-            s.payload.window14.enrolments,
-            cpeLabel(s.payload.window14.spend, s.payload.window14.cpe),
-          ])}
+          empty="No form leads in the window."
+          rows={funnel ? formRows(funnel) : undefined}
         />
       </Section>
 
-      <Section title="SEO">
-        <p className="text-muted-foreground text-sm">
-          {latest
-            ? `${latest.seo.status}${latest.seo.checked ? ` (checked ${latest.seo.checked})` : ''}`
-            : '—'}
-        </p>
+      <Section title="Spend by state (Meta reports spend, impressions and clicks by state, not chats)">
+        <Table
+          head={['State', 'Branch', 'Spend', 'Impressions', 'Clicks']}
+          loading={loading}
+          empty="No spend by state in the window."
+          rows={funnel ? stateRows(funnel) : undefined}
+        />
       </Section>
+
+      {allTab && (
+        <h2 className="text-foreground pt-2 text-base font-semibold">
+          Weekly scorecard
+          {snapshots[0] ? ` (as of ${snapshots[0].snapshotDate})` : ''}
+        </h2>
+      )}
+
+      {allTab && (
+        <>
+          <Section title="Proposals (each needs the owner's OK)">
+            <List
+              loading={loading}
+              empty="No proposals this week."
+              items={latest?.proposals.map((p) => `${p.kind} · ${p.text}`)}
+            />
+          </Section>
+
+          <Section title="Blockers">
+            <List
+              loading={loading}
+              empty="No open blockers."
+              items={latest?.blockers.map(
+                (b) =>
+                  `${b.text} · ${b.owner}${b.since ? ` · since ${b.since}` : ''}`
+              )}
+            />
+          </Section>
+
+          <Section title="Cells (scorecard)">
+            <Table
+              head={['Cell', 'Spend', 'Conversations', 'Enrolled']}
+              loading={loading}
+              empty="No snapshot yet."
+              rows={latest?.cells.map((c) => [
+                c.cell,
+                inr(c.spend),
+                c.conversations,
+                c.enrolled,
+              ])}
+            />
+          </Section>
+
+          <Section title="Ads (scorecard)">
+            <Table
+              head={['Ad', 'Cell', 'Spend', 'Conversations', 'Enrolled']}
+              loading={loading}
+              empty="No snapshot yet."
+              rows={latest?.ads
+                .slice()
+                .sort((a, b) => b.spend - a.spend)
+                .slice(0, 15)
+                .map((a) => [
+                  a.ad_name,
+                  a.cell,
+                  inr(a.spend),
+                  a.conversations,
+                  a.enrolled,
+                ])}
+            />
+          </Section>
+
+          <Section title="Weekly trend">
+            <Table
+              head={[
+                'Week',
+                '14-day spend',
+                'Ad-attributed enrolments',
+                'Cost per enrolment',
+              ]}
+              loading={loading}
+              empty="No snapshots yet."
+              rows={snapshots.map((s) => [
+                s.snapshotDate,
+                inr(s.payload.window14.spend),
+                s.payload.window14.enrolments,
+                cpeLabel(s.payload.window14.spend, s.payload.window14.cpe),
+              ])}
+            />
+          </Section>
+
+          <Section title="SEO">
+            <p className="text-muted-foreground text-sm">
+              {latest
+                ? `${latest.seo.status}${latest.seo.checked ? ` (checked ${latest.seo.checked})` : ''}`
+                : '—'}
+            </p>
+          </Section>
+        </>
+      )}
     </div>
   );
 }
