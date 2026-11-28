@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link2, Search } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -41,6 +41,21 @@ export function LinkedRecords({
   const [searching, setSearching] = useState(false);
   const [q, setQ] = useState('');
   const [hits, setHits] = useState<StudentHit[]>([]);
+  const [searchFailed, setSearchFailed] = useState(false);
+  const inFlight = useRef(false);
+  const confirmRef = useRef<HTMLButtonElement | null>(null);
+  const openerRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
+  const returnTo = useRef<string | null>(null);
+
+  // Focus follows the confirm step: into Confirm when it opens, back to the row's button when it closes.
+  useEffect(() => {
+    if (confirming) {
+      confirmRef.current?.focus();
+    } else if (returnTo.current) {
+      openerRefs.current.get(returnTo.current)?.focus();
+      returnTo.current = null;
+    }
+  }, [confirming]);
 
   useEffect(() => {
     const term = q.trim();
@@ -48,19 +63,23 @@ export function LinkedRecords({
     const handle = setTimeout(() => {
       if (term.length < 2) {
         setHits([]);
+        setSearchFailed(false);
         return;
       }
       searchStudents(createClient(), accountId, term)
         .then((rows) => {
-          if (!cancelled)
-            setHits(
-              rows.filter(
-                (h) => !records.some((r) => r.contactId === h.contactId)
-              )
-            );
+          if (cancelled) return;
+          setSearchFailed(false);
+          setHits(
+            rows.filter(
+              (h) => !records.some((r) => r.contactId === h.contactId)
+            )
+          );
         })
         .catch(() => {
-          if (!cancelled) setHits([]);
+          if (cancelled) return;
+          setHits([]);
+          setSearchFailed(true);
         });
     }, 200);
     return () => {
@@ -74,6 +93,8 @@ export function LinkedRecords({
     done: string,
     failed: string
   ) {
+    if (inFlight.current) return;
+    inFlight.current = true;
     setBusy(true);
     try {
       await action();
@@ -85,6 +106,7 @@ export function LinkedRecords({
     } catch (e) {
       toast.error(e instanceof NotSameStudentError ? e.message : failed);
     } finally {
+      inFlight.current = false;
       setBusy(false);
     }
   }
@@ -117,7 +139,9 @@ export function LinkedRecords({
               <>
                 <button
                   type="button"
+                  ref={confirmRef}
                   disabled={busy}
+                  aria-label={`Confirm ${r.via === 'link' ? 'unlink' : 'not the same student'} ${recordLabel(r)}`}
                   className="font-medium text-red-400"
                   onClick={() =>
                     void run(
@@ -144,7 +168,11 @@ export function LinkedRecords({
                   type="button"
                   disabled={busy}
                   className="text-muted-foreground hover:text-foreground"
-                  onClick={() => setConfirming(null)}
+                  aria-label={`Cancel ${r.via === 'link' ? 'unlink' : 'not the same student'} ${recordLabel(r)}`}
+                  onClick={() => {
+                    returnTo.current = r.contactId;
+                    setConfirming(null);
+                  }}
                 >
                   Cancel
                 </button>
@@ -152,6 +180,11 @@ export function LinkedRecords({
             ) : (
               <button
                 type="button"
+                ref={(el) => {
+                  if (el) openerRefs.current.set(r.contactId, el);
+                  else openerRefs.current.delete(r.contactId);
+                }}
+                aria-label={`${r.via === 'link' ? 'Unlink' : 'Not the same student'}: ${recordLabel(r)}`}
                 className="text-muted-foreground hover:text-foreground"
                 onClick={() => setConfirming(r.contactId)}
               >
@@ -183,6 +216,11 @@ export function LinkedRecords({
               className="border-input h-8 w-full rounded-md border bg-transparent pr-2 pl-7 text-xs outline-none"
             />
           </div>
+          {searchFailed && (
+            <p role="status" className="text-xs text-amber-500">
+              Search failed. Try again.
+            </p>
+          )}
           {hits.map((h) => (
             <button
               key={h.contactId}
@@ -214,13 +252,15 @@ export function LinkedRecords({
           ))}
           <button
             type="button"
+            aria-label="Cancel search"
             className="text-muted-foreground text-xs"
             onClick={() => {
               setSearching(false);
               setQ('');
+              setSearchFailed(false);
             }}
           >
-            Cancel
+            Cancel search
           </button>
         </div>
       )}
