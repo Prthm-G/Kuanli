@@ -140,11 +140,15 @@ export async function saveContactEmail(
   email: string
 ): Promise<void> {
   const t = email.trim().toLowerCase();
-  const { error } = await db
+  const { data, error } = await db
     .from('contacts')
     .update({ email: t === '' ? null : t })
-    .eq('id', contactId);
+    .eq('id', contactId)
+    .select('id');
   if (error) throw new ApplicationDbError(error.message, error.code);
+  // RLS filters rows silently: an empty result means nothing was stored.
+  if (!data || data.length === 0)
+    throw new ApplicationDbError('email not saved');
 }
 
 /** Marks every required document of the student as uploaded to the portal; returns how many changed. */

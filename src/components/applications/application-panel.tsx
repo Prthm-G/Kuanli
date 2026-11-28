@@ -94,8 +94,11 @@ export function ApplicationPanel({
   /** null = untouched: the field shows the contact's email. */
   const [emailDraft, setEmailDraft] = useState<string | null>(null);
   /** Set once the counsellor presses the punched button: marks the fields it needs. */
-  const [gateMissing, setGateMissing] = useState<GateKey[]>([]);
+  const [punchTried, setPunchTried] = useState(false);
   const email = emailDraft ?? contactEmail ?? '';
+  const liveMissing = punchTried
+    ? punchedGateMissing({ ...fields, email })
+    : [];
   const emailChanged =
     emailDraft !== null &&
     emailDraft.trim().toLowerCase() !==
@@ -137,6 +140,7 @@ export function ApplicationPanel({
       emailToSave?: string
     ) => {
       setBusy(true);
+      let emailSaved = false;
       try {
         if (emailToSave !== undefined) {
           try {
@@ -146,6 +150,9 @@ export function ApplicationPanel({
             toast.error('Could not save the email');
             return;
           }
+          // The contact changed even if the application save below fails.
+          onSaved?.();
+          emailSaved = true;
         }
         if (save) await saveApplication(createClient(), save);
         toast.success(okMessage);
@@ -158,13 +165,15 @@ export function ApplicationPanel({
             ? parseGateError(String((e as { message?: string }).message ?? ''))
             : null;
         console.error('Failed to save application:', e);
-        if (gate) setGateMissing(gate);
+        if (gate) setPunchTried(true);
         toast.error(
           gate
             ? gateMessage(gate)
             : code === '23505'
               ? 'That registration number is already used by another student'
-              : 'Could not save the application'
+              : emailSaved
+                ? 'Email saved. Could not save the application'
+                : 'Could not save the application'
         );
       } finally {
         setBusy(false);
@@ -205,7 +214,7 @@ export function ApplicationPanel({
 
   const handlePunched = () => {
     const missing = punchedGateMissing({ ...fields, email });
-    setGateMissing(missing);
+    setPunchTried(true);
     if (missing.length > 0) {
       toast.error(gateMessage(missing));
       return;
@@ -220,7 +229,7 @@ export function ApplicationPanel({
   const set = (k: keyof Fields) => (e: React.ChangeEvent<HTMLInputElement>) =>
     setFields((f) => ({ ...f, [k]: e.target.value }));
 
-  const invalid = (key: GateKey) => gateMissing.includes(key);
+  const invalid = (key: GateKey) => liveMissing.includes(key);
 
   const text = (
     k: keyof Fields,
@@ -264,11 +273,13 @@ export function ApplicationPanel({
         {[
           ...UNIVERSITIES,
           ...[app?.university, contactUniversity].filter(
-            (u): u is string => !!u && !UNIVERSITIES.includes(u)
+            (u): u is string => !!u
           ),
-        ].map((u) => (
-          <option key={u} value={u} />
-        ))}
+        ]
+          .filter((u, i, all) => all.indexOf(u) === i)
+          .map((u) => (
+            <option key={u} value={u} />
+          ))}
       </datalist>
       {text('specialization', 'Specialization (optional)')}
       <div className="space-y-1">

@@ -212,7 +212,7 @@ describe('saveContactEmail', () => {
     calls.find((c) => c.target === 'contacts')!.calls;
 
   it('updates contacts.email by id, trimmed and lowercased', async () => {
-    const { db, calls } = fakeDb({});
+    const { db, calls } = fakeDb({ contacts: { data: [{ id: 'c1' }] } });
     await saveContactEmail(db, 'c1', '  Ram.K@College.EDU ');
     const c = updateCalls(calls);
     expect(c.find((x) => x.method === 'update')!.args).toEqual([
@@ -222,11 +222,26 @@ describe('saveContactEmail', () => {
   });
 
   it('writes null for a blank email', async () => {
-    const { db, calls } = fakeDb({});
+    const { db, calls } = fakeDb({ contacts: { data: [{ id: 'c1' }] } });
     await saveContactEmail(db, 'c1', '   ');
     expect(updateCalls(calls).find((x) => x.method === 'update')!.args).toEqual(
       [{ email: null }]
     );
+  });
+
+  it('selects the row it updated', async () => {
+    const { db, calls } = fakeDb({ contacts: { data: [{ id: 'c1' }] } });
+    await saveContactEmail(db, 'c1', 'a@b.co');
+    expect(updateCalls(calls).find((x) => x.method === 'select')!.args).toEqual(
+      ['id']
+    );
+  });
+
+  it('throws when no row was updated (RLS filtered it out)', async () => {
+    const { db } = fakeDb({ contacts: { data: [] } });
+    await expect(saveContactEmail(db, 'c1', 'a@b.co')).rejects.toMatchObject({
+      message: 'email not saved',
+    });
   });
 
   it('throws on a database error', async () => {
@@ -301,14 +316,14 @@ describe('markAllUploaded', () => {
 
 describe('setDocumentUploaded', () => {
   it('stamps time and person, or clears both', async () => {
-    const on = fakeDb({});
+    const on = fakeDb({ contacts: { data: [{ id: 'c1' }] } });
     await setDocumentUploaded(on.db, 'd1', 'u1', true);
     const up = on.calls[0].calls.find((c) => c.method === 'update')!
       .args[0] as Record<string, unknown>;
     expect(up.uploaded_to_portal_by).toBe('u1');
     expect(typeof up.uploaded_to_portal_at).toBe('string');
 
-    const off = fakeDb({});
+    const off = fakeDb({ contacts: { data: [{ id: 'c1' }] } });
     await setDocumentUploaded(off.db, 'd1', 'u1', false);
     expect(
       off.calls[0].calls.find((c) => c.method === 'update')!.args[0]
