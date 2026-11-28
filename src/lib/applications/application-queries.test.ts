@@ -6,6 +6,7 @@ import {
   loadContactDocuments,
   markAllUploaded,
   saveApplication,
+  saveContactEmail,
   setDocumentUploaded,
 } from './application-queries';
 
@@ -164,6 +165,80 @@ describe('saveApplication', () => {
   });
 });
 
+describe('saveApplication university fields', () => {
+  it('writes university and university_app_number, blank to null', async () => {
+    const a = fakeDb({});
+    await saveApplication(a.db, {
+      accountId: 'a1',
+      contactId: 'c1',
+      university: ' LPU ',
+      universityAppNumber: ' U-9 ',
+    });
+    expect(upsertArgs(a.calls)[0]).toEqual({
+      account_id: 'a1',
+      contact_id: 'c1',
+      university: 'LPU',
+      university_app_number: 'U-9',
+    });
+    const b = fakeDb({});
+    await saveApplication(b.db, {
+      accountId: 'a1',
+      contactId: 'c1',
+      university: '  ',
+      universityAppNumber: '',
+    });
+    expect(upsertArgs(b.calls)[0]).toMatchObject({
+      university: null,
+      university_app_number: null,
+    });
+  });
+
+  it('keeps the database code on a gate error', async () => {
+    const { db } = fakeDb({
+      applications: { error: { message: 'missing: email', code: 'P0001' } },
+    });
+    await expect(
+      saveApplication(db, {
+        accountId: 'a1',
+        contactId: 'c1',
+        detailsPunchedBy: 'u1',
+      })
+    ).rejects.toMatchObject({ message: 'missing: email', code: 'P0001' });
+  });
+});
+
+describe('saveContactEmail', () => {
+  const updateCalls = (calls: Array<{ target: string; calls: Call[] }>) =>
+    calls.find((c) => c.target === 'contacts')!.calls;
+
+  it('updates contacts.email by id, trimmed and lowercased', async () => {
+    const { db, calls } = fakeDb({});
+    await saveContactEmail(db, 'c1', '  Ram.K@College.EDU ');
+    const c = updateCalls(calls);
+    expect(c.find((x) => x.method === 'update')!.args).toEqual([
+      { email: 'ram.k@college.edu' },
+    ]);
+    expect(c.find((x) => x.method === 'eq')!.args).toEqual(['id', 'c1']);
+  });
+
+  it('writes null for a blank email', async () => {
+    const { db, calls } = fakeDb({});
+    await saveContactEmail(db, 'c1', '   ');
+    expect(updateCalls(calls).find((x) => x.method === 'update')!.args).toEqual(
+      [{ email: null }]
+    );
+  });
+
+  it('throws on a database error', async () => {
+    const { db } = fakeDb({
+      contacts: { error: { message: 'no', code: '42501' } },
+    });
+    await expect(saveContactEmail(db, 'c1', 'a@b.co')).rejects.toMatchObject({
+      code: '42501',
+    });
+  });
+});
+
 describe('loadApplication', () => {
   it('maps the row, and returns null when the student has none', async () => {
     const row = {
@@ -181,6 +256,7 @@ describe('loadApplication', () => {
       form_filled_by: 'u1',
       form_filled_at: null,
       registration_number: null,
+      university_app_number: 'U-1',
       retain_files: true,
     };
     const { db } = fakeDb({ applications: { data: row } });
@@ -190,6 +266,7 @@ describe('loadApplication', () => {
       fatherName: 'F',
       specialization: null,
       provisionalAppId: 'P1',
+      universityAppNumber: 'U-1',
       formFilledByKind: 'staff',
       retainFiles: true,
     });

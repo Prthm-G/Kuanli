@@ -14,6 +14,7 @@ export interface ApplicationRecord {
   fatherName: string | null;
   program: string | null;
   specialization: string | null;
+  universityAppNumber: string | null;
   detailsPunchedAt: string | null;
   detailsPunchedBy: string | null;
   provisionalAppId: string | null;
@@ -29,6 +30,8 @@ export interface SaveApplicationInput {
   contactId: string;
   fatherName?: string | null;
   program?: string | null;
+  university?: string | null;
+  universityAppNumber?: string | null;
   specialization?: string | null;
   provisionalAppId?: string | null;
   registrationNumber?: string | null;
@@ -54,7 +57,7 @@ const blankToNull = (v: string | null): string | null => {
 };
 
 const COLUMNS =
-  'id, account_id, contact_id, university, father_name, program, specialization, details_punched_at, details_punched_by, provisional_app_id, form_filled_by_kind, form_filled_by, form_filled_at, registration_number, retain_files';
+  'id, account_id, contact_id, university, father_name, program, specialization, details_punched_at, details_punched_by, provisional_app_id, form_filled_by_kind, form_filled_by, form_filled_at, registration_number, university_app_number, retain_files';
 
 export async function loadApplication(
   db: SupabaseClient,
@@ -78,6 +81,7 @@ export async function loadApplication(
     fatherName: s('father_name'),
     program: s('program'),
     specialization: s('specialization'),
+    universityAppNumber: s('university_app_number'),
     detailsPunchedAt: s('details_punched_at'),
     detailsPunchedBy: s('details_punched_by'),
     provisionalAppId: s('provisional_app_id'),
@@ -101,6 +105,8 @@ export async function saveApplication(
   const text: Array<[keyof SaveApplicationInput, string]> = [
     ['fatherName', 'father_name'],
     ['program', 'program'],
+    ['university', 'university'],
+    ['universityAppNumber', 'university_app_number'],
     ['specialization', 'specialization'],
     ['provisionalAppId', 'provisional_app_id'],
     ['registrationNumber', 'registration_number'],
@@ -124,6 +130,20 @@ export async function saveApplication(
   const { error } = await db
     .from('applications')
     .upsert(row, { onConflict: 'contact_id' });
+  if (error) throw new ApplicationDbError(error.message, error.code);
+}
+
+/** The student's email lives on the contact; the punched gate reads it from there. */
+export async function saveContactEmail(
+  db: SupabaseClient,
+  contactId: string,
+  email: string
+): Promise<void> {
+  const t = email.trim().toLowerCase();
+  const { error } = await db
+    .from('contacts')
+    .update({ email: t === '' ? null : t })
+    .eq('id', contactId);
   if (error) throw new ApplicationDbError(error.message, error.code);
 }
 

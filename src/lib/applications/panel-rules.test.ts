@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   mergeServerFields,
+  parseGateError,
+  punchedGateMissing,
   showsApplicationPanel,
   type PanelFields,
 } from './panel-rules';
@@ -65,7 +67,9 @@ describe('showsApplicationPanel', () => {
 const f = (over: Partial<PanelFields> = {}): PanelFields => ({
   fatherName: '',
   program: '',
+  university: '',
   specialization: '',
+  universityAppNumber: '',
   provisionalAppId: '',
   registrationNumber: '',
   ...over,
@@ -101,5 +105,81 @@ describe('mergeServerFields', () => {
     // Saved fields are no longer dirty once the baseline is the fresh server row.
     const fresh = f({ fatherName: 'Saved' });
     expect(mergeServerFields(fresh, f(), fresh)).toEqual(fresh);
+  });
+});
+
+describe('punchedGateMissing', () => {
+  const ok = {
+    fatherName: 'Ram',
+    program: 'MBA',
+    university: 'LPU',
+    email: 'first.last+x@college.edu.in',
+  };
+
+  it('returns nothing for full valid input, including a plus-address on a long domain', () => {
+    expect(punchedGateMissing(ok)).toEqual([]);
+  });
+
+  it('lists each blank field, in gate order', () => {
+    expect(
+      punchedGateMissing({
+        fatherName: ' ',
+        program: '',
+        university: '  ',
+        email: '',
+      })
+    ).toEqual(['father_name', 'program', 'university', 'email']);
+    expect(punchedGateMissing({ ...ok, program: '' })).toEqual(['program']);
+  });
+
+  it('flags placeholder and malformed emails like is_placeholder_email', () => {
+    const bad = [
+      'na@x.com',
+      'n.a@x.com',
+      'None@x.com',
+      'test@x.com',
+      'abc@x.com',
+      'xyz@x.com',
+      'noemail@x.com',
+      'nomail@x.com',
+      'no@x.com',
+      'nil@x.com',
+      'null@x.com',
+      'demo@x.com',
+      'sample@x.com',
+      'aaaa@x.com',
+      '1111@x.com',
+      'a@x.com',
+      'not-an-email',
+      'a b@x.com',
+      'who@nodot',
+      'who@x.c',
+    ];
+    for (const email of bad) {
+      expect(punchedGateMissing({ ...ok, email }), email).toEqual(['email']);
+    }
+  });
+
+  it('trims and ignores case like the database', () => {
+    expect(
+      punchedGateMissing({ ...ok, email: '  Ram.K@College.EDU  ' })
+    ).toEqual([]);
+    expect(punchedGateMissing({ ...ok, email: ' TEST@x.com ' })).toEqual([
+      'email',
+    ]);
+  });
+});
+
+describe('parseGateError', () => {
+  it('reads the missing keys', () => {
+    expect(parseGateError('missing: email,university')).toEqual([
+      'email',
+      'university',
+    ]);
+  });
+  it('returns null for anything else', () => {
+    expect(parseGateError('contact not found in this account')).toBeNull();
+    expect(parseGateError('duplicate key value')).toBeNull();
+    expect(parseGateError('missing: ')).toBeNull();
   });
 });

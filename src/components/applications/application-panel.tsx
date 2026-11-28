@@ -11,9 +11,16 @@ import { createClient } from '@/lib/supabase/client';
 import {
   loadApplication,
   saveApplication,
+  saveContactEmail,
   type ApplicationRecord,
 } from '@/lib/applications/application-queries';
-import { mergeServerFields } from '@/lib/applications/panel-rules';
+import {
+  GATE_LABELS,
+  mergeServerFields,
+  parseGateError,
+  punchedGateMissing,
+  type GateKey,
+} from '@/lib/applications/panel-rules';
 
 interface ApplicationPanelProps {
   contactId: string;
@@ -22,6 +29,10 @@ interface ApplicationPanelProps {
   userId: string;
   /** Agent or above. Viewers see the values and no buttons. */
   canEdit: boolean;
+  /** The contact's email; it lives on the contact, not the application. */
+  contactEmail?: string | null;
+  /** The contact's university, shown until the application has its own. */
+  contactUniversity?: string | null;
   /** Called after a save so the sidebar can re-read the stage: the database may have moved the card. */
   onSaved?: () => void;
 }
@@ -29,27 +40,38 @@ interface ApplicationPanelProps {
 interface Fields {
   fatherName: string;
   program: string;
+  university: string;
   specialization: string;
+  universityAppNumber: string;
   provisionalAppId: string;
   registrationNumber: string;
 }
 
+const UNIVERSITIES = ['LPU', 'Amity', 'CU', 'DBU'];
+
 const EMPTY: Fields = {
   fatherName: '',
   program: '',
+  university: '',
   specialization: '',
+  universityAppNumber: '',
   provisionalAppId: '',
   registrationNumber: '',
 };
 
-const fieldsOf = (a: ApplicationRecord | null): Fields =>
-  a
+const fieldsOf = (
+  a: ApplicationRecord | null,
+  contactUniversity?: string | null
+): Fields =>
+  a || contactUniversity
     ? {
-        fatherName: a.fatherName ?? '',
-        program: a.program ?? '',
-        specialization: a.specialization ?? '',
-        provisionalAppId: a.provisionalAppId ?? '',
-        registrationNumber: a.registrationNumber ?? '',
+        fatherName: a?.fatherName ?? '',
+        program: a?.program ?? '',
+        university: a?.university ?? contactUniversity ?? '',
+        specialization: a?.specialization ?? '',
+        universityAppNumber: a?.universityAppNumber ?? '',
+        provisionalAppId: a?.provisionalAppId ?? '',
+        registrationNumber: a?.registrationNumber ?? '',
       }
     : EMPTY;
 
@@ -61,12 +83,23 @@ export function ApplicationPanel({
   accountId,
   userId,
   canEdit,
+  contactEmail,
+  contactUniversity,
   onSaved,
 }: ApplicationPanelProps) {
   const [app, setApp] = useState<ApplicationRecord | null>(null);
   const [fields, setFields] = useState<Fields>(EMPTY);
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
+  /** null = untouched: the field shows the contact's email. */
+  const [emailDraft, setEmailDraft] = useState<string | null>(null);
+  /** Set once the counsellor presses the punched button: marks the fields it needs. */
+  const [gateMissing, setGateMissing] = useState<GateKey[]>([]);
+  const email = emailDraft ?? contactEmail ?? '';
+  const emailChanged =
+    emailDraft !== null &&
+    emailDraft.trim().toLowerCase() !==
+      (contactEmail ?? '').trim().toLowerCase();
   /** What the form last loaded from the server: a field that differs is unsaved typing. */
   const baseline = useRef<Fields>(EMPTY);
 
@@ -75,7 +108,7 @@ export function ApplicationPanel({
   const load = useCallback(async () => {
     await loadApplication(createClient(), contactId)
       .then((a) => {
-        const fresh = fieldsOf(a);
+        const fresh = fieldsOf(a, contactUniversity);
         const base = baseline.current;
         baseline.current = fresh;
         setApp(a);
@@ -87,54 +120,113 @@ export function ApplicationPanel({
         console.error('Failed to load application:', e);
         toast.error('Could not load the application');
       });
-  }, [contactId]);
+  }, [contactId, contactUniversity]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
+  const gateMessage = (keys: GateKey[]) =>
+    `Fill these first: ${keys.map((k) => GATE_LABELS[k]).join(', ')}`;
+
+  /** Email goes to the contact first; if that fails the application is not saved. */
   const run = useCallback(
-    async (save: Parameters<typeof saveApplication>[1], okMessage: string) => {
+    async (
+      save: Parameters<typeof saveApplication>[1] | null,
+      okMessage: string,
+      emailToSave?: string
+    ) => {
       setBusy(true);
       try {
-        await saveApplication(createClient(), save);
+        if (emailToSave !== undefined) {
+          try {
+            await saveContactEmail(createClient(), contactId, emailToSave);
+          } catch (e) {
+            console.error('Failed to save email:', e);
+            toast.error('Could not save the email');
+            return;
+          }
+        }
+        if (save) await saveApplication(createClient(), save);
         toast.success(okMessage);
         await load();
         onSaved?.();
       } catch (e) {
         const code = (e as { code?: string }).code;
+        const gate =
+          code === 'P0001'
+            ? parseGateError(String((e as { message?: string }).message ?? ''))
+            : null;
         console.error('Failed to save application:', e);
+        if (gate) setGateMissing(gate);
         toast.error(
-          code === '23505'
-            ? 'That registration number is already used by another student'
-            : 'Could not save the application'
+          gate
+            ? gateMessage(gate)
+            : code === '23505'
+              ? 'That registration number is already used by another student'
+              : 'Could not save the application'
         );
       } finally {
         setBusy(false);
       }
     },
-    [load, onSaved]
+    [contactId, load, onSaved]
   );
 
   // Only what the counsellor changed is sent, so a value the database filled
   // meanwhile (a provisional ID from a saved login) is not blanked by a stale form.
-  const handleSave = () => {
+  // A university is only sent when filled and different from the stored one.
+  const changedFields = (): Partial<Fields> => {
     const before = fieldsOf(app);
     const changed: Partial<Fields> = {};
     for (const k of Object.keys(fields) as Array<keyof Fields>) {
       if (fields[k].trim() !== before[k].trim()) changed[k] = fields[k];
     }
-    if (Object.keys(changed).length === 0) {
+    if (changed.university !== undefined && changed.university.trim() === '') {
+      delete changed.university;
+    }
+    return changed;
+  };
+
+  const handleSave = () => {
+    const changed = changedFields();
+    if (Object.keys(changed).length === 0 && !emailChanged) {
       toast.message('Nothing to save');
       return;
     }
-    void run({ accountId, contactId, ...changed }, 'Application saved');
+    void run(
+      Object.keys(changed).length > 0
+        ? { accountId, contactId, ...changed }
+        : null,
+      'Application saved',
+      emailChanged ? email : undefined
+    );
+  };
+
+  const handlePunched = () => {
+    const missing = punchedGateMissing({ ...fields, email });
+    setGateMissing(missing);
+    if (missing.length > 0) {
+      toast.error(gateMessage(missing));
+      return;
+    }
+    void run(
+      { accountId, contactId, ...changedFields(), detailsPunchedBy: userId },
+      'Marked as punched on the portal',
+      emailChanged ? email : undefined
+    );
   };
 
   const set = (k: keyof Fields) => (e: React.ChangeEvent<HTMLInputElement>) =>
     setFields((f) => ({ ...f, [k]: e.target.value }));
 
-  const text = (k: keyof Fields, label: string) => (
+  const invalid = (key: GateKey) => gateMissing.includes(key);
+
+  const text = (
+    k: keyof Fields,
+    label: string,
+    opts: { gate?: GateKey; list?: string } = {}
+  ) => (
     <div className="space-y-1">
       <Label htmlFor={`app-${k}-${contactId}`} className="text-xs">
         {label}
@@ -144,7 +236,9 @@ export function ApplicationPanel({
         value={fields[k]}
         onChange={set(k)}
         disabled={!canEdit || busy || !loaded}
-        className="h-8 text-xs"
+        list={opts.list}
+        aria-invalid={opts.gate && invalid(opts.gate) ? true : undefined}
+        className={`h-8 text-xs ${opts.gate && invalid(opts.gate) ? 'border-red-500' : ''}`}
       />
     </div>
   );
@@ -160,9 +254,37 @@ export function ApplicationPanel({
 
   return (
     <div className="space-y-2" aria-busy={busy || !loaded}>
-      {text('fatherName', "Father's name")}
-      {text('program', 'Program')}
-      {text('specialization', 'Specialization')}
+      {text('fatherName', "Father's name", { gate: 'father_name' })}
+      {text('program', 'Program', { gate: 'program' })}
+      {text('university', 'University', {
+        gate: 'university',
+        list: `app-universities-${contactId}`,
+      })}
+      <datalist id={`app-universities-${contactId}`}>
+        {[
+          ...UNIVERSITIES,
+          ...[app?.university, contactUniversity].filter(
+            (u): u is string => !!u && !UNIVERSITIES.includes(u)
+          ),
+        ].map((u) => (
+          <option key={u} value={u} />
+        ))}
+      </datalist>
+      {text('specialization', 'Specialization (optional)')}
+      <div className="space-y-1">
+        <Label htmlFor={`app-email-${contactId}`} className="text-xs">
+          Email
+        </Label>
+        <Input
+          id={`app-email-${contactId}`}
+          type="email"
+          value={email}
+          onChange={(e) => setEmailDraft(e.target.value)}
+          disabled={!canEdit || busy || !loaded}
+          aria-invalid={invalid('email') ? true : undefined}
+          className={`h-8 text-xs ${invalid('email') ? 'border-red-500' : ''}`}
+        />
+      </div>
 
       <div className="bg-muted rounded-lg px-3 py-2">
         {app?.detailsPunchedAt ? (
@@ -175,12 +297,7 @@ export function ApplicationPanel({
             variant="outline"
             className="w-full"
             disabled={!canEdit || busy || !loaded}
-            onClick={() =>
-              void run(
-                { accountId, contactId, detailsPunchedBy: userId },
-                'Marked as punched on the portal'
-              )
-            }
+            onClick={handlePunched}
           >
             Details punched on portal
           </Button>
@@ -188,6 +305,7 @@ export function ApplicationPanel({
       </div>
 
       {text('provisionalAppId', 'Provisional ID')}
+      {text('universityAppNumber', 'University application no.')}
 
       <div className="bg-muted space-y-2 rounded-lg px-3 py-2">
         <p className="text-muted-foreground text-xs">Form filled by</p>

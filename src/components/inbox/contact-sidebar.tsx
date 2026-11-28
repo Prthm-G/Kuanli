@@ -387,6 +387,8 @@ export function ContactSidebar({
                         accountId={accountId}
                         userId={user.id}
                         canEdit={canEditStage}
+                        contactEmail={contact.email ?? null}
+                        contactUniversity={contact.university ?? null}
                         onSaved={fetchContactData}
                       />
                     </div>
