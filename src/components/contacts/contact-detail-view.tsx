@@ -25,7 +25,8 @@ import {
   SheetDescription,
 } from '@/components/ui/sheet';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import { ContactFollowupsTab } from '@/components/followups/contact-followups-tab';
+import { ActivityTab } from '@/components/students/activity-tab';
+import { useOpenStudent } from '@/components/students/student-drawer';
 import { PortalCredentialsTab } from '@/components/contacts/portal-credentials-tab';
 import { StudentPayments } from '@/components/payments/student-payments';
 import { Button } from '@/components/ui/button';
@@ -61,6 +62,7 @@ export function ContactDetailView({
 }: ContactDetailViewProps) {
   const supabase = createClient();
   const { accountId, defaultCurrency, accountRole } = useAuth();
+  const openStudent = useOpenStudent();
   // Deal values are admin-only: counsellors don't get the Deals tab (KB-SP3B-MONEY).
   const showMoney = canViewMoney(accountRole);
   // Lead owner (098): admins and the owner set it; counsellors see only their own.
@@ -456,6 +458,17 @@ export function ContactDetailView({
                       </span>
                     )}
                   </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="mt-2"
+                    onClick={() => {
+                      onOpenChange(false);
+                      openStudent(contact.id);
+                    }}
+                  >
+                    Open student
+                  </Button>
                   {showOwner && (
                     <ContactOwnerSelect
                       contactId={contact.id}
@@ -869,14 +882,14 @@ export function ContactDetailView({
                 </TabsContent>
               )}
 
-              {/* Follow-ups Tab (migration 054) — manual log merged with the
-                  automated ladder's sends. */}
+              {/* Follow-ups Tab: merged timeline of the linked records
+                  (student_timeline, migration 106). */}
               <TabsContent
                 value="followups"
                 className="flex-1 overflow-y-auto px-4 py-3"
               >
                 {contactId && (
-                  <ContactFollowupsTab
+                  <ActivityTab
                     contactId={contactId}
                     contactName={contact?.name}
                   />

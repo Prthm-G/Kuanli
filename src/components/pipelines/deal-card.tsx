@@ -5,6 +5,7 @@ import type { QueueLead } from "@/lib/queue/types";
 import { cardChips, type CardStatus } from "@/lib/applications/card-status";
 import { courseLine } from "@/lib/pipelines/course-line";
 import { Calendar, Check, X } from "lucide-react";
+import { useOpenStudent } from "@/components/students/student-drawer";
 import {
   Select,
   SelectContent,
@@ -60,6 +61,7 @@ function initials(name?: string, fallback?: string) {
 }
 
 export function DealCard({ deal, stage, onEdit, isOverlay, insight, stages, onMoveToStage, status }: DealCardProps) {
+  const openStudent = useOpenStudent();
   const contactLabel = deal.contact?.name || deal.contact?.phone || "No contact";
   const assigneeLabel = deal.assignee?.full_name || null;
   const course = courseLine(deal.contact, insight);
@@ -191,38 +193,50 @@ export function DealCard({ deal, stage, onEdit, isOverlay, insight, stages, onMo
       )}
       </button>
 
-      {!isOverlay && onMoveToStage && stages && stages.length > 0 && (
-        // The card is wrapped in dnd-kit drag listeners and an edit-on-click
-        // button; stop pointer/click here so the picker never starts a drag or
-        // opens the edit form.
+      {!isOverlay && (deal.contact_id || (onMoveToStage && stages && stages.length > 0)) && (
+        // Wrapped in dnd-kit drag listeners and an edit-on-click button: stop pointer/click here so nothing below
+        // starts a drag or opens the deal form.
         <div
-          className="px-4 pb-3"
+          className="flex items-center gap-2 px-4 pb-3"
           onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => e.stopPropagation()}
         >
-          <Select
-            value={deal.stage_id}
-            onValueChange={(value) => {
-              const next = String(value);
-              if (next && next !== deal.stage_id) onMoveToStage(deal.id, next);
-            }}
-          >
-            <SelectTrigger
-              size="sm"
-              className="w-full bg-background/60"
-              aria-label="Move to stage"
+          {onMoveToStage && stages && stages.length > 0 && (
+            <div className="min-w-0 flex-1">
+              <Select
+                value={deal.stage_id}
+                onValueChange={(value) => {
+                  const next = String(value);
+                  if (next && next !== deal.stage_id) onMoveToStage(deal.id, next);
+                }}
+              >
+                <SelectTrigger
+                  size="sm"
+                  className="w-full bg-background/60"
+                  aria-label="Move to stage"
+                >
+                  <span className="mr-1 text-xs text-muted-foreground">Stage:</span>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {stages.map((s) => (
+                    <SelectItem key={s.id} value={s.id}>
+                      {s.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+          {deal.contact_id && (
+            <button
+              type="button"
+              onClick={() => openStudent(deal.contact_id!)}
+              className="border-border text-foreground hover:bg-muted/50 shrink-0 rounded-md border px-2 py-1 text-xs font-medium"
             >
-              <span className="mr-1 text-xs text-muted-foreground">Stage:</span>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {stages.map((s) => (
-                <SelectItem key={s.id} value={s.id}>
-                  {s.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+              Student
+            </button>
+          )}
         </div>
       )}
     </div>

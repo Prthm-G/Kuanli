@@ -18,6 +18,7 @@ import {
   type WorklistRow,
 } from '@/lib/followups/types';
 import { LogDialog } from './log-dialog';
+import { useOpenStudent } from '@/components/students/student-drawer';
 
 const METHOD_ICON: Record<FollowUpMethod, typeof Phone> = {
   call: Phone,
@@ -48,6 +49,7 @@ interface WorklistProps {
  * a new follow-up moves or removes the row (migration 054).
  */
 export function Worklist({ rows, loading, error, onChanged }: WorklistProps) {
+  const openStudent = useOpenStudent();
   const [logging, setLogging] = useState<WorklistRow | null>(null);
   const buckets = useMemo(() => bucketWorklist(rows), [rows]);
 
@@ -86,9 +88,13 @@ export function Worklist({ rows, loading, error, onChanged }: WorklistProps) {
                     <Icon className="text-muted-foreground mt-1 h-4 w-4 shrink-0" />
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                        <span className="text-foreground text-sm font-medium">
+                        <button
+                          type="button"
+                          onClick={() => openStudent(row.contactId)}
+                          className="text-foreground text-sm font-medium hover:underline"
+                        >
                           {row.name || row.phone || 'Unnamed lead'}
-                        </span>
+                        </button>
                         {row.rollNumber && (
                           <span className="text-muted-foreground font-mono text-xs">
                             {row.rollNumber}

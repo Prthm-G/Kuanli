@@ -7,6 +7,7 @@ import { toast } from 'sonner';
 
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
+import { useOpenStudent } from '@/components/students/student-drawer';
 import { canViewMoney } from '@/lib/auth/roles';
 import { formatCurrency } from '@/lib/currency';
 import { loadApplicationTracker } from '@/lib/applications/queries';
@@ -30,6 +31,7 @@ import { Badge } from '@/components/ui/badge';
  */
 export default function ApplicationsPage() {
   const { accountId, accountRole } = useAuth();
+  const openStudent = useOpenStudent();
   // Fee received / due is admin-only; counsellors see document progress (KB-SP3B-MONEY).
   const showMoney = canViewMoney(accountRole);
   const [contacts, setContacts] = useState<TrackerContact[] | null>(null);
@@ -226,9 +228,13 @@ export default function ApplicationsPage() {
           >
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="text-foreground font-medium">
+                <button
+                  type="button"
+                  onClick={() => openStudent(c.contactId)}
+                  className="text-foreground font-medium hover:underline"
+                >
                   {c.name || c.phone || 'Lead'}
-                </span>
+                </button>
                 {c.rollNumber && (
                   <Badge variant="outline">{c.rollNumber}</Badge>
                 )}
@@ -271,6 +277,13 @@ export default function ApplicationsPage() {
                 <span className="text-muted-foreground text-sm">
                   {progress.verified}/{progress.total} verified
                 </span>
+                <button
+                  type="button"
+                  onClick={() => openStudent(c.contactId)}
+                  className="border-border text-foreground hover:bg-muted/50 inline-flex items-center rounded-md border px-2.5 py-1 text-xs font-medium"
+                >
+                  Open student
+                </button>
                 {c.conversationId && (
                   <Link
                     href={`/inbox?c=${c.conversationId}`}

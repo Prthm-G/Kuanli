@@ -1,11 +1,11 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { useRouter } from 'next/navigation';
 import { Search } from 'lucide-react';
 
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
+import { useOpenStudent } from '@/components/students/student-drawer';
 import {
   matchLabel,
   searchStudents,
@@ -35,13 +35,12 @@ function matchedValue(h: StudentHit): string | null {
 /**
  * Header-wide student lookup. Finds any contact in the account by name, phone,
  * email, provisional ID, university application number, registration or roll
- * number (the `search_students` RPC) and jumps to it via the
- * /contacts?contact=<id> deep link, which opens that contact's detail drawer.
- * Read-only; navigation only.
+ * number (the `search_students` RPC) and opens that student's drawer
+ * (?student=<id>) on the current page. Read-only; navigation only.
  */
 export function GlobalSearch() {
   const { accountId } = useAuth();
-  const router = useRouter();
+  const openStudent = useOpenStudent();
   const [query, setQuery] = useState('');
   const [hits, setHits] = useState<StudentHit[]>([]);
   const [open, setOpen] = useState(false);
@@ -105,7 +104,7 @@ export function GlobalSearch() {
     setQuery('');
     setHits([]);
     setHitsFor('');
-    router.push(`/contacts?contact=${id}`);
+    openStudent(id);
   }
 
   function onKeyDown(e: React.KeyboardEvent) {
