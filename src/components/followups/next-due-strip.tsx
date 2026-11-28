@@ -14,6 +14,8 @@ interface NextDueStripProps {
   contactId: string;
   contactName?: string | null;
   conversationId?: string | null;
+  /** Called after a follow-up is logged, so a parent timeline can refetch. */
+  onLogged?: () => void;
 }
 
 /**
@@ -30,6 +32,7 @@ export function NextDueStrip({
   contactId,
   contactName,
   conversationId,
+  onLogged,
 }: NextDueStripProps) {
   const { accountId, accountRole } = useAuth();
   const [latest, setLatest] = useState<TimelineItem | null>(null);
@@ -107,7 +110,10 @@ export function NextDueStrip({
         contactId={contactId}
         contactName={contactName}
         conversationId={conversationId}
-        onLogged={() => setReloadKey((k) => k + 1)}
+        onLogged={() => {
+          setReloadKey((k) => k + 1);
+          onLogged?.();
+        }}
       />
     </div>
   );
