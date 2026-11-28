@@ -1,6 +1,12 @@
 -- 106_rollback.sql (KB-JOURNEY-R1B): undo 106. Run in one transaction (psql -1).
 -- Refuses while contact_links or contact_link_exclusions hold rows (dropping them loses counsellors' links), unless the
 -- session first runs: SET k106.drop_values = 'yes';
+-- Lock both tables first so the count below cannot miss a row inserted while this runs (skipped when a table is gone).
+DO $lock$
+BEGIN
+  IF to_regclass('public.contact_links') IS NOT NULL THEN LOCK TABLE public.contact_links IN SHARE MODE; END IF;
+  IF to_regclass('public.contact_link_exclusions') IS NOT NULL THEN LOCK TABLE public.contact_link_exclusions IN SHARE MODE; END IF;
+END $lock$;
 DO $$
 DECLARE v_links bigint := 0; v_excl bigint := 0;
 BEGIN

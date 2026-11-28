@@ -67,6 +67,7 @@ BEGIN
   DELETE FROM public.contact_links WHERE account_id = NEW.account_id AND contact_a = NEW.contact_a AND contact_b = NEW.contact_b;
   RETURN NULL;
 END $$;
+REVOKE ALL ON FUNCTION public.contact_link_exclusion_clears_link() FROM PUBLIC, anon;
 DROP TRIGGER IF EXISTS contact_link_exclusion_clears_link ON public.contact_link_exclusions;
 CREATE TRIGGER contact_link_exclusion_clears_link AFTER INSERT ON public.contact_link_exclusions
   FOR EACH ROW EXECUTE FUNCTION public.contact_link_exclusion_clears_link();
@@ -80,6 +81,7 @@ BEGIN
   END IF;
   RETURN NEW;
 END $$;
+REVOKE ALL ON FUNCTION public.contact_link_refuses_excluded() FROM PUBLIC, anon;
 DROP TRIGGER IF EXISTS contact_link_refuses_excluded ON public.contact_links;
 CREATE TRIGGER contact_link_refuses_excluded BEFORE INSERT ON public.contact_links
   FOR EACH ROW EXECUTE FUNCTION public.contact_link_refuses_excluded();
