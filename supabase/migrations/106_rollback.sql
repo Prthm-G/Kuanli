@@ -19,7 +19,10 @@ DROP FUNCTION IF EXISTS public.student_contact_ids(uuid, uuid);
 DROP FUNCTION IF EXISTS public.student_set(uuid, uuid);
 DROP TABLE IF EXISTS public.contact_link_exclusions;
 DROP TABLE IF EXISTS public.contact_links;
+DROP FUNCTION IF EXISTS public.contact_link_exclusion_clears_link();
+DROP FUNCTION IF EXISTS public.contact_link_refuses_excluded();
 DROP INDEX IF EXISTS public.contacts_account_phone_last10;
+DROP INDEX IF EXISTS public.contact_notes_contact_time;
 -- Restore 104's punched gate exactly (106 replaced it with the FOR KEY SHARE version). Only when 104's trigger is present.
 DO $restore$
 BEGIN

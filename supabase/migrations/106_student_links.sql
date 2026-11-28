@@ -17,6 +17,8 @@ CREATE TABLE IF NOT EXISTS public.contact_links (
   CONSTRAINT contact_links_ordered CHECK (contact_a < contact_b),
   CONSTRAINT contact_links_pair UNIQUE (account_id, contact_a, contact_b)
 );
+CREATE INDEX IF NOT EXISTS contact_notes_contact_time ON public.contact_notes (contact_id, created_at DESC);
+
 CREATE INDEX IF NOT EXISTS contact_links_b ON public.contact_links (account_id, contact_b);
 
 CREATE TABLE IF NOT EXISTS public.contact_link_exclusions (
@@ -57,9 +59,34 @@ BEGIN
   END LOOP;
 END $$;
 
+-- A link and an exclusion for the same pair cannot coexist. Both triggers are SECURITY INVOKER: the caller's RLS still
+-- applies (an exclusion insert needs the same agent role and visibility that deleting the link needs).
+CREATE OR REPLACE FUNCTION public.contact_link_exclusion_clears_link() RETURNS trigger
+LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp AS $$
+BEGIN
+  DELETE FROM public.contact_links WHERE account_id = NEW.account_id AND contact_a = NEW.contact_a AND contact_b = NEW.contact_b;
+  RETURN NULL;
+END $$;
+DROP TRIGGER IF EXISTS contact_link_exclusion_clears_link ON public.contact_link_exclusions;
+CREATE TRIGGER contact_link_exclusion_clears_link AFTER INSERT ON public.contact_link_exclusions
+  FOR EACH ROW EXECUTE FUNCTION public.contact_link_exclusion_clears_link();
+
+CREATE OR REPLACE FUNCTION public.contact_link_refuses_excluded() RETURNS trigger
+LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp AS $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM public.contact_link_exclusions x WHERE x.account_id = NEW.account_id
+                AND x.contact_a = NEW.contact_a AND x.contact_b = NEW.contact_b) THEN
+    RAISE EXCEPTION 'these two records are marked as not the same student; remove that first' USING ERRCODE = 'P0001';
+  END IF;
+  RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS contact_link_refuses_excluded ON public.contact_links;
+CREATE TRIGGER contact_link_refuses_excluded BEFORE INSERT ON public.contact_links
+  FOR EACH ROW EXECUTE FUNCTION public.contact_link_refuses_excluded();
+
 CREATE OR REPLACE FUNCTION public.student_set(p_account uuid, p_contact uuid)
 RETURNS TABLE(contact_id uuid, via text, link_id uuid)
-LANGUAGE sql STABLE SECURITY INVOKER SET search_path = public, pg_temp AS $$
+ROWS 8 LANGUAGE sql STABLE SECURITY INVOKER SET search_path = public, pg_temp AS $$
   WITH self AS (
     SELECT c.id, c.phone_normalized AS pn FROM public.contacts c WHERE c.id = p_contact AND c.account_id = p_account
   ),
@@ -79,6 +106,10 @@ LANGUAGE sql STABLE SECURITY INVOKER SET search_path = public, pg_temp AS $$
       JOIN public.contact_links l ON l.account_id = p_account AND n.id IN (l.contact_a, l.contact_b)
       JOIN public.contacts c ON c.account_id = p_account
        AND c.id = CASE WHEN l.contact_a = n.id THEN l.contact_b ELSE l.contact_a END
+     WHERE NOT EXISTS (SELECT 1 FROM public.contact_link_exclusions x WHERE x.account_id = p_account
+                          AND x.contact_a = least(n.id, c.id) AND x.contact_b = greatest(n.id, c.id))
+       AND NOT EXISTS (SELECT 1 FROM public.contact_link_exclusions x WHERE x.account_id = p_account
+                          AND x.contact_a = least(p_contact, c.id) AND x.contact_b = greatest(p_contact, c.id))
   ),
   far AS (    -- the linked contacts and their phone twins
     SELECT h.id, 'link'::text AS via, h.link_id FROM hop h
@@ -101,7 +132,7 @@ $$;
 
 CREATE OR REPLACE FUNCTION public.student_contact_ids(p_account uuid, p_contact uuid)
 RETURNS SETOF uuid
-LANGUAGE sql STABLE SECURITY INVOKER SET search_path = public, pg_temp AS $$
+ROWS 8 LANGUAGE sql STABLE SECURITY INVOKER SET search_path = public, pg_temp AS $$
   SELECT s.contact_id FROM public.student_set(p_account, p_contact) s
 $$;
 
@@ -165,6 +196,9 @@ REVOKE ALL ON FUNCTION public.student_set(uuid, uuid), public.student_contact_id
 GRANT EXECUTE ON FUNCTION public.student_set(uuid, uuid), public.student_contact_ids(uuid, uuid),
   public.student_timeline(uuid, uuid, timestamptz, integer) TO authenticated, service_role;
 
+DO $$ BEGIN
+  IF to_regprocedure('public.applications_punched_gate()') IS NULL THEN RAISE EXCEPTION '106 needs 104 applied first'; END IF;
+END $$;
 -- Carried from R1a's review: 104's punched gate checked for an existing application row with a plain EXISTS on its INSERT
 -- leg, which can see a row a concurrent transaction is moving to another contact. FOR KEY SHARE locks the row it finds, so
 -- the answer holds until this transaction ends. Same body otherwise. 106_rollback.sql restores 104's text.
