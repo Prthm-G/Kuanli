@@ -45,3 +45,20 @@ export function snapshotBody(overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
+
+/** Shared test fixture: a well-formed meta-daily POST body (made-up ids, two regions summing to the total). */
+export function metaDailyBody(overrides: Record<string, unknown> = {}) {
+  return {
+    ad_account_id: '111111111',
+    day: '2026-11-26',
+    account_tz: 'America/Los_Angeles',
+    account_total: { spend: 150.5, impressions: 1400, clicks: 28 },
+    rows: [
+      { ad_id: '81050001', ad_name: 'P1', campaign_id: '81051001', campaign_name: 'C1', adset_id: '81052001',
+        adset_name: 'S1', region: 'Punjab region', spend: 100.25, impressions: 1000, clicks: 20 },
+      { ad_id: '81050001', ad_name: 'P1', region: 'Chandigarh', spend: 50.25, impressions: 400, clicks: 8,
+        msg_started: null, leads: null },
+    ],
+    ...overrides,
+  };
+}
