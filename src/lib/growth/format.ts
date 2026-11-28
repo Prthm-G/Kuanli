@@ -80,21 +80,30 @@ export function adLabel(a: {
   return `unknown ad${a.metaName ? ` (${a.metaName})` : ''} …${a.adId.slice(-6)}`;
 }
 
-const TZ_NOTE: Record<string, string> = {
-  'America/Los_Angeles': ' (Meta day, Pacific)',
-  'Asia/Kolkata': '',
-};
-
 /** Which Meta days are stored, per ad account, in one line for the page. */
 export function coverageLine(
   c: SpendCoverage[],
-  branchName: (code: string | null) => string
+  branchName: (code: string | null) => string,
+  days = 30
 ): string {
   if (c.length === 0)
     return 'No daily Meta spend stored yet, so spend columns say "no data".';
-  const parts = c.map(
-    (x) =>
-      `${branchName(x.branchCode)} to ${x.lastDay ?? 'no day'}${TZ_NOTE[x.accountTz] ?? ` (${x.accountTz})`}`
-  );
-  return `Daily Meta spend: ${parts.join(', ')}. Spend uses Meta account days; chats use IST days.`;
+  const tz = (x: SpendCoverage) =>
+    x.accountTz === 'Asia/Kolkata'
+      ? ''
+      : x.accountTz === 'America/Los_Angeles'
+        ? ' (Meta day, Pacific)'
+        : ` (${x.accountTz})`;
+  const one = (x: SpendCoverage) =>
+    `${x.daysInWindow} of ${days} days, last ${x.lastDay ?? 'no day'}`;
+  if (c.length === 1) {
+    const x = c[0];
+    const note =
+      x.accountTz === 'America/Los_Angeles'
+        ? ` (Meta day, Pacific for ${branchName(x.branchCode)})`
+        : tz(x);
+    return `Spend stored for ${one(x)}${note}. Chats use IST days.`;
+  }
+  const parts = c.map((x) => `${branchName(x.branchCode)} ${one(x)}${tz(x)}`);
+  return `Spend stored for ${parts.join('; ')}. Chats use IST days.`;
 }

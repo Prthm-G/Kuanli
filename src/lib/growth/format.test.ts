@@ -80,34 +80,15 @@ describe('labels', () => {
     ).toBe('unknown ad …059999');
   });
 
-  it('coverage line names each account day and the Pacific day', () => {
-    const name = (c: string | null) =>
-      c === 'PTA' ? 'Patiala' : c === 'MOH' ? 'Mohali' : 'No branch';
-    expect(coverageLine([], name)).toBe(
-      'No daily Meta spend stored yet, so spend columns say "no data".'
-    );
-    expect(
-      coverageLine(
-        [
-          {
-            adAccountId: '1',
-            branchCode: 'PTA',
-            accountTz: 'America/Los_Angeles',
-            lastDay: '2026-11-26',
-            daysInWindow: 3,
-          },
-          {
-            adAccountId: '2',
-            branchCode: 'MOH',
-            accountTz: 'Asia/Kolkata',
-            lastDay: '2026-11-27',
-            daysInWindow: 3,
-          },
-        ],
-        name
-      )
-    ).toBe(
-      'Daily Meta spend: Patiala to 2026-11-26 (Meta day, Pacific), Mohali to 2026-11-27. Spend uses Meta account days; chats use IST days.'
-    );
+  it('coverage line says how many days are stored', () => {
+    const name = (c: string | null) => (c === 'PTA' ? 'Patiala' : c === 'MOH' ? 'Mohali' : 'No branch');
+    expect(coverageLine([], name)).toBe('No daily Meta spend stored yet, so spend columns say "no data".');
+    expect(coverageLine([
+      { adAccountId: '1', branchCode: 'PTA', accountTz: 'America/Los_Angeles', lastDay: '2026-11-26', daysInWindow: 3 },
+    ], name)).toBe('Spend stored for 3 of 30 days, last 2026-11-26 (Meta day, Pacific for Patiala). Chats use IST days.');
+    expect(coverageLine([
+      { adAccountId: '1', branchCode: 'PTA', accountTz: 'America/Los_Angeles', lastDay: '2026-11-26', daysInWindow: 3 },
+      { adAccountId: '2', branchCode: 'MOH', accountTz: 'Asia/Kolkata', lastDay: '2026-11-27', daysInWindow: 2 },
+    ], name)).toBe('Spend stored for Patiala 3 of 30 days, last 2026-11-26 (Meta day, Pacific); Mohali 2 of 30 days, last 2026-11-27. Chats use IST days.');
   });
 });

@@ -100,11 +100,6 @@ export async function loadGrowthSnapshots(
     }));
 }
 
-// loadGrowthLive: add `branchId: string | null = null` as the 4th parameter and build the args as
-//   const args: Record<string, unknown> = { p_account_id: accountId, p_days: days };
-//   if (branchId) args.p_branch = branchId;   // All never sends it, so the page also works on the 078 catalogue
-//   const { data, error } = await supabase.rpc('growth_live', args);
-
 /** Branch tabs for /growth: Patiala (PTA) first, then by name. RLS: any member reads branches (097). */
 export async function loadBranches(
   supabase: SupabaseClient,

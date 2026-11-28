@@ -24,6 +24,7 @@ import {
 } from '@/lib/growth/format';
 import {
   adRows,
+  type Cell,
   branchRows,
   formRows,
   stateRows,
@@ -76,14 +77,12 @@ export default function GrowthPage() {
       loadGrowthLive(supabase, accountId, 30, branchId),
       loadGrowthSnapshots(supabase, accountId),
       loadBranchFunnel(supabase, accountId, 30, branchId),
-      loadBranches(supabase, accountId),
     ])
-      .then(([l, s, f, b]) => {
+      .then(([l, s, f]) => {
         if (req !== reqRef.current) return;
         setLive(l);
         setSnapshots(s);
         setFunnel(f);
-        setBranches(b);
       })
       .catch((e) => {
         if (req !== reqRef.current) return;
@@ -93,6 +92,23 @@ export default function GrowthPage() {
         if (req === reqRef.current) setLoading(false);
       });
   }, [accountId, allowed, branch]);
+
+  // Branch tabs load once per account, apart from the per-tab data, so a
+  // failure here leaves the page and the All tab working.
+  useEffect(() => {
+    if (!accountId || !allowed) return;
+    let cancelled = false;
+    loadBranches(createClient(), accountId)
+      .then((b) => {
+        if (!cancelled) setBranches(b);
+      })
+      .catch(() => {
+        if (!cancelled) setBranches([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [accountId, allowed]);
 
   // Refresh: show the spinner and clear the last error, then refetch.
   const load = useCallback(async () => {
@@ -215,19 +231,23 @@ export default function GrowthPage() {
             latest ? `checkpoint ${latest.intake.checkpoint_ads}` : undefined
           }
         />
-        <Stat
-          label="14-day cost per enrolment"
-          value={
-            latest ? cpeLabel(latest.window14.spend, latest.window14.cpe) : '—'
-          }
-          hint={
-            funnel?.coverage.length
-              ? 'weekly scorecard; daily spend is in the tables below'
-              : latest
-                ? `${inr(latest.window14.spend)} spend`
-                : undefined
-          }
-        />
+        {allTab && (
+          <Stat
+            label="14-day cost per enrolment"
+            value={
+              latest
+                ? cpeLabel(latest.window14.spend, latest.window14.cpe)
+                : '—'
+            }
+            hint={
+              funnel?.coverage.length
+                ? 'weekly scorecard; daily spend is in the tables below'
+                : latest
+                  ? `${inr(latest.window14.spend)} spend`
+                  : undefined
+            }
+          />
+        )}
         <Stat
           label="Last ad click captured"
           value={
@@ -261,8 +281,8 @@ export default function GrowthPage() {
               'Enrolled',
               'Spend',
               'Cost/ad chat',
-              'Cost/provisional',
-              'Cost/enrolment',
+              'Spend per provisional (all sources)',
+              'Spend per enrolment (all sources)',
             ]}
             loading={loading}
             empty="No chats in the window."
@@ -355,8 +375,13 @@ export default function GrowthPage() {
           head={['State', 'Branch', 'Spend', 'Impressions', 'Clicks']}
           loading={loading}
           empty="No spend by state in the window."
-          rows={funnel ? stateRows(funnel) : undefined}
+          rows={funnel ? stateRows(funnel).rows : undefined}
         />
+        {funnel && stateRows(funnel).note && (
+          <p className="text-muted-foreground text-xs">
+            {stateRows(funnel).note}
+          </p>
+        )}
       </Section>
 
       {allTab && (
@@ -516,6 +541,16 @@ function List({
   );
 }
 
+function isPartial(c: unknown): c is { text: string; title: string } {
+  return (
+    typeof c === 'object' &&
+    c !== null &&
+    'title' in c &&
+    'text' in c &&
+    typeof (c as { text: unknown }).text === 'string'
+  );
+}
+
 function Table({
   head,
   rows,
@@ -523,7 +558,7 @@ function Table({
   empty,
 }: {
   head: string[];
-  rows: Array<Array<React.ReactNode>> | undefined;
+  rows: Array<Array<Cell | React.ReactNode>> | undefined;
   loading: boolean;
   empty: string;
 }) {
@@ -565,7 +600,7 @@ function Table({
               <tr key={i}>
                 {r.map((c, j) => (
                   <td key={j} className="text-foreground px-3 py-2">
-                    {c}
+                    {isPartial(c) ? <span title={c.title}>{c.text}</span> : c}
                   </td>
                 ))}
               </tr>

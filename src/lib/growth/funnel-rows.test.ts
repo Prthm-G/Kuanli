@@ -119,6 +119,31 @@ describe('funnel rows', () => {
 
   it('form and state rows', () => {
     expect(formRows(f)[0]).toEqual(['Form A', 'PTA', 3, 1, 1, 1, 1, 0, 0]);
-    expect(stateRows(f)[0]).toEqual(['Unknown', 'PTA', '₹5', 1, 0]);
+    expect(stateRows(f).rows[0]).toEqual(['Unknown', 'PTA', '₹5', 1, 0]);
+  });
+});
+
+describe('partial spend and state rows', () => {
+  const cov = (days: number) => [
+    { adAccountId: '1', branchCode: 'PTA', accountTz: 'America/Los_Angeles', lastDay: '2026-11-26', daysInWindow: days },
+  ];
+  it('cost cells say partial with a tooltip while fewer than 30 days are stored', () => {
+    const p = { ...f, coverage: cov(3) };
+    const tip = { text: 'partial', title: 'spend for 3 of 30 days stored' };
+    expect(branchRows(p)[0].slice(10)).toEqual(['₹600', tip, tip, tip]);
+    expect(adRows(p, true)[0].slice(6)).toEqual(['₹500', tip, tip, tip]);
+    expect(branchRows({ ...f, coverage: cov(30) })[0][11]).toBe('₹200');
+  });
+
+  it('merges null and Unknown, shows - for missing numbers, notes truncation', () => {
+    const g: BranchFunnel = { ...f, spendByState: [
+      { region: 'null', branchCode: 'PTA', spend: 5, impressions: null, clicks: null },
+      { region: 'Unknown', branchCode: 'PTA', spend: 3, impressions: null, clicks: null },
+    ] };
+    expect(stateRows(g)).toEqual({ rows: [['Unknown', 'PTA', '₹8', '-', '-']], note: null });
+    const many = Array.from({ length: 27 }, (_, i) => ({ region: `S${i}`, branchCode: 'PTA', spend: i, impressions: 1, clicks: 1 }));
+    const r = stateRows({ ...f, spendByState: many });
+    expect(r.rows).toHaveLength(25);
+    expect(r.note).toBe('Top 25 of 27 states by spend.');
   });
 });
