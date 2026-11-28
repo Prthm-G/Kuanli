@@ -80,6 +80,17 @@ describe('labels', () => {
     ).toBe('unknown ad …059999');
   });
 
+  it('coverage line states the cost basis once spend is complete, clamped to the syncable days', () => {
+    const name = (c: string | null) => (c === 'PTA' ? 'Patiala' : 'Mohali');
+    const pta = (d: number) => ({ adAccountId: '1', branchCode: 'PTA', accountTz: 'America/Los_Angeles', lastDay: '2026-11-26', daysInWindow: d });
+    const moh = (d: number) => ({ adAccountId: '2', branchCode: 'MOH', accountTz: 'Asia/Kolkata', lastDay: '2026-11-27', daysInWindow: d });
+    expect(coverageLine([pta(28)], name)).toContain('Costs use spend for 28 of 30 chat days, so they read slightly low.');
+    expect(coverageLine([pta(29)], name)).toContain('for 28 of 30 chat days');
+    expect(coverageLine([pta(29)], name)).not.toContain('29 of 28');
+    expect(coverageLine([pta(28), moh(29)], name)).toContain('Costs use spend for Patiala 28 of 30, Mohali 29 of 30 chat days, so they read slightly low.');
+    expect(coverageLine([pta(3)], name)).not.toContain('Costs use');
+  });
+
   it('coverage line says how many days are stored', () => {
     const name = (c: string | null) => (c === 'PTA' ? 'Patiala' : c === 'MOH' ? 'Mohali' : 'No branch');
     expect(coverageLine([], name)).toBe('No daily Meta spend stored yet, so spend columns say "no data".');

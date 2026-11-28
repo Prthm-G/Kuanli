@@ -42,7 +42,19 @@ function cost(
       text: 'partial',
       title: `spend for ${short.daysInWindow} of ${syncableDays(short.accountTz, WINDOW_DAYS)} days stored`,
     };
-  return costPer(spend, n);
+  const full = f.coverage.find((c) => c.branchCode === branchCode);
+  const text = costPer(spend, n);
+  if (spend !== null && full) {
+    const days = Math.min(
+      full.daysInWindow,
+      syncableDays(full.accountTz, WINDOW_DAYS)
+    );
+    return {
+      text,
+      title: `Spend for ${days} stored days / chats over ${WINDOW_DAYS} days`,
+    };
+  }
+  return text;
 }
 const funnel = (s: FunnelSteps): Cell[] => [
   s.qualified,

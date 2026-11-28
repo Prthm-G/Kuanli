@@ -105,15 +105,26 @@ export function coverageLine(
         ? ' (Meta day, Pacific)'
         : ` (${x.accountTz})`;
   const one = (x: SpendCoverage) =>
-    `${x.daysInWindow} of ${syncableDays(x.accountTz, days)} days, last ${x.lastDay ?? 'no day'}`;
+    `${Math.min(x.daysInWindow, syncableDays(x.accountTz, days))} of ${syncableDays(x.accountTz, days)} days, last ${x.lastDay ?? 'no day'}`;
+  const full = c.filter(
+    (x) => x.daysInWindow >= syncableDays(x.accountTz, days)
+  );
+  const basis = (x: SpendCoverage) =>
+    `${Math.min(x.daysInWindow, syncableDays(x.accountTz, days))} of ${days}`;
+  const costNote =
+    full.length === 0
+      ? ''
+      : c.length === 1
+        ? ` Costs use spend for ${basis(full[0])} chat days, so they read slightly low.`
+        : ` Costs use spend for ${full.map((x) => `${branchName(x.branchCode)} ${basis(x)}`).join(', ')} chat days, so they read slightly low.`;
   if (c.length === 1) {
     const x = c[0];
     const note =
       x.accountTz === 'America/Los_Angeles'
         ? ` (Meta day, Pacific for ${branchName(x.branchCode)})`
         : tz(x);
-    return `Spend stored for ${one(x)}${note}. Chats use IST days.`;
+    return `Spend stored for ${one(x)}${note}. Chats use IST days.${costNote}`;
   }
   const parts = c.map((x) => `${branchName(x.branchCode)} ${one(x)}${tz(x)}`);
-  return `Spend stored for ${parts.join('; ')}. Chats use IST days.`;
+  return `Spend stored for ${parts.join('; ')}. Chats use IST days.${costNote}`;
 }
