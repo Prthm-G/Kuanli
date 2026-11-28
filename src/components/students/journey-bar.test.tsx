@@ -35,6 +35,7 @@ describe('StudentHeader', () => {
     registrationNumber: null,
     loading: false,
     error: false,
+    warning: null,
   };
   it('keeps the value in the copy button name and has a live region', () => {
     const html = renderToStaticMarkup(h(StudentHeader, props));
@@ -57,6 +58,15 @@ describe('StudentHeader', () => {
     );
     expect(html).not.toContain('wa.me');
     expect(html).toMatch(/Also.*919800000002/);
+  });
+  it('warns only when a warning list is given', () => {
+    expect(renderToStaticMarkup(h(StudentHeader, props))).not.toContain(
+      'different students'
+    );
+    const html = renderToStaticMarkup(
+      h(StudentHeader, { ...props, warning: ['A', 'B'] })
+    );
+    expect(html).toContain('These may be different students: A, B');
   });
   it('shows a dash while loading and Not set once loaded', () => {
     const loading = renderToStaticMarkup(

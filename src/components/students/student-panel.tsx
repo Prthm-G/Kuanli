@@ -13,6 +13,7 @@ import {
 } from '@/lib/applications/application-queries';
 import {
   loadBranchAndOwner,
+  differentStudentsWarning,
   loadStudentSet,
   type StudentRecord,
 } from '@/lib/students/queries';
@@ -140,6 +141,7 @@ export function StudentPanel({
         registrationNumber={app?.registrationNumber ?? null}
         loading={headerFor !== contact.id || !data.loaded}
         error={headerError}
+        warning={differentStudentsWarning(records)}
       />
       {/* min-h-0 is load-bearing (issue #229): without it the tabs grow instead of scrolling. */}
       <Tabs
@@ -259,6 +261,8 @@ export function StudentPanel({
                 canEditStage={canEdit}
                 onStageChange={data.changeStage}
                 onContactUpdated={onContactUpdated}
+                records={records}
+                onLinksChanged={() => setHeaderKey((k) => k + 1)}
               />
             </div>
           </ScrollArea>

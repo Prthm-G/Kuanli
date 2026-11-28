@@ -122,6 +122,8 @@ export interface StudentHeaderProps {
   /** Header data still loading: empty values show a dash, not "Not set". */
   loading: boolean;
   error: boolean;
+  /** Names of linked records that each hold an application; null when fewer than two. */
+  warning: string[] | null;
 }
 
 /** Always-visible strip: who the student is and where they are, every value copyable. */
@@ -132,6 +134,14 @@ export function StudentHeader(p: StudentHeaderProps) {
       <h3 className="text-foreground truncate text-sm font-semibold">
         {p.name}
       </h3>
+      {p.warning && (
+        <p
+          role="status"
+          className="rounded-md bg-amber-500/15 px-2 py-1 text-xs text-amber-500"
+        >
+          These may be different students: {p.warning.join(', ')}
+        </p>
+      )}
       <div className="space-y-0.5">
         <CopyValue label="Phone" value={p.phone} loading={p.loading} />
         {p.otherPhones.map((ph) => (

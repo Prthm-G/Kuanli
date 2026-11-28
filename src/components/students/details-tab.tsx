@@ -11,7 +11,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { useAuth } from '@/hooks/use-auth';
+import type { StudentRecord } from '@/lib/students/queries';
 import type { ContactTag } from './use-student-data';
+import { LinkedRecords } from './linked-records';
 
 interface DetailsTabProps {
   contact: Contact;
@@ -22,6 +25,8 @@ interface DetailsTabProps {
   canEditStage: boolean;
   onStageChange: (dealId: string, stageId: string) => Promise<void>;
   onContactUpdated?: () => void;
+  records: StudentRecord[];
+  onLinksChanged: () => void;
 }
 
 /** Contact lines, stage picker, tags and enrollment (moved from the inbox contact sidebar unchanged). */
@@ -34,9 +39,25 @@ export function DetailsTab({
   canEditStage,
   onStageChange,
   onContactUpdated,
+  records,
+  onLinksChanged,
 }: DetailsTabProps) {
+  const { accountId, user } = useAuth();
   return (
     <div>
+      {accountId && user && (
+        <>
+          <LinkedRecords
+            accountId={accountId}
+            userId={user.id}
+            contactId={contact.id}
+            records={records}
+            canEdit={canEditStage}
+            onChanged={onLinksChanged}
+          />
+          <div className="border-border my-4 border-t" />
+        </>
+      )}
       {(contact.email || contact.company) && (
         <>
           <div className="space-y-2">
