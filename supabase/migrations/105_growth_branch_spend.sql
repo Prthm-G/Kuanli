@@ -60,7 +60,9 @@ BEGIN
   IF p_rows IS NULL OR jsonb_typeof(p_rows) <> 'array' THEN
     RAISE EXCEPTION 'rows must be an array' USING ERRCODE = '22023';
   END IF;
-  DELETE FROM public.meta_ad_daily WHERE ad_account_id = p_ad_account AND day = p_day;
+  -- two posts for the same account day queue here instead of one failing on the primary key
+  PERFORM pg_advisory_xact_lock(hashtext(p_ad_account || ':' || p_day::text));
+  DELETE FROM public.meta_ad_daily WHERE account_id = p_account AND ad_account_id = p_ad_account AND day = p_day;
   INSERT INTO public.meta_ad_daily (account_id, day, ad_account_id, account_tz, campaign_id, campaign_name, adset_id,
                                     adset_name, ad_id, ad_name, region, spend, impressions, clicks, msg_started, leads)
   SELECT p_account, p_day, p_ad_account, p_tz, r->>'campaign_id', r->>'campaign_name', r->>'adset_id', r->>'adset_name',
@@ -86,7 +88,7 @@ LANGUAGE sql STABLE SECURITY INVOKER SET search_path = public, pg_temp AS $$
       ORDER BY m.day DESC LIMIT 1))
    WHERE nullif(p_ad_id, '') IS NOT NULL
 $$;
-REVOKE ALL ON FUNCTION public.growth_ad_branch(uuid, text) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.growth_ad_branch(uuid, text) FROM PUBLIC, anon, authenticated, service_role;
 
 -- 3. growth_live with a branch filter (094's body: counsellor-number chats and flagged contacts stay out of the counts) ---------------------------------------------------------------------------------
 -- Same body as 094 (live) over cv (the account's conversations, in the branch when one is given). p_branch NULL: identical
