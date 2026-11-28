@@ -119,7 +119,7 @@ export default function ContactsPage() {
 
   // Deep link: /contacts?contact=<id> opens that contact's detail drawer.
   // This is how EOD, the admission register, and the header search jump to a
-  // lead. ContactDetailView fetches by id, so the target need not be on the
+  // lead (the header search now opens the student drawer instead). ContactDetailView fetches by id, so the target need not be on the
   // current page or match the active filters.
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -132,7 +132,11 @@ export default function ContactsPage() {
       setDetailContactId(contactParam);
       setDetailOpen(true);
       // Consume the param so jumping to the same contact again re-fires this.
-      router.replace('/contacts');
+      // Keep any other params (e.g. ?student=).
+      const params = new URLSearchParams(window.location.search);
+      params.delete('contact');
+      const q = params.toString();
+      router.replace(q ? `/contacts?${q}` : '/contacts');
     }, 0);
     return () => clearTimeout(id);
   }, [contactParam, router]);

@@ -29,9 +29,31 @@ export function StudentDrawerHost() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const { accountId } = useAuth();
-  const contactId = readStudentParam(searchParams.get('student'));
+  const wanted = readStudentParam(searchParams.get('student'));
+  const threadId = searchParams.get('c');
+  // On /inbox the inline panel already shows the open thread's contact; do not open a second panel for it.
+  const [inlineFor, setInlineFor] = useState<{ student: string; thread: string; same: boolean } | null>(null);
+  const checkInline = wanted !== null && pathname.startsWith('/inbox') && !!threadId;
+  const inlineSame = checkInline && inlineFor?.student === wanted && inlineFor.thread === threadId ? inlineFor.same : null;
+  const contactId = checkInline && inlineSame !== false ? null : wanted;
   const [loaded, setLoaded] = useState<{ id: string; contact: Contact | null; failed: boolean } | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+
+  useEffect(() => {
+    if (!checkInline || !accountId || !wanted || !threadId) return;
+    let cancelled = false;
+    void (async () => {
+      const { data } = await createClient().from('conversations').select('contact_id').eq('id', threadId).eq('account_id', accountId).maybeSingle();
+      if (cancelled) return;
+      const same = (data as { contact_id: string | null } | null)?.contact_id === wanted;
+      setInlineFor({ student: wanted, thread: threadId, same });
+    })();
+    return () => { cancelled = true; };
+  }, [checkInline, accountId, wanted, threadId]);
+
+  useEffect(() => {
+    if (inlineSame === true) router.replace(studentHref(pathname, searchParams.toString(), null), { scroll: false });
+  }, [inlineSame, router, pathname, searchParams]);
 
   useEffect(() => {
     if (!contactId || !accountId) return;

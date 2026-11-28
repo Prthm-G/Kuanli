@@ -195,11 +195,12 @@ export function DealCard({ deal, stage, onEdit, isOverlay, insight, stages, onMo
 
       {!isOverlay && (deal.contact_id || (onMoveToStage && stages && stages.length > 0)) && (
         // Wrapped in dnd-kit drag listeners and an edit-on-click button: stop pointer/click here so nothing below
-        // starts a drag or opens the deal form.
+        // starts a drag (pointer or keyboard sensor) or opens the deal form.
         <div
           className="flex items-center gap-2 px-4 pb-3"
           onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => e.stopPropagation()}
         >
           {onMoveToStage && stages && stages.length > 0 && (
             <div className="min-w-0 flex-1">
