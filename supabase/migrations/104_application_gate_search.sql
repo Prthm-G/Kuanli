@@ -31,18 +31,18 @@ BEGIN
      OR coalesce(current_setting('app.suppress_automation', true), '') = 'on' THEN
     RETURN NEW;
   END IF;
-  -- An upsert re-sending details_punched_at for a contact whose row is already punched is not a new punch: the
-  -- BEFORE INSERT trigger sees the proposed row before ON CONFLICT turns it into an update.
+  SELECT email INTO v_email FROM public.contacts WHERE id = NEW.contact_id AND account_id = NEW.account_id;
+  IF NOT FOUND THEN RAISE EXCEPTION 'contact not found in this account' USING ERRCODE = 'P0001'; END IF;
+  -- PostgREST upserts (INSERT ... ON CONFLICT (contact_id) DO UPDATE) send only the changed columns, so the proposed row
+  -- of this BEFORE INSERT call lacks the stored father_name/program/university. When a row already exists for the contact
+  -- the INSERT leg steps aside; the UPDATE leg of the same upsert fires this trigger again with the merged row and checks it.
   IF TG_OP = 'INSERT' AND EXISTS (SELECT 1 FROM public.applications a
-                                   WHERE a.contact_id = NEW.contact_id AND a.account_id = NEW.account_id
-                                     AND a.details_punched_at IS NOT NULL) THEN
+                                   WHERE a.contact_id = NEW.contact_id AND a.account_id = NEW.account_id) THEN
     RETURN NEW;
   END IF;
   IF nullif(btrim(NEW.father_name), '') IS NULL THEN v_missing := v_missing || 'father_name'::text; END IF;
   IF nullif(btrim(NEW.program), '') IS NULL THEN v_missing := v_missing || 'program'::text; END IF;
   IF nullif(btrim(NEW.university), '') IS NULL THEN v_missing := v_missing || 'university'::text; END IF;
-  SELECT email INTO v_email FROM public.contacts WHERE id = NEW.contact_id AND account_id = NEW.account_id;
-  IF NOT FOUND THEN RAISE EXCEPTION 'contact not found in this account' USING ERRCODE = 'P0001'; END IF;
   IF public.is_placeholder_email(v_email) THEN v_missing := v_missing || 'email'::text; END IF;
   IF array_length(v_missing, 1) > 0 THEN
     RAISE EXCEPTION 'missing: %', array_to_string(v_missing, ',') USING ERRCODE = 'P0001';
