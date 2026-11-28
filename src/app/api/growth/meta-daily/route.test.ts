@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { metaDailyBody } from '@/lib/growth/test-fixtures';
+import { MAX_META_DAILY_BYTES } from '@/lib/growth/meta-daily';
 import { POST } from './route';
 
 const h = vi.hoisted(() => ({ rpc: vi.fn(), catalog: vi.fn() }));
@@ -57,12 +58,22 @@ describe('POST /api/growth/meta-daily', () => {
     const body = metaDailyBody();
     const res = await POST(req(body, 's3cret'));
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, ad_account_id: '111111111', day: '2026-11-26', stored: 2 });
+    expect(await res.json()).toEqual({ ok: true, ad_account_id: '111111111', day: body.day, stored: 2 });
     expect(h.catalog).toHaveBeenCalledWith('111111111');
     const [fn, args] = h.rpc.mock.calls[0];
     expect(fn).toBe('meta_ad_daily_replace');
-    expect(args).toMatchObject({ p_account: ACCOUNT, p_ad_account: '111111111', p_day: '2026-11-26', p_tz: 'America/Los_Angeles' });
+    expect(args).toMatchObject({ p_account: ACCOUNT, p_ad_account: '111111111', p_day: body.day, p_tz: 'America/Los_Angeles' });
     expect(args.p_rows).toHaveLength(2);
+  });
+
+  it('413 when content-length is over the cap, before reading the body', async () => {
+    const r = new Request('http://localhost/api/growth/meta-daily', {
+      method: 'POST',
+      headers: { 'x-cron-secret': 's3cret', 'content-length': String(MAX_META_DAILY_BYTES + 1) },
+      body: '{}',
+    });
+    expect((await POST(r)).status).toBe(413);
+    expect(h.rpc).not.toHaveBeenCalled();
   });
 
   it('500 when the RPC fails', async () => {

@@ -50,7 +50,7 @@ export function snapshotBody(overrides: Record<string, unknown> = {}) {
 export function metaDailyBody(overrides: Record<string, unknown> = {}) {
   return {
     ad_account_id: '111111111',
-    day: '2026-11-26',
+    day: new Date(Date.now() - 2 * 86_400_000).toISOString().slice(0, 10),
     account_tz: 'America/Los_Angeles',
     account_total: { spend: 150.5, impressions: 1400, clicks: 28 },
     rows: [

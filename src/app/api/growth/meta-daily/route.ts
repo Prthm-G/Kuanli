@@ -12,7 +12,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { NextResponse } from 'next/server';
 
 import { supabaseAdmin } from '@/lib/automations/admin-client';
-import { validateMetaDaily } from '@/lib/growth/meta-daily';
+import { MAX_META_DAILY_BYTES, validateMetaDaily } from '@/lib/growth/meta-daily';
 
 export async function POST(request: Request) {
   const expected = process.env.GROWTH_SNAPSHOT_SECRET;
@@ -25,6 +25,10 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
+  const declared = Number(request.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > MAX_META_DAILY_BYTES) {
+    return NextResponse.json({ error: 'body too large' }, { status: 413 });
+  }
   const result = validateMetaDaily(await request.text());
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });
   const { adAccountId, day, accountTz, rows } = result.value;

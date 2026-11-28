@@ -53,14 +53,17 @@ export function sumWithin(total: number, sum: number): boolean {
   return Math.abs(total - sum) <= Math.max(0.01 * total, 1);
 }
 
+const MAX_MONEY = 9_999_999_999.99;
+const MAX_COUNT = 2_147_483_647;
 function money(v: unknown, path: string): number {
-  if (typeof v !== 'number' || !Number.isFinite(v) || v < 0 || Math.abs(v * 100 - Math.round(v * 100)) > 1e-6)
-    throw new Invalid(`${path} must be an amount of at least 0 with at most 2 decimals`);
+  if (typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v > MAX_MONEY || Math.round(v * 100) / 100 !== v)
+    throw new Invalid(`${path} must be an amount from 0 to ${MAX_MONEY} with at most 2 decimals`);
   return v;
 }
 function countOrNull(v: unknown, path: string): number | null {
   if (v === undefined || v === null) return null;
-  if (typeof v !== 'number' || !Number.isInteger(v) || v < 0) throw new Invalid(`${path} must be a whole number or null`);
+  if (typeof v !== 'number' || !Number.isInteger(v) || v < 0 || v > MAX_COUNT)
+    throw new Invalid(`${path} must be a whole number or null`);
   return v;
 }
 function idOrNull(v: unknown, path: string): string | null {
@@ -113,8 +116,9 @@ export function validateMetaDaily(raw: string): Result {
       if (!adId) throw new Invalid(`rows[${n}].ad_id must be a numeric id`);
       if (typeof x.region !== 'string' || x.region.length < 1 || x.region.length > MAX_REGION)
         throw new Invalid(`rows[${n}].region must be text of 1 to ${MAX_REGION} characters`);
+      if (looksLikePii(x.region)) throw new Invalid(`phone- or email-shaped value in rows[${n}].region`);
       const key = `${adId}|${x.region}`;
-      if (seen.has(key)) throw new Invalid(`rows[${n}]: ad ${adId} region ${x.region} appears twice`);
+      if (seen.has(key)) throw new Invalid(`rows[${n}] duplicates an earlier ad and region`);
       seen.add(key);
       return {
         ad_id: adId,
@@ -134,7 +138,7 @@ export function validateMetaDaily(raw: string): Result {
     if (rows.length === 0 && total.spend > 0) throw new Invalid('rows are empty but the account total spend is above 0');
     const sum = rows.reduce((s, r) => s + r.spend, 0);
     if (!sumWithin(total.spend, sum))
-      throw new Invalid(`region rows sum to ${sum.toFixed(2)} but the account total is ${total.spend.toFixed(2)}`);
+      throw new Invalid('region rows do not sum to the account total');
     return { ok: true, value: { adAccountId: body.ad_account_id, day, accountTz: body.account_tz, total, rows } };
   } catch (e) {
     if (e instanceof Invalid) return { ok: false, error: e.message };

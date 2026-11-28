@@ -49,8 +49,21 @@ describe('validateMetaDaily', () => {
     const b = metaDailyBody();
     expect(run({ ...b, rows: [b.rows[0], { ...b.rows[1], region: 'Punjab region' }] })).toEqual({
       ok: false,
-      error: 'rows[1]: ad 81050001 region Punjab region appears twice',
+      error: 'rows[1] duplicates an earlier ad and region',
     });
+  });
+
+  it('rejects out-of-range or non-finite numbers', () => {
+    expect(run(row({ spend: 1e308 })).ok).toBe(false);
+    expect(run(row({ spend: 1e-9 })).ok).toBe(false);
+    expect(run(row({ spend: -1 })).ok).toBe(false);
+    expect(run(row({ spend: 'NaN' })).ok).toBe(false);
+    expect(run(row({ impressions: 2147483648 })).ok).toBe(false);
+    expect(run(row({ impressions: 2147483647 })).ok).toBe(true);
+  });
+
+  it('rejects a phone-shaped region', () => {
+    expect(run(row({ region: 'Call 98765 43210' })).ok).toBe(false);
   });
 
   it('rejects phone- or email-shaped names', () => {
@@ -61,7 +74,7 @@ describe('validateMetaDaily', () => {
   it('rejects region rows that do not sum to the account total within 1%', () => {
     expect(run(metaDailyBody({ account_total: { spend: 170, impressions: 0, clicks: 0 } }))).toEqual({
       ok: false,
-      error: 'region rows sum to 150.50 but the account total is 170.00',
+      error: 'region rows do not sum to the account total',
     });
   });
 
