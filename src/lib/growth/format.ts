@@ -80,6 +80,16 @@ export function adLabel(a: {
   return `unknown ad${a.metaName ? ` (${a.metaName})` : ''} …${a.adId.slice(-6)}`;
 }
 
+/**
+ * Spend days that can exist for a window of `window` IST days ending today.
+ * Today's Meta day is never stored; the Pacific account (Patiala) also trails
+ * IST by a day, so its latest syncable day is two IST days back. Anything at
+ * or above this count is full coverage.
+ */
+export function syncableDays(accountTz: string, window = 30): number {
+  return window - (accountTz === 'Asia/Kolkata' ? 1 : 2);
+}
+
 /** Which Meta days are stored, per ad account, in one line for the page. */
 export function coverageLine(
   c: SpendCoverage[],
@@ -95,7 +105,7 @@ export function coverageLine(
         ? ' (Meta day, Pacific)'
         : ` (${x.accountTz})`;
   const one = (x: SpendCoverage) =>
-    `${x.daysInWindow} of ${days} days, last ${x.lastDay ?? 'no day'}`;
+    `${x.daysInWindow} of ${syncableDays(x.accountTz, days)} days, last ${x.lastDay ?? 'no day'}`;
   if (c.length === 1) {
     const x = c[0];
     const note =

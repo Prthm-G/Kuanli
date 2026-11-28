@@ -129,10 +129,18 @@ describe('partial spend and state rows', () => {
   ];
   it('cost cells say partial with a tooltip while fewer than 30 days are stored', () => {
     const p = { ...f, coverage: cov(3) };
-    const tip = { text: 'partial', title: 'spend for 3 of 30 days stored' };
+    const tip = { text: 'partial', title: 'spend for 3 of 28 days stored' };
     expect(branchRows(p)[0].slice(10)).toEqual(['₹600', tip, tip, tip]);
     expect(adRows(p, true)[0].slice(6)).toEqual(['₹500', tip, tip, tip]);
-    expect(branchRows({ ...f, coverage: cov(30) })[0][11]).toBe('₹200');
+    expect(branchRows({ ...f, coverage: cov(28) })[0][11]).toBe('₹200');
+    expect(branchRows({ ...f, coverage: cov(27) })[0][11]).toEqual({ text: 'partial', title: 'spend for 27 of 28 days stored' });
+    const moh = (days: number): BranchFunnel => ({
+      ...f,
+      branches: [{ ...f.branches[0], branchCode: 'MOH' }],
+      coverage: [{ adAccountId: '2', branchCode: 'MOH', accountTz: 'Asia/Kolkata', lastDay: '2026-11-27', daysInWindow: days }],
+    });
+    expect(branchRows(moh(29))[0][11]).toBe('₹200');
+    expect(branchRows(moh(28))[0][11]).toEqual({ text: 'partial', title: 'spend for 28 of 29 days stored' });
   });
 
   it('merges null and Unknown, shows - for missing numbers, notes truncation', () => {

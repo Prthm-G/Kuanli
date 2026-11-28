@@ -1,4 +1,11 @@
-import { adLabel, costPer, inr, regionLabel, spendCell } from './format';
+import {
+  adLabel,
+  costPer,
+  inr,
+  regionLabel,
+  spendCell,
+  syncableDays,
+} from './format';
 import type { BranchFunnel, FunnelSteps } from './types';
 
 /**
@@ -25,14 +32,15 @@ function cost(
   spend: number | null,
   n: number
 ): Cell {
-  const stored = f.coverage
-    .filter((c) => c.branchCode === branchCode)
-    .map((c) => c.daysInWindow);
-  const min = stored.length ? Math.min(...stored) : WINDOW_DAYS;
-  if (spend !== null && min < WINDOW_DAYS)
+  const short = f.coverage.find(
+    (c) =>
+      c.branchCode === branchCode &&
+      c.daysInWindow < syncableDays(c.accountTz, WINDOW_DAYS)
+  );
+  if (spend !== null && short)
     return {
       text: 'partial',
-      title: `spend for ${min} of ${WINDOW_DAYS} days stored`,
+      title: `spend for ${short.daysInWindow} of ${syncableDays(short.accountTz, WINDOW_DAYS)} days stored`,
     };
   return costPer(spend, n);
 }
