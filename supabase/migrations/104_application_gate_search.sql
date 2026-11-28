@@ -34,13 +34,15 @@ BEGIN
   -- An upsert re-sending details_punched_at for a contact whose row is already punched is not a new punch: the
   -- BEFORE INSERT trigger sees the proposed row before ON CONFLICT turns it into an update.
   IF TG_OP = 'INSERT' AND EXISTS (SELECT 1 FROM public.applications a
-                                   WHERE a.contact_id = NEW.contact_id AND a.details_punched_at IS NOT NULL) THEN
+                                   WHERE a.contact_id = NEW.contact_id AND a.account_id = NEW.account_id
+                                     AND a.details_punched_at IS NOT NULL) THEN
     RETURN NEW;
   END IF;
   IF nullif(btrim(NEW.father_name), '') IS NULL THEN v_missing := v_missing || 'father_name'::text; END IF;
   IF nullif(btrim(NEW.program), '') IS NULL THEN v_missing := v_missing || 'program'::text; END IF;
   IF nullif(btrim(NEW.university), '') IS NULL THEN v_missing := v_missing || 'university'::text; END IF;
-  SELECT email INTO v_email FROM public.contacts WHERE id = NEW.contact_id;
+  SELECT email INTO v_email FROM public.contacts WHERE id = NEW.contact_id AND account_id = NEW.account_id;
+  IF NOT FOUND THEN RAISE EXCEPTION 'contact not found in this account' USING ERRCODE = 'P0001'; END IF;
   IF public.is_placeholder_email(v_email) THEN v_missing := v_missing || 'email'::text; END IF;
   IF array_length(v_missing, 1) > 0 THEN
     RAISE EXCEPTION 'missing: %', array_to_string(v_missing, ',') USING ERRCODE = 'P0001';
@@ -62,23 +64,24 @@ LANGUAGE sql STABLE SECURITY INVOKER SET search_path = public, pg_temp AS $$
   SELECT c.id, c.name, c.phone, coalesce(a.university, c.university), a.provisional_app_id,
          a.university_app_number, a.registration_number,
          CASE
-           WHEN a.provisional_app_id ILIKE q.t THEN 'provisional_id'
-           WHEN a.university_app_number ILIKE q.t THEN 'university_app_number'
-           WHEN a.registration_number ILIKE q.t OR c.university_roll_number ILIKE q.t THEN 'registration_number'
+           WHEN lower(a.provisional_app_id) = lower(q.t) THEN 'provisional_id'
+           WHEN lower(a.university_app_number) = lower(q.t) THEN 'university_app_number'
+           WHEN lower(a.registration_number) = lower(q.t) OR lower(c.university_roll_number) = lower(q.t) THEN 'registration_number'
            WHEN length(q.d) = 10 AND right(c.phone_normalized, 10) = q.d THEN 'phone'
-           WHEN c.email ILIKE q.t THEN 'email'
-           WHEN c.roll_number ILIKE q.t THEN 'roll_number'
+           WHEN lower(c.email) = lower(q.t) THEN 'email'
+           WHEN lower(c.roll_number) = lower(q.t) THEN 'roll_number'
            ELSE 'name'
          END
     FROM q, public.contacts c
     LEFT JOIN public.applications a ON a.contact_id = c.id
    WHERE c.account_id = p_account AND length(q.t) >= 2
-     AND (   a.provisional_app_id ILIKE q.t OR a.university_app_number ILIKE q.t
-          OR a.registration_number ILIKE q.t OR c.university_roll_number ILIKE q.t
-          OR c.roll_number ILIKE q.t OR c.email ILIKE q.t
+     AND (   lower(a.provisional_app_id) = lower(q.t) OR lower(a.university_app_number) = lower(q.t)
+          OR lower(a.registration_number) = lower(q.t) OR lower(c.university_roll_number) = lower(q.t)
+          OR lower(c.roll_number) = lower(q.t) OR lower(c.email) = lower(q.t)
           OR (length(q.d) >= 6 AND c.phone_normalized LIKE '%' || q.d || '%')
-          OR c.name ILIKE '%' || q.t || '%')
-   ORDER BY (a.provisional_app_id ILIKE q.t OR a.university_app_number ILIKE q.t OR a.registration_number ILIKE q.t) DESC,
+          OR strpos(lower(c.name), lower(q.t)) > 0)
+   ORDER BY coalesce(lower(a.provisional_app_id) = lower(q.t) OR lower(a.university_app_number) = lower(q.t)
+                     OR lower(a.registration_number) = lower(q.t), false) DESC,
             c.created_at DESC
    LIMIT 10
 $$;
