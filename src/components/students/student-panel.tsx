@@ -23,6 +23,7 @@ import { ApplicationPanel } from '@/components/applications/application-panel';
 import { DocumentsTab } from '@/components/applications/documents-tab';
 import { StudentPayments } from '@/components/payments/student-payments';
 import { PortalCredentialsTab } from '@/components/contacts/portal-credentials-tab';
+import { NextDueStrip } from '@/components/followups/next-due-strip';
 import { cn } from '@/lib/utils';
 import { useStudentData } from './use-student-data';
 import { StudentHeader } from './student-header';
@@ -61,6 +62,10 @@ export function StudentPanel({
   }>({ branchName: null, ownerName: null });
   const [headerError, setHeaderError] = useState(false);
   const [headerKey, setHeaderKey] = useState(0);
+  // Contact whose header load has landed (header shows dashes until then).
+  const [headerFor, setHeaderFor] = useState<string | null>(null);
+  // Bumped when a follow-up is logged from the Application tab's strip.
+  const [activityKey, setActivityKey] = useState(0);
   const [tab, setTab] = useState<string | null>(null);
 
   useEffect(() => {
@@ -84,6 +89,7 @@ export function StudentPanel({
       setHeaderError(
         [set, application, bo].some((r) => r.status === 'rejected')
       );
+      setHeaderFor(contact.id);
     })();
     return () => {
       cancelled = true;
@@ -100,15 +106,21 @@ export function StudentPanel({
   const showsApp = showsApplicationPanel(data.deals, data.stages);
   // A picked Application tab falls back to Activity once the deal leaves the panel's stages (e.g. moved to Lost).
   const picked = tab === 'application' && !showsApp ? null : tab;
-  const active = picked ?? (showsApp ? 'application' : 'activity');
-  const phones =
-    records.length > 0
-      ? [
-          ...new Set(
-            records.map((r) => r.phone).filter((p): p is string => !!p)
-          ),
-        ]
-      : [contact.phone];
+  // Hold the tab until deals load, so Activity does not mount (and query) only to give way to Application.
+  const active = data.loaded
+    ? (picked ?? (showsApp ? 'application' : 'activity'))
+    : null;
+  // The primary phone is the opened record's own, never a linked record's.
+  const self = records.find((r) => r.via === 'self');
+  const phone = (self ? self.phone : contact.phone) || null;
+  const otherPhones = [
+    ...new Set(
+      records
+        .filter((r) => r.via !== 'self')
+        .map((r) => r.phone)
+        .filter((p): p is string => !!p && p !== phone)
+    ),
+  ];
   const refreshAll = () => {
     void data.reload();
     setHeaderKey((k) => k + 1);
@@ -118,19 +130,23 @@ export function StudentPanel({
     <div className={cn('flex h-full min-h-0 flex-col', className)}>
       <StudentHeader
         name={contact.name || contact.phone}
-        phones={phones}
+        phone={phone}
+        otherPhones={otherPhones}
         branchName={extras.branchName}
         ownerName={extras.ownerName}
         stageName={current?.stage?.name ?? null}
         provisionalAppId={app?.provisionalAppId ?? null}
         universityAppNumber={app?.universityAppNumber ?? null}
         registrationNumber={app?.registrationNumber ?? null}
+        loading={headerFor !== contact.id || !data.loaded}
         error={headerError}
       />
       {/* min-h-0 is load-bearing (issue #229): without it the tabs grow instead of scrolling. */}
       <Tabs
         value={active}
-        onValueChange={(v) => setTab(String(v))}
+        onValueChange={(v) => {
+          if (v != null) setTab(String(v));
+        }}
         className="min-h-0 flex-1 gap-0"
       >
         <TabsList className={TAB_LIST}>
@@ -150,7 +166,13 @@ export function StudentPanel({
             className="flex min-h-0 flex-1 flex-col"
           >
             <ScrollArea className="min-h-0 flex-1">
-              <div className="p-3">
+              <div className="space-y-3 p-3">
+                <NextDueStrip
+                  contactId={contact.id}
+                  contactName={contact.name}
+                  conversationId={conversation?.id ?? null}
+                  onLogged={() => setActivityKey((k) => k + 1)}
+                />
                 <ApplicationPanel
                   key={contact.id}
                   contactId={contact.id}
@@ -172,7 +194,7 @@ export function StudentPanel({
                 contactId={contact.id}
                 contactName={contact.name}
                 conversationId={conversation?.id ?? null}
-                refreshKey={headerKey}
+                refreshKey={headerKey + activityKey}
               />
             </div>
           </ScrollArea>
@@ -220,10 +242,7 @@ export function StudentPanel({
               <NotesTab
                 contactId={contact.id}
                 notes={data.notes}
-                onAdded={(n) => {
-                  data.addNote(n);
-                  setHeaderKey((k) => k + 1);
-                }}
+                onAdded={data.addNote}
               />
             </div>
           </ScrollArea>

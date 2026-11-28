@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Bot,
   GitBranch,
@@ -76,10 +76,13 @@ export function ActivityTab({
   const [error, setError] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [logKey, setLogKey] = useState(0);
+  // Bumped by every first-page load, so a "Show older" page that lands after a refresh is dropped, not appended.
+  const requestId = useRef(0);
 
   useEffect(() => {
     if (!accountId) return;
     let cancelled = false;
+    const id = ++requestId.current;
     void (async () => {
       try {
         const rows = await loadStudentTimeline(
@@ -87,7 +90,7 @@ export function ActivityTab({
           accountId,
           contactId
         );
-        if (cancelled) return;
+        if (cancelled || id !== requestId.current) return;
         setItems(rows);
         setMore(rows.length === TIMELINE_PAGE);
         setError(null);
@@ -103,6 +106,7 @@ export function ActivityTab({
 
   async function loadMore() {
     if (!accountId || !items?.length) return;
+    const id = requestId.current;
     setLoadingMore(true);
     try {
       const rows = await loadStudentTimeline(
@@ -111,9 +115,11 @@ export function ActivityTab({
         contactId,
         items[items.length - 1].at
       );
+      if (id !== requestId.current) return;
       setItems((prev) => [...(prev ?? []), ...rows]);
       setMore(rows.length === TIMELINE_PAGE);
     } catch (e) {
+      if (id !== requestId.current) return;
       setError(e instanceof Error ? e.message : 'Could not load activity');
     } finally {
       setLoadingMore(false);

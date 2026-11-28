@@ -13,6 +13,8 @@ export function useStudentData(contact: Contact) {
   const [stages, setStages] = useState<PipelineStage[]>([]);
   const [notes, setNotes] = useState<ContactNote[]>([]);
   const [tags, setTags] = useState<ContactTag[]>([]);
+  // The contact whose first load has landed; `loaded` is false until then (and again on a new contact).
+  const [loadedFor, setLoadedFor] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
     const supabase = createClient();
@@ -66,6 +68,7 @@ export function useStudentData(contact: Contact) {
         }));
       setTags(mapped);
     }
+    setLoadedFor(contact.id);
   }, [contact]);
 
   // Load on contact change. setContactData/setTags run inside async
@@ -108,5 +111,14 @@ export function useStudentData(contact: Contact) {
     setNotes((prev) => [note, ...prev]);
   }, []);
 
-  return { deals, stages, notes, tags, reload, changeStage, addNote };
+  return {
+    deals,
+    stages,
+    notes,
+    tags,
+    loaded: loadedFor === contact.id,
+    reload,
+    changeStage,
+    addNote,
+  };
 }
