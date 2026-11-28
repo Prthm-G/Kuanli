@@ -6,34 +6,51 @@ import { Search } from 'lucide-react';
 
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
+import {
+  matchLabel,
+  searchStudents,
+  type StudentHit,
+} from '@/lib/contacts/student-search';
 
-interface Hit {
-  id: string;
-  name: string | null;
-  phone: string | null;
-  roll_number: string | null;
-  university_roll_number: string | null;
-  university: string | null;
+/** Masked phone for the result row: the last 4 digits only. */
+function maskPhone(phone: string | null): string {
+  const digits = (phone ?? '').replace(/\D/g, '');
+  return digits ? `…${digits.slice(-4)}` : '';
+}
+
+/** The matched value, shown only for ID-type matches. */
+function matchedValue(h: StudentHit): string | null {
+  switch (h.matched) {
+    case 'provisional_id':
+      return h.provisionalAppId;
+    case 'university_app_number':
+      return h.universityAppNumber;
+    case 'registration_number':
+      return h.registrationNumber;
+    default:
+      return null;
+  }
 }
 
 /**
- * Header-wide lead lookup. Finds any contact in the account by name, phone, or
- * either roll number and jumps to it via the /contacts?contact=<id> deep link,
- * which opens that contact's detail drawer. Read-only; navigation only.
+ * Header-wide student lookup. Finds any contact in the account by name, phone,
+ * email, provisional ID, university application number, registration or roll
+ * number (the `search_students` RPC) and jumps to it via the
+ * /contacts?contact=<id> deep link, which opens that contact's detail drawer.
+ * Read-only; navigation only.
  */
 export function GlobalSearch() {
   const { accountId } = useAuth();
   const router = useRouter();
   const [query, setQuery] = useState('');
-  const [hits, setHits] = useState<Hit[]>([]);
+  const [hits, setHits] = useState<StudentHit[]>([]);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const boxRef = useRef<HTMLDivElement>(null);
 
-  // Debounced query. PostgREST `or()` treats commas and parens as syntax, so
-  // strip anything that could break the filter before interpolating the term.
+  // Debounced query. The RPC takes the raw term, so only trim it.
   useEffect(() => {
-    const term = query.trim().replace(/[(),*]/g, ' ').trim();
+    const term = query.trim();
     // All setState lives in the timeout callback (never synchronously in the
     // effect body) to satisfy react-hooks/set-state-in-effect, and the timeout
     // doubles as the debounce.
@@ -46,20 +63,13 @@ export function GlobalSearch() {
     }
     const handle = setTimeout(() => {
       setLoading(true);
-      const like = `*${term}*`;
-      createClient()
-        .from('contacts')
-        .select('id, name, phone, roll_number, university_roll_number, university')
-        .eq('account_id', accountId)
-        .or(
-          `name.ilike.${like},phone.ilike.${like},roll_number.ilike.${like},university_roll_number.ilike.${like}`
-        )
-        .order('created_at', { ascending: false })
-        .limit(8)
-        .then(({ data }) => {
-          setHits((data ?? []) as Hit[]);
-          setLoading(false);
-        });
+      searchStudents(createClient(), accountId, term)
+        .then((rows) => setHits(rows))
+        .catch((error: Error) => {
+          console.error('Search failed:', error.message);
+          setHits([]);
+        })
+        .finally(() => setLoading(false));
     }, 200);
     return () => clearTimeout(handle);
   }, [query, accountId]);
@@ -87,7 +97,7 @@ export function GlobalSearch() {
       setOpen(false);
       (e.target as HTMLInputElement).blur();
     } else if (e.key === 'Enter' && hits.length > 0) {
-      go(hits[0].id);
+      go(hits[0].contactId);
     }
   }
 
@@ -103,7 +113,7 @@ export function GlobalSearch() {
         }}
         onFocus={() => setOpen(true)}
         onKeyDown={onKeyDown}
-        placeholder="Search leads by name, phone, roll…"
+        placeholder="Search name, phone, provisional ID"
         aria-label="Search leads"
         className="border-input bg-transparent focus-visible:border-ring focus-visible:ring-ring/50 h-9 w-full rounded-lg border pr-2.5 pl-8 text-sm outline-none transition-colors focus-visible:ring-3 dark:bg-input/30"
       />
@@ -118,27 +128,31 @@ export function GlobalSearch() {
               No leads match.
             </p>
           )}
-          {hits.map((h) => (
-            <button
-              key={h.id}
-              type="button"
-              onClick={() => go(h.id)}
-              className="hover:bg-accent focus:bg-accent flex w-full flex-col items-start gap-0.5 px-3 py-2 text-left outline-none"
-            >
-              <span className="text-foreground text-sm font-medium">
-                {h.name || h.phone || 'Unnamed lead'}
-              </span>
-              <span className="text-muted-foreground truncate text-xs">
-                {[
-                  h.phone,
-                  h.university_roll_number || h.roll_number,
-                  h.university,
-                ]
-                  .filter(Boolean)
-                  .join(' · ') || '—'}
-              </span>
-            </button>
-          ))}
+          {hits.map((h) => {
+            const value = matchedValue(h);
+            const phone = maskPhone(h.phone);
+            return (
+              <button
+                key={h.contactId}
+                type="button"
+                onClick={() => go(h.contactId)}
+                className="hover:bg-accent focus:bg-accent flex w-full flex-col items-start gap-0.5 px-3 py-2 text-left outline-none"
+              >
+                <span className="text-foreground text-sm font-medium">
+                  {h.name || phone || 'Unnamed lead'}
+                </span>
+                <span className="text-muted-foreground truncate text-xs">
+                  {[
+                    h.name ? phone : null,
+                    `${matchLabel(h.matched)}${value ? `: ${value}` : ''}`,
+                    h.university,
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')}
+                </span>
+              </button>
+            );
+          })}
         </div>
       )}
     </div>
