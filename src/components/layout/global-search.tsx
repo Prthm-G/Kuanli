@@ -45,18 +45,22 @@ export function GlobalSearch() {
   const [query, setQuery] = useState('');
   const [hits, setHits] = useState<StudentHit[]>([]);
   const [open, setOpen] = useState(false);
+  const [hitsFor, setHitsFor] = useState('');
   const [loading, setLoading] = useState(false);
   const boxRef = useRef<HTMLDivElement>(null);
 
   // Debounced query. The RPC takes the raw term, so only trim it.
   useEffect(() => {
     const term = query.trim();
+    // Set on cleanup so a slow, superseded request cannot overwrite newer hits.
+    let cancelled = false;
     // All setState lives in the timeout callback (never synchronously in the
     // effect body) to satisfy react-hooks/set-state-in-effect, and the timeout
     // doubles as the debounce.
     if (!accountId || term.length < 2) {
       const clear = setTimeout(() => {
         setHits([]);
+        setHitsFor('');
         setLoading(false);
       }, 0);
       return () => clearTimeout(clear);
@@ -64,14 +68,25 @@ export function GlobalSearch() {
     const handle = setTimeout(() => {
       setLoading(true);
       searchStudents(createClient(), accountId, term)
-        .then((rows) => setHits(rows))
+        .then((rows) => {
+          if (cancelled) return;
+          setHits(rows);
+          setHitsFor(term);
+        })
         .catch((error: Error) => {
+          if (cancelled) return;
           console.error('Search failed:', error.message);
           setHits([]);
+          setHitsFor(term);
         })
-        .finally(() => setLoading(false));
+        .finally(() => {
+          if (!cancelled) setLoading(false);
+        });
     }, 200);
-    return () => clearTimeout(handle);
+    return () => {
+      cancelled = true;
+      clearTimeout(handle);
+    };
   }, [query, accountId]);
 
   // Close the results when focus leaves the whole widget.
@@ -89,6 +104,7 @@ export function GlobalSearch() {
     setOpen(false);
     setQuery('');
     setHits([]);
+    setHitsFor('');
     router.push(`/contacts?contact=${id}`);
   }
 
@@ -96,7 +112,12 @@ export function GlobalSearch() {
     if (e.key === 'Escape') {
       setOpen(false);
       (e.target as HTMLInputElement).blur();
-    } else if (e.key === 'Enter' && hits.length > 0) {
+    } else if (
+      e.key === 'Enter' &&
+      hits.length > 0 &&
+      !loading &&
+      hitsFor === query.trim()
+    ) {
       go(hits[0].contactId);
     }
   }
@@ -115,13 +136,15 @@ export function GlobalSearch() {
         onKeyDown={onKeyDown}
         placeholder="Search name, phone, provisional ID"
         aria-label="Search leads"
-        className="border-input bg-transparent focus-visible:border-ring focus-visible:ring-ring/50 h-9 w-full rounded-lg border pr-2.5 pl-8 text-sm outline-none transition-colors focus-visible:ring-3 dark:bg-input/30"
+        className="border-input focus-visible:border-ring focus-visible:ring-ring/50 dark:bg-input/30 h-9 w-full rounded-lg border bg-transparent pr-2.5 pl-8 text-sm transition-colors outline-none focus-visible:ring-3"
       />
 
       {open && query.trim().length >= 2 && (
-        <div className="border-border bg-popover absolute top-full left-0 z-50 mt-1 w-full min-w-72 overflow-hidden rounded-lg border shadow-md ring-1 ring-foreground/10">
+        <div className="border-border bg-popover ring-foreground/10 absolute top-full left-0 z-50 mt-1 w-full min-w-72 overflow-hidden rounded-lg border shadow-md ring-1">
           {loading && hits.length === 0 && (
-            <p className="text-muted-foreground px-3 py-3 text-sm">Searching…</p>
+            <p className="text-muted-foreground px-3 py-3 text-sm">
+              Searching…
+            </p>
           )}
           {!loading && hits.length === 0 && (
             <p className="text-muted-foreground px-3 py-3 text-sm">
